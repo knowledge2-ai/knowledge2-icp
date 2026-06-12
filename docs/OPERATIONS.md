@@ -23,6 +23,19 @@ python3 -m icp_engine.cli qualify \
   --out out/enriched
 ```
 
+For broad crawls, cap both pages and attempts so one blocked domain cannot stall
+the batch:
+
+```bash
+python3 -m icp_engine.cli qualify \
+  --input companies.csv \
+  --out out/broad \
+  --max-pages 6 \
+  --max-attempts 12 \
+  --max-failures 6 \
+  --timeout 4
+```
+
 ## Run With Gemini
 
 ```bash

@@ -409,17 +409,49 @@ def _merge_classification(rules: Classification, model: Classification | None) -
         return rules
     if model.confidence < 0.35:
         return rules
+    ai_posture = _clamp_int(model.ai_posture, 0, 5)
+    data_workflow = _clamp_int(model.data_workflow, 0, 5)
+    commercial_urgency = _clamp_int(model.commercial_urgency, 0, 5)
+    budget_access = _clamp_int(model.budget_access, 0, 5)
+    feasibility = _clamp_int(model.feasibility, 0, 5)
     return Classification(
-        ai_posture=_clamp_int(model.ai_posture, 0, 5),
-        data_workflow=_clamp_int(model.data_workflow, 0, 5),
-        commercial_urgency=_clamp_int(model.commercial_urgency, 0, 5),
-        budget_access=_clamp_int(model.budget_access, 0, 5),
-        feasibility=_clamp_int(model.feasibility, 0, 5),
-        reasons={**rules.reasons, **model.reasons},
+        ai_posture=ai_posture,
+        data_workflow=data_workflow,
+        commercial_urgency=commercial_urgency,
+        budget_access=budget_access,
+        feasibility=feasibility,
+        reasons=_model_reasons(
+            model,
+            {
+                "ai_posture": ai_posture,
+                "data_workflow": data_workflow,
+                "commercial_urgency": commercial_urgency,
+                "budget_access": budget_access,
+                "feasibility": feasibility,
+            },
+        ),
         evidence_ids={**rules.evidence_ids, **model.evidence_ids},
         confidence=min(1.0, max(0.0, model.confidence)),
         source=model.source,
     )
+
+
+def _model_reasons(model: Classification, scores: dict[str, int]) -> dict[str, str]:
+    labels = {
+        "ai_posture": "AI posture",
+        "data_workflow": "Data/workflow",
+        "commercial_urgency": "Commercial urgency",
+        "budget_access": "Budget/access",
+        "feasibility": "Feasibility",
+    }
+    reasons: dict[str, str] = {}
+    for key, label in labels.items():
+        reason = model.reasons.get(key)
+        if reason:
+            reasons[key] = reason
+        else:
+            reasons[key] = f"{label} scored {scores[key]}/5 by {model.source}; no detailed reason returned."
+    return reasons
 
 
 def _clamp_int(value: int, minimum: int, maximum: int) -> int:

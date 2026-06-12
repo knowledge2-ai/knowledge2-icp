@@ -1,6 +1,6 @@
 import unittest
 
-from icp_engine.models import CompanyInput, Evidence
+from icp_engine.models import Classification, CompanyInput, Evidence
 from icp_engine.scoring import score_company
 
 
@@ -73,6 +73,39 @@ class ScoringTests(unittest.TestCase):
 
         self.assertTrue(result.hard_gate_unknown)
         self.assertTrue(any("Founded before 2025" in warning for warning in result.warnings))
+
+    def test_model_reasons_do_not_leak_conflicting_rules_reasons(self):
+        company = CompanyInput(
+            company="Model Co",
+            domain="example.com",
+            category="field service",
+            founded_year=2010,
+            employee_count=100,
+        )
+        evidence = [
+            Evidence(
+                "e1",
+                "https://example.com",
+                "Field service",
+                "B2B software platform with AI-powered workflow, dispatch, work orders, and API integrations.",
+            )
+        ]
+        model = Classification(
+            ai_posture=0,
+            data_workflow=4,
+            commercial_urgency=3,
+            budget_access=3,
+            feasibility=3,
+            reasons={},
+            confidence=0.8,
+            source="gemini:test",
+        )
+
+        result = score_company(company, evidence, model_classification=model)
+
+        self.assertEqual(result.classification.ai_posture, 0)
+        self.assertIn("scored 0/5 by gemini:test", result.classification.reasons["ai_posture"])
+        self.assertNotIn("AI-powered", result.classification.reasons["ai_posture"])
 
 
 if __name__ == "__main__":
