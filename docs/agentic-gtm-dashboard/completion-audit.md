@@ -43,4 +43,4 @@ This audit maps the original user objective to current repository evidence. It i
   project/corpus.
 - Expand browser E2E coverage beyond the current smoke path if this needs
   mobile, auth-on, failure-state, or visual-regression gates in CI.
-- Review and stabilize the PR after CI starts if this feature is intended to merge.
+- Review and stabilize PR #1 after CI starts if this feature is intended to merge.

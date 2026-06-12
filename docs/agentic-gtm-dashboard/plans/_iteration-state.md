@@ -22,7 +22,7 @@
 
 | Epic | Title | Status | Scope |
 | ---- | ----- | ------ | ----- |
-| 014 | PR And Live Deployment Decision | in_progress | Feature committed, `origin/main` merged, post-merge checks passing; live deploy still requires production subdomain/API origin values |
+| 014 | PR And Live Deployment Decision | in_progress | PR #1 opened and mergeable; GitHub reports no checks yet; live deploy still requires production subdomain/API origin values |
 
 ## Backlog
 
