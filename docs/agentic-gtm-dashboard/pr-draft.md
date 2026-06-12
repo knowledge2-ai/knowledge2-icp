@@ -68,13 +68,13 @@
 ## Upstream Sync
 
 - Target branch: `main` because `origin/main` exists and no remote `dev` branch was found.
-- Upstream commits merged: not yet checked/merged because the worktree is still dirty.
-- Merge conflicts resolved: none yet.
+- Upstream commits merged: 2 (`143a78f`, `4b57b13`) via merge commit.
+- Merge conflicts resolved: 2 files (`icp_engine/enrichment.py`, `tests/test_enrichment.py`).
 
 ## Testing
 
-- [x] `python3 -m py_compile icp_engine/*.py deployment/cloudflare/render_wrangler_config.py`
-- [x] `python3 -m unittest discover -s tests` (46 tests)
+- [x] `python3 -m py_compile icp_engine/*.py deployment/cloudflare/render_wrangler_config.py deployment/cloudflare/preflight.py`
+- [x] `python3 -m unittest discover -s tests` (50 tests)
 - [x] `make e2e-smoke`
 - [x] `python3 deployment/cloudflare/preflight.py --skip-wrangler` with dummy placeholder env values
 - [x] `node --check icp_engine/web_assets/app.js`

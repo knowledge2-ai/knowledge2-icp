@@ -24,8 +24,8 @@ This audit maps the original user objective to current repository evidence. It i
 
 ## Current Runtime Evidence
 
-- `python3 -m py_compile icp_engine/*.py deployment/cloudflare/render_wrangler_config.py`
-- `python3 -m unittest discover -s tests` (46 tests)
+- `python3 -m py_compile icp_engine/*.py deployment/cloudflare/render_wrangler_config.py deployment/cloudflare/preflight.py`
+- `python3 -m unittest discover -s tests` (50 tests)
 - `node --check icp_engine/web_assets/app.js`
 - `node --check deployment/cloudflare/worker.js`
 - `wrangler deploy --dry-run --config deployment/cloudflare/wrangler.toml`
@@ -43,4 +43,4 @@ This audit maps the original user objective to current repository evidence. It i
   project/corpus.
 - Expand browser E2E coverage beyond the current smoke path if this needs
   mobile, auth-on, failure-state, or visual-regression gates in CI.
-- Prepare and review a PR or commit set if this feature is intended to merge.
+- Review and stabilize the PR after CI starts if this feature is intended to merge.

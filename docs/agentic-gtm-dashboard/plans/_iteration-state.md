@@ -22,7 +22,7 @@
 
 | Epic | Title | Status | Scope |
 | ---- | ----- | ------ | ----- |
-| 014 | PR And Live Deployment Decision | pending | Commit/PR prep, live Cloudflare/K2 deploy decision, production subdomain/API origin values |
+| 014 | PR And Live Deployment Decision | in_progress | Feature committed, `origin/main` merged, post-merge checks passing; live deploy still requires production subdomain/API origin values |
 
 ## Backlog
 
@@ -38,5 +38,5 @@
 
 - Production K2 corpus/project naming should be confirmed before live ingestion.
 - Cloudflare subdomain should be selected before creating DNS/routes.
-- Browser E2E smoke exists; broader mobile/auth/failure-state coverage remains a CI scope decision.
+- Browser E2E smoke exists and passes post-merge; broader mobile/auth/failure-state coverage remains a CI scope decision.
 - Production deploy still needs confirmed subdomain, API origin, and permission to use live Cloudflare/K2 secrets.
