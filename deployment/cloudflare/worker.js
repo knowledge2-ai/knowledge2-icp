@@ -1,5 +1,6 @@
 const SEED_CREATED_AT = "2026-06-12T00:00:00+00:00";
 const SEED_RUN_ID = "run-seeded-icp";
+const MAX_APOLLO_ENRICH_LEADS = 12;
 
 const SEED_CRITERIA_MARKDOWN = `# Seeded ICP Criteria
 
@@ -130,6 +131,7 @@ const SEED_LISTS = {
 const runtime = {
   criteria: null,
   runs: new Map(),
+  seedLists: null,
 };
 
 export default {
@@ -169,6 +171,7 @@ export default {
 
 async function handleApiRequest(request, env, url) {
   const method = request.method.toUpperCase();
+  const lists = await seedLists(env);
   if (method === "GET" && url.pathname === "/api/health") {
     return json({
       status: "ok",
@@ -177,13 +180,13 @@ async function handleApiRequest(request, env, url) {
       auth_required: false,
       protected_actions: ["k2_apply_sync"],
       mode: "seeded-worker",
-      run_count: listRuns().length,
+      run_count: listRuns(lists).length,
       provider_status: providerStatus(env),
     });
   }
 
   if (method === "GET" && url.pathname === "/api/state") {
-    return json(currentState(env));
+    return json(currentState(env, lists));
   }
 
   if (method === "POST" && url.pathname === "/api/criteria") {
@@ -196,27 +199,27 @@ async function handleApiRequest(request, env, url) {
 
   if (method === "POST" && url.pathname === "/api/search") {
     const payload = await readJson(request);
-    const candidates = discoverCandidates(payload);
+    const candidates = discoverCandidates(payload, lists);
     return json({ candidates, warnings: candidates.length ? [] : ["No seed candidates matched the request."] });
   }
 
   if (method === "POST" && url.pathname === "/api/runs") {
     const payload = await readJson(request);
-    const run = createRuntimeRun(payload);
+    const run = createRuntimeRun(payload, lists);
     runtime.runs.set(run.id, run);
     return json(run);
   }
 
   if (method === "POST" && url.pathname === "/api/research") {
     const payload = await readJson(request);
-    const run = loadRun(String(payload.run_id || ""));
+    const run = loadRun(String(payload.run_id || ""), lists);
     if (!run) return json({ answer: "Run not found.", citations: [], matched_leads: [] }, 404);
     return json(localResearchAnswer(run, String(payload.question || "")));
   }
 
   const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)(?:\/([^/]+))?$/);
   if (runMatch) {
-    const run = loadRun(runMatch[1]);
+    const run = loadRun(runMatch[1], lists);
     if (!run) return json({ error: "Run not found." }, 404);
     const action = runMatch[2] || "";
     if (method === "GET" && !action) return json(run);
@@ -270,16 +273,56 @@ async function handleApiRequest(request, env, url) {
   return json({ error: "Not found." }, 404);
 }
 
-function currentState(env) {
-  const runs = listRuns();
+async function seedLists(env) {
+  if (runtime.seedLists) return runtime.seedLists;
+  try {
+    const response = await env.ASSETS.fetch(new Request("https://seed.local/seed-companies.json"));
+    if (response.ok) {
+      const payload = await response.json();
+      const accounts = Array.isArray(payload.account_universe) ? payload.account_universe : [];
+      if (accounts.length) {
+        runtime.seedLists = {
+          account_universe: normalizeSeedAccounts(accounts),
+          priority_verticals: clone(SEED_LISTS.priority_verticals),
+          sources: Array.isArray(payload.sources) ? payload.sources : [],
+        };
+        return runtime.seedLists;
+      }
+    }
+  } catch {
+    // Keep the small embedded fallback if the static seed asset is unavailable.
+  }
+  runtime.seedLists = clone(SEED_LISTS);
+  return runtime.seedLists;
+}
+
+function normalizeSeedAccounts(accounts) {
+  return accounts
+    .map((account) => ({
+      company: String(account.company || "").trim(),
+      domain: normalizeDomain(account.domain || account.source_url || account.company || ""),
+      category: String(account.category || account.source_group || "vertical market software").trim(),
+      founded_year: account.founded_year || null,
+      employee_count: account.employee_count || null,
+      hq: String(account.hq || "").trim(),
+      source_group: String(account.source_group || "").trim(),
+      source_url: String(account.source_url || "").trim(),
+      source: String(account.source || "").trim(),
+      notes: String(account.notes || "").trim(),
+    }))
+    .filter((account) => account.company && account.domain);
+}
+
+function currentState(env, lists) {
+  const runs = listRuns(lists);
   return {
     criteria: currentCriteria(),
     prompts: clone(SEED_PROMPTS),
     settings: clone(SEED_SETTINGS),
-    lists: clone(SEED_LISTS),
+    lists: clone(lists),
     runs,
     provider_status: providerStatus(env),
-    latest_run: loadRun(runs[0]?.id || SEED_RUN_ID),
+    latest_run: loadRun(runs[0]?.id || SEED_RUN_ID, lists),
   };
 }
 
@@ -310,17 +353,17 @@ function criteriaPayload(markdown, source) {
   };
 }
 
-function listRuns() {
+function listRuns(lists) {
   const summaries = Array.from(runtime.runs.values()).map(runSummary);
   if (!runtime.runs.has(SEED_RUN_ID)) {
-    summaries.push(runSummary(seedRun()));
+    summaries.push(runSummary(seedRun(lists)));
   }
   return summaries.sort((left, right) => String(right.created_at || "").localeCompare(String(left.created_at || "")));
 }
 
-function loadRun(runId) {
+function loadRun(runId, lists) {
   if (runtime.runs.has(runId)) return clone(runtime.runs.get(runId));
-  if (runId === SEED_RUN_ID) return seedRun();
+  if (runId === SEED_RUN_ID) return seedRun(lists);
   return null;
 }
 
@@ -347,10 +390,10 @@ function tierCounts(leads) {
   }, {});
 }
 
-function discoverCandidates(payload) {
+function discoverCandidates(payload, lists) {
   const fromSeedText = parseSeedText(String(payload.seed_text || ""));
   const query = String(payload.query || "").toLowerCase();
-  const seeded = SEED_LISTS.account_universe
+  const seeded = lists.account_universe
     .filter((item) => {
       if (!query) return true;
       const haystack = `${item.company} ${item.domain} ${item.category} ${item.notes}`.toLowerCase();
@@ -387,7 +430,7 @@ function candidateFromAccount(account, sourceTitle) {
   return {
     company: account.company,
     domain: account.domain,
-    source_url: `https://${account.domain}`,
+    source_url: account.source_url || `https://${account.domain}`,
     source_title: sourceTitle,
     notes: account.notes,
     github_urls: account.domain === "moj.io" ? ["https://github.com/mojio"] : [],
@@ -408,12 +451,12 @@ function dedupeCandidates(candidates) {
   return result;
 }
 
-function createRuntimeRun(payload) {
+function createRuntimeRun(payload, lists) {
   const candidates = Array.isArray(payload.candidates) && payload.candidates.length
     ? dedupeCandidates(payload.candidates)
-    : discoverCandidates(payload);
+    : discoverCandidates(payload, lists);
   const runId = `run-worker-${Date.now().toString(36)}`;
-  const leads = candidates.slice(0, Number(payload.max_companies || 8)).map((candidate) => leadFromCandidate(runId, candidate));
+  const leads = candidates.slice(0, Number(payload.max_companies || 8)).map((candidate) => leadFromCandidate(runId, candidate, lists));
   leads.sort((left, right) => Number(right.score.total_score || 0) - Number(left.score.total_score || 0));
   const run = {
     id: runId,
@@ -424,7 +467,7 @@ function createRuntimeRun(payload) {
       hash: currentCriteria().hash,
       source: currentCriteria().source,
       updated_at: currentCriteria().updated_at,
-      profile: seededCriteriaProfile(),
+      profile: seededCriteriaProfile(lists),
     },
     warnings: candidates.length ? [] : ["No selected candidates were provided for this run."],
     leads,
@@ -437,8 +480,8 @@ function createRuntimeRun(payload) {
   return run;
 }
 
-function leadFromCandidate(runId, candidate) {
-  const account = SEED_LISTS.account_universe.find((item) => item.domain === normalizeDomain(candidate.domain));
+function leadFromCandidate(runId, candidate, lists) {
+  const account = lists.account_universe.find((item) => item.domain === normalizeDomain(candidate.domain));
   if (account) return seedLead(runId, account, candidate);
   const accountFromCandidate = {
     company: candidate.company || candidate.domain,
@@ -452,7 +495,10 @@ function leadFromCandidate(runId, candidate) {
   return seedLead(runId, accountFromCandidate, candidate);
 }
 
-function seedRun() {
+function seedRun(lists) {
+  const leads = lists.account_universe
+    .map((account) => seedLead(SEED_RUN_ID, account, candidateFromAccount(account, account.source_group || "Seeded account universe")))
+    .sort((left, right) => Number(right.score?.total_score || 0) - Number(left.score?.total_score || 0) || String(left.score?.company?.company || "").localeCompare(String(right.score?.company?.company || "")));
   return {
     id: SEED_RUN_ID,
     query: SEED_SETTINGS.default_query,
@@ -462,7 +508,7 @@ function seedRun() {
       hash: "seeded-icp-v1",
       source: "icp.md",
       updated_at: SEED_CREATED_AT,
-      profile: seededCriteriaProfile(),
+      profile: seededCriteriaProfile(lists),
     },
     warnings: [],
     k2: {
@@ -471,13 +517,13 @@ function seedRun() {
       project_name: "Knowledge2 ICP GTM Dev",
       corpus_id: "3cf7ba62-c57a-4e32-abea-97479fd55aaa",
       corpus_name: "Seeded ICP GTM Dashboard",
-      document_count: 14,
+      document_count: leads.length * 6,
     },
-    leads: SEED_LISTS.account_universe.map((account) => seedLead(SEED_RUN_ID, account, candidateFromAccount(account, "Seeded local account list"))),
+    leads,
   };
 }
 
-function seededCriteriaProfile() {
+function seededCriteriaProfile(lists) {
   return {
     source: "icp.md",
     hash: "seeded-icp-v1",
@@ -485,7 +531,7 @@ function seededCriteriaProfile() {
     tier_b_threshold: 60,
     min_employee_count: 25,
     max_employee_count: 2000,
-    priority_terms: clone(SEED_LISTS.priority_verticals),
+    priority_terms: clone(lists.priority_verticals || SEED_LISTS.priority_verticals),
     warnings: [],
   };
 }
@@ -493,8 +539,9 @@ function seededCriteriaProfile() {
 function seedLead(runId, account, candidate) {
   const reject = account.domain === "example.com" || String(account.category || "").toLowerCase().includes("ai agents");
   const vertical = verticalFor(account);
-  const score = reject ? 24 : account.domain === "moj.io" ? 82 : 79;
-  const tier = reject ? "Reject" : "A";
+  const highPriority = isHighPriorityVertical(vertical);
+  const score = reject ? 24 : account.domain === "moj.io" ? 82 : highPriority ? 79 : 68;
+  const tier = reject ? "Reject" : highPriority ? "A" : "B";
   const docsUrl = account.domain === "moj.io"
     ? "https://moj.io/docs/api"
     : account.domain === "automate.co.za"
@@ -598,7 +645,7 @@ function seedLead(runId, account, candidate) {
     metadata: {
       company: account.company,
       domain: account.domain,
-      criteria_profile: seededCriteriaProfile(),
+        criteria_profile: seededCriteriaProfile(SEED_LISTS),
       source_counts: { [reject ? "website:company" : "website:product"]: 1 },
       source_refs: sourceRefs,
       signal_tags: signalTags,
@@ -642,10 +689,19 @@ function seedLead(runId, account, candidate) {
 
 function verticalFor(account) {
   const text = `${account.category || ""} ${account.notes || ""}`.toLowerCase();
-  if (text.includes("dealer")) return "dealership";
-  if (text.includes("fleet") || text.includes("telematics") || text.includes("mobility")) return "fleet";
-  if (text.includes("claim")) return "claims";
+  if (text.includes("dealer") || text.includes("automotive")) return "dealership";
+  if (text.includes("fleet") || text.includes("telematics") || text.includes("mobility") || text.includes("transport")) return "fleet";
+  if (text.includes("claim") || text.includes("risk")) return "claims";
+  if (text.includes("health") || text.includes("medical") || text.includes("patient")) return "healthcare admin";
+  if (text.includes("utility") || text.includes("public") || text.includes("government") || text.includes("municipal")) return "govtech";
+  if (text.includes("asset") || text.includes("field") || text.includes("logistics") || text.includes("maintenance")) return "field service";
+  if (text.includes("education") || text.includes("student")) return "education admin";
+  if (text.includes("food") || text.includes("hospitality")) return "hospitality";
   return text.includes("ai") ? "AI-native" : "workflow";
+}
+
+function isHighPriorityVertical(vertical) {
+  return ["dealership", "fleet", "claims", "healthcare admin", "govtech", "field service"].includes(vertical);
 }
 
 function evidenceTextFor(account) {
@@ -655,7 +711,7 @@ function evidenceTextFor(account) {
   if (account.domain === "automate.co.za") {
     return "40+ years of dealership-management software experience, trusted by 1,000+ dealerships with inventory, transactions, reporting, BI, and operational workflow data.";
   }
-  return "AI-native autonomous agent platform for every business, founded in 2025.";
+  return account.notes || `${account.company} is listed in a seeded official vertical-market software portfolio. Verify AI posture, founded date, budget, and workflow depth before outbound.`;
 }
 
 function gatesFor(account, reject) {
@@ -670,7 +726,12 @@ function gatesFor(account, reject) {
     ];
   }
   return [
-    { name: "Founded before 2025", status: "pass", reason: `Founded year ${account.founded_year}.`, evidence_ids: [] },
+    {
+      name: "Founded before 2025",
+      status: account.founded_year ? "pass" : "unknown",
+      reason: account.founded_year ? `Founded year ${account.founded_year}.` : "Official incumbent-software portfolio seed; founded date needs verification.",
+      evidence_ids: [],
+    },
     { name: "Product company", status: "pass", reason: "Seeded software platform evidence.", evidence_ids: [] },
     { name: "B2B or B2B2C", status: "pass", reason: "Business customer and partner workflows.", evidence_ids: [] },
     { name: "Has proprietary workflow/data", status: "pass", reason: "Operational workflow and data signals.", evidence_ids: [] },
@@ -718,7 +779,11 @@ async function buildRunProspectsWithApollo(run, env = {}) {
 
   const apolloPeopleByDomain = {};
   const errors = [];
-  for (const lead of run.leads || []) {
+  const leadsForApollo = (run.leads || [])
+    .filter((lead) => lead.score?.tier !== "Reject")
+    .sort((left, right) => Number(right.score?.total_score || 0) - Number(left.score?.total_score || 0))
+    .slice(0, MAX_APOLLO_ENRICH_LEADS);
+  for (const lead of leadsForApollo) {
     if (lead.score?.tier === "Reject") continue;
     const company = lead.score?.company || {};
     const domain = String(company.domain || "").trim().toLowerCase();

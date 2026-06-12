@@ -8,9 +8,9 @@ dashboard.
 - Static dashboard assets are uploaded from `../../icp_engine/web_assets`.
 - `/healthz` returns public edge liveness metadata.
 - `/api/*` requests are served by the Worker from committed seed defaults.
-- `/api/*` requests require `ICP_ADMIN_TOKEN` and
-  `Authorization: Bearer <token>`; the Worker fails closed if the edge token is
-  missing.
+- Read-only dashboard data, search, run creation, criteria edits, research,
+  prospects, CSV export, and K2 dry-runs work without a token.
+- K2 apply sync requires `ICP_ADMIN_TOKEN` and `Authorization: Bearer <token>`.
 - Secrets are declared by name only in `wrangler.toml`.
 - The K2 tab can dry-run manifest export without K2. With `K2_API_KEY`
   configured, `Apply sync` uploads the generated seed/runtime manifest to K2.
@@ -23,7 +23,6 @@ fetch assets through `env.ASSETS.fetch()`.
 
 ```bash
 cd deployment/cloudflare
-export ICP_ADMIN_TOKEN=$(openssl rand -hex 24)
 wrangler dev
 ```
 
@@ -31,8 +30,7 @@ Then check:
 
 ```bash
 curl -sS http://127.0.0.1:8787/healthz
-curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
-  http://127.0.0.1:8787/api/state
+curl -sS http://127.0.0.1:8787/api/state
 ```
 
 ## Secret Setup

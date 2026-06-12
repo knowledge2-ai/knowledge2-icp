@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 
@@ -93,36 +95,14 @@ SEEDED_SETTINGS: dict[str, Any] = {
 }
 
 
+def _load_seed_accounts() -> list[dict[str, Any]]:
+    path = Path(__file__).with_name("web_assets") / "seed-companies.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return payload.get("account_universe", [])
+
+
 SEEDED_LISTS: dict[str, Any] = {
-    "account_universe": [
-        {
-            "company": "Mojio Example",
-            "domain": "moj.io",
-            "category": "connected mobility software",
-            "founded_year": 2012,
-            "employee_count": 120,
-            "hq": "Canada",
-            "notes": "Connected vehicle platform with trips diagnostics telematics data API integrations and partner workflows.",
-        },
-        {
-            "company": "Automate Example",
-            "domain": "automate.co.za",
-            "category": "dealership management software",
-            "founded_year": 1980,
-            "employee_count": 150,
-            "hq": "South Africa",
-            "notes": "Dealership management software trusted by dealerships with inventory transactions reporting and business workflows.",
-        },
-        {
-            "company": "AI Native Example",
-            "domain": "example.com",
-            "category": "AI agents",
-            "founded_year": 2025,
-            "employee_count": 20,
-            "hq": "US",
-            "notes": "AI-native autonomous agent platform for every business.",
-        },
-    ],
+    "account_universe": _load_seed_accounts(),
     "priority_verticals": [
         "automotive",
         "fleet",
@@ -166,78 +146,43 @@ def seeded_run() -> dict[str, Any]:
             },
         },
         "warnings": [],
-        "k2": {
-            "status": "ready_for_sdk_sync",
-            "reason": "Seeded Worker/Python deployment can export this manifest to K2 when K2_API_KEY is configured.",
-            "document_count": 14,
-        },
-        "leads": [
-            _seed_lead(
-                company="Mojio Example",
-                domain="moj.io",
-                category="connected mobility software",
-                founded_year=2012,
-                employee_count=120,
-                hq="Canada",
-                tier="A",
-                score=82,
-                ai_posture=0,
-                data_workflow=5,
-                feasibility=4,
-                vertical="fleet",
-                evidence_text=(
-                    "Founded in 2012. Enterprise software platform for fleet workflow, dispatch, "
-                    "telematics records, integrations, API, permissions, analytics, and customer operations."
-                ),
-                source_url="https://moj.io/platform",
-                docs_url="https://moj.io/docs/api",
-                github_url="https://github.com/mojio",
-                linkedin_url="https://www.linkedin.com/company/mojio",
-            ),
-            _seed_lead(
-                company="Automate Example",
-                domain="automate.co.za",
-                category="dealership management software",
-                founded_year=1980,
-                employee_count=150,
-                hq="South Africa",
-                tier="A",
-                score=79,
-                ai_posture=0,
-                data_workflow=4,
-                feasibility=3,
-                vertical="dealership",
-                evidence_text=(
-                    "40+ years of dealership-management software experience, trusted by 1,000+ dealerships "
-                    "with inventory, transactions, reporting, BI, and operational workflow data."
-                ),
-                source_url="https://www.automate.co.za/",
-                docs_url="https://www.automate.co.za/solutions",
-                github_url="",
-                linkedin_url="https://www.linkedin.com/company/automate-dms",
-            ),
-            _seed_lead(
-                company="AI Native Example",
-                domain="example.com",
-                category="AI agents",
-                founded_year=2025,
-                employee_count=20,
-                hq="US",
-                tier="Reject",
-                score=24,
-                ai_posture=5,
-                data_workflow=1,
-                feasibility=2,
-                vertical="AI-native",
-                evidence_text="AI-native autonomous agent platform for every business, founded in 2025.",
-                source_url="https://example.com/",
-                docs_url="",
-                github_url="",
-                linkedin_url="",
-            ),
-        ],
+        "leads": sorted(
+            [_seed_lead_from_account(account) for account in SEEDED_LISTS["account_universe"]],
+            key=lambda lead: (-int(lead["score"]["total_score"]), str(lead["score"]["company"]["company"])),
+        ),
+    }
+    run["k2"] = {
+        "status": "ready_for_sdk_sync",
+        "reason": "Seeded Worker/Python deployment can export this manifest to K2 when K2_API_KEY is configured.",
+        "document_count": len(run["leads"]) * 6,
     }
     return deepcopy(run)
+
+
+def _seed_lead_from_account(account: dict[str, Any]) -> dict[str, Any]:
+    reject = "ai-native" in f"{account.get('category', '')} {account.get('notes', '')}".lower()
+    vertical = _vertical_for(account)
+    tier = "Reject" if reject else ("A" if _high_priority_vertical(vertical) else "B")
+    score = 24 if reject else (82 if tier == "A" else 68)
+    return _seed_lead(
+        company=str(account.get("company", "")),
+        domain=str(account.get("domain", "")),
+        category=str(account.get("category", "")),
+        founded_year=account.get("founded_year"),
+        employee_count=account.get("employee_count"),
+        hq=str(account.get("hq", "")),
+        tier=tier,
+        score=score,
+        ai_posture=5 if reject else 1,
+        data_workflow=1 if reject else (5 if tier == "A" else 4),
+        feasibility=2 if reject else 3,
+        vertical=vertical,
+        evidence_text=str(account.get("notes") or f"{account.get('company')} is listed in a seeded vertical-market software portfolio."),
+        source_url=str(account.get("source_url") or f"https://{account.get('domain', '')}"),
+        docs_url="",
+        github_url="",
+        linkedin_url="",
+    )
 
 
 def _seed_lead(
@@ -245,8 +190,8 @@ def _seed_lead(
     company: str,
     domain: str,
     category: str,
-    founded_year: int,
-    employee_count: int,
+    founded_year: int | None,
+    employee_count: int | None,
     hq: str,
     tier: str,
     score: int,
@@ -417,7 +362,7 @@ def _seed_lead(
     }
 
 
-def _gates(tier: str, founded_year: int) -> list[dict[str, Any]]:
+def _gates(tier: str, founded_year: int | None) -> list[dict[str, Any]]:
     if tier == "Reject":
         return [
             {"name": "Founded before 2025", "status": "fail", "reason": f"Founded year {founded_year}.", "evidence_ids": []},
@@ -428,7 +373,12 @@ def _gates(tier: str, founded_year: int) -> list[dict[str, Any]]:
             {"name": "Not AI-native", "status": "fail", "reason": "AI-native category.", "evidence_ids": []},
         ]
     return [
-        {"name": "Founded before 2025", "status": "pass", "reason": f"Founded year {founded_year}.", "evidence_ids": []},
+        {
+            "name": "Founded before 2025",
+            "status": "pass" if founded_year else "unknown",
+            "reason": f"Founded year {founded_year}." if founded_year else "Listed in official incumbent-software portfolio; founded date needs verification.",
+            "evidence_ids": [],
+        },
         {"name": "Product company", "status": "pass", "reason": "Seeded software platform evidence.", "evidence_ids": []},
         {"name": "B2B or B2B2C", "status": "pass", "reason": "Business customer and partner workflows.", "evidence_ids": []},
         {"name": "Has proprietary workflow/data", "status": "pass", "reason": "Operational workflow and data signals.", "evidence_ids": []},
@@ -473,3 +423,27 @@ def _wedge(ai_posture: int) -> str:
     if ai_posture >= 4:
         return "reject or reposition toward AI governance rather than first-feature buildout"
     return "upgrade shallow AI features into governed workflow automation"
+
+
+def _vertical_for(account: dict[str, Any]) -> str:
+    text = f"{account.get('category', '')} {account.get('notes', '')}".lower()
+    if "dealer" in text or "automotive" in text:
+        return "dealership"
+    if "fleet" in text or "transport" in text or "telematics" in text:
+        return "fleet"
+    if "health" in text or "medical" in text:
+        return "healthcare admin"
+    if "utility" in text or "government" in text or "public" in text:
+        return "govtech"
+    if "asset" in text or "logistics" in text or "field" in text:
+        return "field service"
+    if "education" in text or "student" in text:
+        return "education admin"
+    if "food" in text or "hospitality" in text:
+        return "hospitality"
+    return str(account.get("category") or "vertical software")
+
+
+def _high_priority_vertical(vertical: str) -> bool:
+    text = vertical.lower()
+    return any(term in text for term in ["dealer", "fleet", "field", "govtech", "health", "utility", "logistics", "manufacturing"])

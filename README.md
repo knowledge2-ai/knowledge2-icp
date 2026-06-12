@@ -34,14 +34,16 @@ The dashboard can:
 - fetch public website evidence and reuse the existing ICP scoring engine
 - inspect ranked leads, hard gates, evidence, strategy, and recommended personas
 - inspect and export Apollo-backed prospects or strategy persona targets
+- start from a committed 328-account seed universe with Volaris/Harris
+  Constellation portfolio companies plus the named ICP examples from `icp.md`
 - edit the active ICP criteria markdown in local app state
 - ask natural language questions over stored run evidence and metadata
 - optionally call Apollo and GitHub providers when environment variables are configured
 
 Local app state is stored under `out/app_state` by default and is ignored by git.
 
-For protected local or deployed API access, set an admin token before starting
-the server and save the same token in the dashboard sidebar:
+For protected local API access, set an admin token before starting the server
+and save the same token in the dashboard sidebar:
 
 ```bash
 export ICP_ADMIN_TOKEN=$(openssl rand -hex 24)

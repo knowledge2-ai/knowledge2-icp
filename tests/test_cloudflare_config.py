@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import tomllib
 import unittest
@@ -32,9 +33,14 @@ class CloudflareConfigTest(unittest.TestCase):
         self.assertIn("K2 apply token required.", worker)
         self.assertNotIn("Admin token required.", worker)
         self.assertIn("SEED_PROMPTS", worker)
+        self.assertIn("seed-companies.json", worker)
+        self.assertIn("MAX_APOLLO_ENRICH_LEADS", worker)
         self.assertIn("handleApiRequest", worker)
         self.assertNotIn("proxyApiRequest", worker)
         self.assertIn("replace-with-cloudflare-account-id", raw)
+
+        seed = json.loads(Path("icp_engine/web_assets/seed-companies.json").read_text(encoding="utf-8"))
+        self.assertGreaterEqual(len(seed["account_universe"]), 300)
 
     def test_generated_worker_config_uses_environment_values_without_committing_secrets(self) -> None:
         renderer = _load_renderer()

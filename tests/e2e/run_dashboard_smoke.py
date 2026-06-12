@@ -79,7 +79,8 @@ def main() -> int:
 
                 page.locator("button.tab[data-view='setup']").click()
                 expect(page.locator("#setup-grid")).to_contain_text("Discovery query", timeout=timeout)
-                expect(page.locator("#setup-grid")).to_contain_text("Mojio Example", timeout=timeout)
+                expect(page.locator("#setup-grid")).to_contain_text("Mojio", timeout=timeout)
+                expect(page.locator("#setup-grid")).to_contain_text("Advanced Utility Systems", timeout=timeout)
                 expect(page.locator("#setup-grid")).to_contain_text("cloudflare-seeded-worker", timeout=timeout)
 
                 page.locator("button.tab[data-view='criteria']").click()
