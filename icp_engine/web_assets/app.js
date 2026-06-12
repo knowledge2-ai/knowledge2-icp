@@ -1,6 +1,7 @@
 const state = {
   currentRun: null,
   selectedLeadId: null,
+  prospectFocusLeadId: null,
   currentManifest: null,
   currentProspects: null,
   prospectsRunId: null,
@@ -11,6 +12,7 @@ const state = {
 };
 
 const AUTH_TOKEN_KEY = "knowledge2.icp.adminToken";
+const ALL_PROSPECTS = "__all__";
 
 const $ = (id) => document.getElementById(id);
 
@@ -268,6 +270,7 @@ function renderRuns(runs) {
     item.addEventListener("click", async () => {
       state.currentRun = await api(`/api/runs/${item.dataset.runId}`);
       state.selectedLeadId = null;
+      state.prospectFocusLeadId = null;
       state.currentManifest = null;
       state.currentProspects = null;
       state.prospectsRunId = null;
@@ -279,13 +282,20 @@ function renderRuns(runs) {
 
 function renderRun(run) {
   const leads = run?.leads || [];
+  const selected = leads.find((lead) => lead.id === state.selectedLeadId) || leads[0] || null;
+  state.selectedLeadId = selected?.id || null;
+  if (
+    state.prospectFocusLeadId &&
+    state.prospectFocusLeadId !== ALL_PROSPECTS &&
+    !leads.some((lead) => lead.id === state.prospectFocusLeadId)
+  ) {
+    state.prospectFocusLeadId = null;
+  }
   renderSummary(run, leads);
   renderLeadRows(leads);
   renderK2Panel();
-  renderProspectsPanel();
-  const selected = leads.find((lead) => lead.id === state.selectedLeadId) || leads[0];
-  if (selected) state.selectedLeadId = selected.id;
   renderLeadDetail(selected);
+  renderProspectsPanel();
   if (run && state.prospectsRunId !== run.id) {
     refreshProspects({ silent: true }).catch((error) => {
       $("prospect-summary").className = "detail-panel empty";
@@ -345,7 +355,9 @@ function renderLeadRows(leads) {
   root.querySelectorAll("[data-lead-id]").forEach((row) => {
     row.addEventListener("click", () => {
       state.selectedLeadId = row.dataset.leadId;
+      state.prospectFocusLeadId = row.dataset.leadId;
       renderRun(state.currentRun);
+      activateView("prospects");
     });
   });
 }
@@ -553,28 +565,161 @@ function renderProspectsPanel(payload = state.currentProspects) {
   }
   summary.className = "detail-panel";
   const prospects = payload.prospects || [];
-  const counts = payload.source_counts || {};
-  summary.innerHTML = `<div class="prospect-summary">
-    ${metric("Prospects", prospects.length)}
-    ${metric("Apollo", counts.apollo || 0)}
-    ${metric("Persona targets", counts.strategy || 0)}
+  const focusLead = currentProspectFocusLead();
+  const visibleProspects = focusLead ? prospectsForLead(prospects, focusLead) : prospects;
+  const counts = prospectSourceCounts(visibleProspects);
+  const focusCompany = focusLead ? leadCompany(focusLead) : null;
+  summary.innerHTML = `<div class="prospect-focus">
+    <div class="prospect-summary">
+      ${metric(focusLead ? "Company prospects" : "All prospects", visibleProspects.length)}
+      ${metric("Apollo", counts.apollo || 0)}
+      ${metric("Persona targets", counts.strategy || 0)}
+      ${metric("Scope", focusCompany?.company || "All companies")}
+    </div>
+    ${
+      focusLead
+        ? `<button id="clear-prospect-focus" type="button" class="secondary">All companies</button>`
+        : ""
+    }
   </div>`;
-  if (!prospects.length) {
-    rows.innerHTML = `<div class="prospect-row"><span>No prospects available for this run.</span></div>`;
+  $("clear-prospect-focus")?.addEventListener("click", () => {
+    state.prospectFocusLeadId = ALL_PROSPECTS;
+    renderProspectsPanel();
+  });
+  if (!visibleProspects.length) {
+    rows.innerHTML = `<div class="prospect-row"><span>No prospects available${focusCompany?.company ? ` for ${escapeHtml(focusCompany.company)}` : ""}.</span></div>`;
     return;
   }
-  rows.innerHTML = prospects
-    .map((prospect) => `<div class="prospect-row">
+  rows.innerHTML = renderProspectTree(visibleProspects, focusLead);
+}
+
+function currentProspectFocusLead() {
+  if (!state.currentRun || state.prospectFocusLeadId === ALL_PROSPECTS) return null;
+  const leads = state.currentRun.leads || [];
+  const focusId = state.prospectFocusLeadId || state.selectedLeadId;
+  return leads.find((lead) => lead.id === focusId) || leads.find((lead) => lead.id === state.selectedLeadId) || leads[0] || null;
+}
+
+function leadCompany(lead) {
+  return lead?.score?.company || {};
+}
+
+function prospectsForLead(prospects, lead) {
+  const company = leadCompany(lead);
+  const leadId = normalizeText(lead?.id);
+  const domain = normalizeText(company.domain);
+  const companyName = normalizeText(company.company);
+  return prospects.filter((prospect) => {
+    return (
+      normalizeText(prospect.lead_id) === leadId ||
+      (domain && normalizeText(prospect.domain) === domain) ||
+      (companyName && normalizeText(prospect.company) === companyName)
+    );
+  });
+}
+
+function prospectSourceCounts(prospects) {
+  return prospects.reduce((acc, prospect) => {
+    const source = prospect.source || "unknown";
+    acc[source] = (acc[source] || 0) + 1;
+    return acc;
+  }, {});
+}
+
+function renderProspectTree(prospects, focusLead) {
+  const companyGroups = focusLead
+    ? [{ company: leadCompany(focusLead), prospects }]
+    : groupProspectsByCompany(prospects);
+  return `<div class="prospect-tree">
+    ${companyGroups.map((group) => renderProspectCompanyNode(group.company, group.prospects)).join("")}
+  </div>`;
+}
+
+function groupProspectsByCompany(prospects) {
+  const groups = new Map();
+  prospects.forEach((prospect) => {
+    const key = `${normalizeText(prospect.company)}|${normalizeText(prospect.domain)}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        company: { company: prospect.company || "Unknown company", domain: prospect.domain || "" },
+        prospects: [],
+      });
+    }
+    groups.get(key).prospects.push(prospect);
+  });
+  return Array.from(groups.values()).sort((a, b) => String(a.company.company || "").localeCompare(String(b.company.company || "")));
+}
+
+function renderProspectCompanyNode(company, prospects) {
+  const roleGroups = groupProspectsByRole(prospects);
+  return `<section class="prospect-company-node">
+    <div class="prospect-company-title">
+      <span><strong>${escapeHtml(company.company || "Unknown company")}</strong><small>${escapeHtml(company.domain || "")}</small></span>
+      <span class="status-pill">${prospects.length} ${prospects.length === 1 ? "target" : "targets"}</span>
+    </div>
+    ${roleGroups.map(renderProspectRoleGroup).join("")}
+  </section>`;
+}
+
+function groupProspectsByRole(prospects) {
+  const groups = new Map();
+  [...prospects].sort(compareProspects).forEach((prospect) => {
+    const role = prospect.persona || prospect.title || "Other role";
+    if (!groups.has(role)) groups.set(role, []);
+    groups.get(role).push(prospect);
+  });
+  return Array.from(groups.entries()).map(([role, items]) => ({ role, prospects: items }));
+}
+
+function renderProspectRoleGroup(group) {
+  const primary = group.prospects[0] || {};
+  const priority = primary.persona_priority || primary.source || "";
+  return `<details class="prospect-role-group" open>
+    <summary>
+      <span><strong>${escapeHtml(group.role)}</strong><small>${escapeHtml(priority)} · ${group.prospects.length} ${group.prospects.length === 1 ? "target" : "targets"}</small></span>
+    </summary>
+    <div class="prospect-role-rows">
+      ${group.prospects.map(renderProspectRow).join("")}
+    </div>
+  </details>`;
+}
+
+function renderProspectRow(prospect) {
+  return `<div class="prospect-row prospect-tree-row">
       <span>
         <strong>${escapeHtml(prospect.name || prospect.persona || "")}</strong>
         <small>${escapeHtml(prospect.company || "")} · ${escapeHtml(prospect.domain || "")}</small>
       </span>
       <span>${escapeHtml(prospect.title || "")}</span>
       <span><strong>${escapeHtml(prospect.priority_score || 0)}</strong><small>${escapeHtml(prospect.source || "")}</small></span>
-      <span>${prospectContactLink(prospect)}</span>
+      <span class="link-stack">${prospectContactLink(prospect)}</span>
       <span>${escapeHtml(prospect.outreach_angle || "")}</span>
-    </div>`)
-    .join("");
+    </div>`;
+}
+
+function compareProspects(a, b) {
+  return (
+    personaPriorityRank(a.persona_priority) - personaPriorityRank(b.persona_priority) ||
+    sourceRank(a.source) - sourceRank(b.source) ||
+    Number(b.priority_score || 0) - Number(a.priority_score || 0) ||
+    String(a.name || a.title || "").localeCompare(String(b.name || b.title || ""))
+  );
+}
+
+function personaPriorityRank(value) {
+  const priority = normalizeText(value);
+  if (priority === "primary") return 0;
+  if (priority === "secondary") return 1;
+  if (priority === "tertiary") return 2;
+  return 3;
+}
+
+function sourceRank(value) {
+  return normalizeText(value) === "apollo" ? 0 : 1;
+}
+
+function normalizeText(value) {
+  return String(value || "").trim().toLowerCase();
 }
 
 function prospectContactLink(prospect) {
@@ -715,6 +860,7 @@ $("run-form").addEventListener("submit", async (event) => {
     });
     state.currentRun = run;
     state.selectedLeadId = null;
+    state.prospectFocusLeadId = null;
     state.currentManifest = null;
     state.currentProspects = null;
     state.prospectsRunId = null;

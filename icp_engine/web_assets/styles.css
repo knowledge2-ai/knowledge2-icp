@@ -549,6 +549,17 @@ h1 {
   gap: 10px;
 }
 
+.prospect-focus {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.prospect-focus .secondary {
+  white-space: nowrap;
+}
+
 #prospect-summary.detail-panel {
   min-height: 0;
   padding: 14px 18px;
@@ -597,6 +608,68 @@ h1 {
 .prospect-row a {
   color: var(--blue);
   font-weight: 800;
+}
+
+.prospect-tree {
+  display: grid;
+}
+
+.prospect-company-node {
+  border-top: 1px solid var(--line);
+}
+
+.prospect-company-node:first-child {
+  border-top: 0;
+}
+
+.prospect-company-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  background: #f7faf8;
+}
+
+.prospect-company-title strong,
+.prospect-company-title small,
+.prospect-role-group summary strong,
+.prospect-role-group summary small {
+  display: block;
+}
+
+.prospect-company-title small,
+.prospect-role-group summary small {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.prospect-role-group {
+  border-top: 1px solid var(--line);
+}
+
+.prospect-role-group summary {
+  cursor: pointer;
+  padding: 10px 14px;
+  background: #fbfcfd;
+  color: var(--ink);
+}
+
+.prospect-role-group[open] summary {
+  background: #eef6f1;
+}
+
+.prospect-role-rows {
+  display: grid;
+}
+
+.prospect-tree-row {
+  background: #fff;
+}
+
+.link-stack {
+  display: grid;
+  gap: 4px;
 }
 
 .button-row {
@@ -780,6 +853,12 @@ h1 {
 
   .summary-strip {
     justify-content: flex-start;
+  }
+
+  .prospect-focus,
+  .prospect-company-title {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .toolbar,

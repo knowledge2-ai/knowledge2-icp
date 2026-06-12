@@ -62,7 +62,10 @@ def main() -> int:
                 expect(page.get_by_role("heading", name="Lead Discovery Dashboard")).to_be_visible(timeout=timeout)
                 expect(page.locator("#lead-rows .lead-row")).to_contain_text("Mojio", timeout=timeout)
 
-                page.locator("button.tab[data-view='prospects']").click()
+                page.locator("#lead-rows .lead-row").filter(has_text="Mojio").first.click()
+                expect(page.locator("#view-prospects")).to_be_visible(timeout=timeout)
+                expect(page.locator("#prospect-rows .prospect-company-node").first).to_contain_text("Mojio", timeout=timeout)
+                expect(page.locator("#prospect-rows .prospect-role-group").first).to_contain_text("primary", timeout=timeout)
                 expect(page.locator("#prospect-rows .prospect-row").first).to_contain_text("Mojio", timeout=timeout)
 
                 page.locator("button.tab[data-view='research']").click()
