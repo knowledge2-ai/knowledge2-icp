@@ -148,10 +148,11 @@ export default {
 
     if (url.pathname.startsWith("/api/")) {
       const auth = authorizeApiRequest(request, env);
-      if (!auth.configured) {
+      const requiresAuth = !isPublicReadRequest(request, url);
+      if (requiresAuth && !auth.configured) {
         return withSecurityHeaders(json({ error: "ICP_ADMIN_TOKEN is required for Worker API routes." }, 503));
       }
-      if (!auth.authorized) {
+      if (requiresAuth && !auth.authorized) {
         return withSecurityHeaders(unauthorized());
       }
       return withSecurityHeaders(await handleApiRequest(request, env, url));
@@ -172,6 +173,16 @@ export default {
     return withSecurityHeaders(await env.ASSETS.fetch(new Request(indexUrl, request)));
   },
 };
+
+function isPublicReadRequest(request, url) {
+  const method = request.method.toUpperCase();
+  if (method !== "GET" && method !== "HEAD") return false;
+  if (url.pathname === "/api/health" || url.pathname === "/api/state") return true;
+  const runMatch = url.pathname.match(/^\/api\/runs\/[^/]+(?:\/([^/]+))?$/);
+  if (!runMatch) return false;
+  const action = runMatch[1] || "";
+  return ["", "prospects", "prospects.csv", "k2-manifest"].includes(action);
+}
 
 async function handleApiRequest(request, env, url) {
   const method = request.method.toUpperCase();

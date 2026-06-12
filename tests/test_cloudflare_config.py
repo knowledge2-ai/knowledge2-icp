@@ -28,6 +28,7 @@ class CloudflareConfigTest(unittest.TestCase):
         self.assertNotRegex(raw, r"(K2_API_KEY|APOLLO_API_KEY|ICP_ADMIN_TOKEN)\s*=\s*[\"'][A-Za-z0-9_-]{12,}[\"']")
         self.assertIn('url.pathname === "/healthz"', worker)
         self.assertIn("authorizeApiRequest", worker)
+        self.assertIn("isPublicReadRequest", worker)
         self.assertIn("ICP_ADMIN_TOKEN is required for Worker API routes.", worker)
         self.assertIn("SEED_PROMPTS", worker)
         self.assertIn("handleApiRequest", worker)
