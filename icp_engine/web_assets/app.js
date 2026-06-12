@@ -53,24 +53,24 @@ function initAuthControls() {
   const tokenInput = $("admin-token");
   const saved = localStorage.getItem(AUTH_TOKEN_KEY) || "";
   tokenInput.value = saved;
-  $("auth-status").textContent = saved ? "Token saved in this browser." : "No token saved.";
+  $("auth-status").textContent = saved ? "K2 apply token saved in this browser." : "No K2 apply token saved.";
 }
 
 function saveAuthToken() {
   const value = $("admin-token").value.trim();
   if (value) {
     localStorage.setItem(AUTH_TOKEN_KEY, value);
-    $("auth-status").textContent = "Token saved in this browser.";
+    $("auth-status").textContent = "K2 apply token saved in this browser.";
   } else {
     localStorage.removeItem(AUTH_TOKEN_KEY);
-    $("auth-status").textContent = "No token saved.";
+    $("auth-status").textContent = "No K2 apply token saved.";
   }
 }
 
 function clearAuthToken() {
   localStorage.removeItem(AUTH_TOKEN_KEY);
   $("admin-token").value = "";
-  $("auth-status").textContent = "No token saved.";
+  $("auth-status").textContent = "No K2 apply token saved.";
 }
 
 function renderProviders(providers) {
@@ -578,13 +578,17 @@ function renderProspectsPanel(payload = state.currentProspects) {
 }
 
 function prospectContactLink(prospect) {
+  const links = [];
   if (prospect.linkedin_url) {
-    return `<a href="${escapeAttribute(prospect.linkedin_url)}" target="_blank" rel="noreferrer">LinkedIn</a>`;
+    links.push(`<a href="${escapeAttribute(prospect.linkedin_url)}" target="_blank" rel="noreferrer">LinkedIn</a>`);
   }
   if (prospect.email) {
-    return `<a href="mailto:${escapeAttribute(prospect.email)}">${escapeHtml(prospect.email)}</a>`;
+    links.push(`<a href="mailto:${escapeAttribute(prospect.email)}">${escapeHtml(prospect.email)}</a>`);
   }
-  return escapeHtml(prospectContactLabel(prospect));
+  if (prospect.phone) {
+    links.push(`<a href="tel:${escapeAttribute(prospect.phone)}">${escapeHtml(prospect.phone)}</a>`);
+  }
+  return links.length ? links.join("<br>") : escapeHtml(prospectContactLabel(prospect));
 }
 
 function prospectContactLabel(prospect) {

@@ -140,21 +140,14 @@ export default {
         status: "ok",
         service: "knowledge2-icp-worker",
         mode: "seeded-worker",
-        auth_required: Boolean(env.ICP_ADMIN_TOKEN),
+        auth_required: false,
+        protected_actions: ["k2_apply_sync"],
         k2_configured: Boolean(env.K2_API_KEY),
         apollo_configured: Boolean(env.APOLLO_API_KEY),
       }));
     }
 
     if (url.pathname.startsWith("/api/")) {
-      const auth = authorizeApiRequest(request, env);
-      const requiresAuth = !isPublicReadRequest(request, url);
-      if (requiresAuth && !auth.configured) {
-        return withSecurityHeaders(json({ error: "ICP_ADMIN_TOKEN is required for Worker API routes." }, 503));
-      }
-      if (requiresAuth && !auth.authorized) {
-        return withSecurityHeaders(unauthorized());
-      }
       return withSecurityHeaders(await handleApiRequest(request, env, url));
     }
 
@@ -174,16 +167,6 @@ export default {
   },
 };
 
-function isPublicReadRequest(request, url) {
-  const method = request.method.toUpperCase();
-  if (method !== "GET" && method !== "HEAD") return false;
-  if (url.pathname === "/api/health" || url.pathname === "/api/state") return true;
-  const runMatch = url.pathname.match(/^\/api\/runs\/[^/]+(?:\/([^/]+))?$/);
-  if (!runMatch) return false;
-  const action = runMatch[1] || "";
-  return ["", "prospects", "prospects.csv", "k2-manifest"].includes(action);
-}
-
 async function handleApiRequest(request, env, url) {
   const method = request.method.toUpperCase();
   if (method === "GET" && url.pathname === "/api/health") {
@@ -191,7 +174,8 @@ async function handleApiRequest(request, env, url) {
       status: "ok",
       service: "knowledge2-icp",
       version: "0.1.0-worker",
-      auth_required: true,
+      auth_required: false,
+      protected_actions: ["k2_apply_sync"],
       mode: "seeded-worker",
       run_count: listRuns().length,
       provider_status: providerStatus(env),
@@ -263,6 +247,13 @@ async function handleApiRequest(request, env, url) {
           k2_configured: Boolean(env.K2_API_KEY),
           mode: "cloudflare-worker",
         });
+      }
+      const auth = authorizeApiRequest(request, env);
+      if (!auth.configured) {
+        return json({ error: "ICP_ADMIN_TOKEN is required for K2 apply sync." }, 503);
+      }
+      if (!auth.authorized) {
+        return unauthorized("K2 apply token required.");
       }
       const result = await uploadToK2(env, run, {
         projectName: String(payload.project_name || "Knowledge2 ICP GTM"),
@@ -778,20 +769,55 @@ async function apolloSearchPeople(env, domain, titles) {
     return { status: "error", reason: `Apollo returned HTTP ${response.status}.`, people: [] };
   }
   const payload = await response.json();
-  return { status: "ok", people: compactApolloPeople(payload) };
+  const people = compactApolloPeople(payload);
+  const enriched = await apolloBulkMatchPeople(env, people);
+  return { status: "ok", people: enriched.length ? mergeApolloPeople(people, enriched) : people };
+}
+
+async function apolloBulkMatchPeople(env, people) {
+  const details = people
+    .filter((person) => person.id)
+    .slice(0, 10)
+    .map((person) => ({ id: person.id }));
+  if (!details.length) return [];
+  const baseUrl = String(env.APOLLO_BASE_URL || "https://api.apollo.io/api/v1").replace(/\/+$/, "");
+  const response = await fetch(`${baseUrl}/people/bulk_match?reveal_personal_emails=false&reveal_phone_number=false`, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "cache-control": "no-cache",
+      "content-type": "application/json",
+      "user-agent": "Knowledge2ICPWorker/0.1",
+      "x-api-key": env.APOLLO_API_KEY,
+    },
+    body: JSON.stringify({ details }),
+  });
+  if (!response.ok) return [];
+  const payload = await response.json();
+  return compactApolloPeople({ people: Array.isArray(payload.matches) ? payload.matches : [] });
+}
+
+function mergeApolloPeople(searchPeople, enrichedPeople) {
+  const enrichedById = new Map(enrichedPeople.map((person) => [person.id, person]));
+  return searchPeople.map((person) => ({ ...person, ...(enrichedById.get(person.id) || {}) }));
 }
 
 function compactApolloPeople(payload) {
   const rawItems = Array.isArray(payload.people) ? payload.people : Array.isArray(payload.contacts) ? payload.contacts : [];
   return rawItems.slice(0, 20).filter((item) => item && typeof item === "object").map((item) => {
     const org = item.organization && typeof item.organization === "object" ? item.organization : {};
+    const contact = item.contact && typeof item.contact === "object" ? item.contact : {};
+    const phone = Array.isArray(contact.phone_numbers) && contact.phone_numbers[0]?.sanitized_number
+      ? contact.phone_numbers[0].sanitized_number
+      : contact.sanitized_phone || item.sanitized_phone || "";
     return {
       id: item.id || "",
-      name: item.name || "",
-      title: item.title || "",
-      email: item.email || "",
-      email_status: item.email_status || "",
-      linkedin_url: item.linkedin_url || "",
+      name: item.name || contact.name || "",
+      title: item.title || contact.title || "",
+      email: item.email || contact.email || "",
+      email_status: item.email_status || contact.email_status || "",
+      linkedin_url: item.linkedin_url || contact.linkedin_url || "",
+      phone,
       city: item.city || "",
       state: item.state || "",
       country: item.country || "",
@@ -876,6 +902,7 @@ function personProspect(run, lead, person, index) {
     linkedin_url: person.linkedin_url || "",
     email: person.email || "",
     email_status: person.email_status || "",
+    phone: person.phone || "",
     location,
     organization_name: person.organization?.name || company.company,
     outreach_angle: lead.strategy.outreach_angle,
@@ -907,7 +934,7 @@ function sourceCounts(prospects) {
 }
 
 function prospectsCsv(prospects) {
-  const fields = ["run_id", "lead_id", "company", "domain", "tier", "company_score", "priority_score", "source", "status", "name", "title", "persona", "persona_priority", "linkedin_url", "email", "location", "organization_name", "outreach_angle", "first_step"];
+  const fields = ["run_id", "lead_id", "company", "domain", "tier", "company_score", "priority_score", "source", "status", "name", "title", "persona", "persona_priority", "linkedin_url", "email", "phone", "location", "organization_name", "outreach_angle", "first_step"];
   return `${fields.join(",")}\n${prospects.map((row) => fields.map((field) => csvCell(row[field])).join(",")).join("\n")}\n`;
 }
 
@@ -1205,8 +1232,8 @@ function withSecurityHeaders(response) {
   });
 }
 
-function unauthorized() {
-  return json({ error: "Admin token required." }, 401, {
+function unauthorized(message = "Token required.") {
+  return json({ error: message }, 401, {
     "www-authenticate": 'Bearer realm="knowledge2-icp"',
   });
 }
