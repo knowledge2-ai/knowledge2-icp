@@ -21,6 +21,8 @@ def main(argv: list[str] | None = None) -> int:
     qualify.add_argument("--use-gemini", action="store_true", help="Use Gemini-assisted classification")
     qualify.add_argument("--no-fetch", action="store_true", help="Skip public page fetching")
     qualify.add_argument("--max-pages", type=int, default=10, help="Max pages to fetch per company")
+    qualify.add_argument("--max-attempts", type=int, default=None, help="Max fetch attempts per company")
+    qualify.add_argument("--max-failures", type=int, default=None, help="Max failed fetches per company")
     qualify.add_argument("--timeout", type=float, default=8.0, help="HTTP timeout in seconds")
 
     args = parser.parse_args(argv)
@@ -47,6 +49,8 @@ def _qualify(args: argparse.Namespace) -> int:
                 cache_dir / _safe_name(company.company),
                 timeout_seconds=args.timeout,
                 max_pages=args.max_pages,
+                max_attempts=args.max_attempts,
+                max_failures=args.max_failures,
             )
 
         model_classification = None

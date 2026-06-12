@@ -67,11 +67,17 @@ def fetch_company_evidence(
     *,
     timeout_seconds: float = 8.0,
     max_pages: int = 10,
+    max_attempts: int | None = None,
+    max_failures: int | None = None,
 ) -> tuple[list[Evidence], list[str]]:
     cache_dir.mkdir(parents=True, exist_ok=True)
     evidence: list[Evidence] = []
     warnings: list[str] = []
     first_homepage_error: str | None = None
+    attempts = 0
+    failures = 0
+    max_attempts = max_attempts or max(8, max_pages * 3)
+    max_failures = max_failures or max(6, max_pages * 2)
 
     urls = candidate_urls(company.domain)
     seen_urls: set[str] = set()
@@ -83,11 +89,13 @@ def fetch_company_evidence(
         if normalized_url in seen_urls:
             continue
         seen_urls.add(normalized_url)
-        if len(evidence) >= max_pages:
+        if len(evidence) >= max_pages or attempts >= max_attempts or failures >= max_failures:
             break
+        attempts += 1
         try:
             item = _fetch_or_read_cache(url, cache_dir, timeout_seconds)
         except (HTTPError, URLError, TimeoutError, socket.timeout, ssl.SSLError, ValueError) as exc:
+            failures += 1
             if not evidence and url.rstrip("/") == f"https://{normalize_domain(company.domain)}":
                 first_homepage_error = str(exc)
             continue
@@ -111,6 +119,10 @@ def fetch_company_evidence(
         if first_homepage_error:
             warnings.append(f"Could not fetch homepage: {first_homepage_error}")
         warnings.append("No public domain evidence fetched; scoring uses CSV fields and notes only.")
+    if attempts >= max_attempts:
+        warnings.append(f"Fetch attempt cap reached at {max_attempts} attempts.")
+    if failures >= max_failures:
+        warnings.append(f"Fetch failure cap reached at {max_failures} failures.")
     return evidence, warnings
 
 
