@@ -81,18 +81,20 @@ curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
   http://127.0.0.1:8765/api/health
 ```
 
-Cloudflare Worker shell validation:
+Cloudflare Worker validation:
 
 ```bash
 wrangler deploy --dry-run --config deployment/cloudflare/wrangler.toml
 ```
+
+The Worker serves the dashboard assets and the seeded dashboard API directly.
+It does not require a local tunnel or a separate `ICP_API_ORIGIN`.
 
 For a live environment, render an ignored Wrangler config from environment
 variables instead of editing committed placeholders:
 
 ```bash
 export CLOUDFLARE_ACCOUNT_ID=<account-id>
-export ICP_API_ORIGIN=https://<api-origin>
 export ICP_CLOUDFLARE_ROUTE=gtm-dev.knowledge2.ai
 make cloudflare-dry-run
 ```

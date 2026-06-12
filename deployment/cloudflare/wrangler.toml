@@ -11,7 +11,8 @@ routes = [
 ]
 
 [vars]
-ICP_API_ORIGIN = "https://replace-with-api-origin.example.com"
+ICP_DEPLOYMENT_MODE = "seeded-worker"
+K2_BASE_URL = "https://api-dev.knowledge2.ai"
 
 [secrets]
 required = ["K2_API_KEY", "APOLLO_API_KEY", "ICP_ADMIN_TOKEN"]

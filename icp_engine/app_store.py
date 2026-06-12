@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .seed_defaults import SEEDED_CRITERIA_MARKDOWN, SEEDED_LISTS, SEEDED_PROMPTS, SEEDED_SETTINGS, SEED_RUN_ID, seeded_run
+
 
 DEFAULT_STATE_DIR = Path(os.environ.get("ICP_APP_STATE_DIR", "out/app_state"))
 DEFAULT_ICP_PATH = Path(os.environ.get("ICP_CRITERIA_PATH", "icp.md"))
@@ -25,6 +27,9 @@ class AppStore:
         self.state_dir = Path(state_dir)
         self.icp_path = Path(icp_path)
         self.criteria_path = self.state_dir / "criteria.md"
+        self.prompts_path = self.state_dir / "prompts.json"
+        self.settings_path = self.state_dir / "settings.json"
+        self.lists_path = self.state_dir / "lists.json"
         self.runs_dir = self.state_dir / "runs"
         self.index_path = self.state_dir / "runs.json"
 
@@ -43,8 +48,8 @@ class AppStore:
             source = str(self.icp_path)
             updated_at = datetime.fromtimestamp(self.icp_path.stat().st_mtime, tz=timezone.utc).replace(microsecond=0).isoformat()
         else:
-            markdown = "# ICP Criteria\n\nDescribe the target account criteria here.\n"
-            source = "default"
+            markdown = SEEDED_CRITERIA_MARKDOWN
+            source = "seed:icp.md"
             updated_at = now_iso()
         return {
             "markdown": markdown,
@@ -59,17 +64,38 @@ class AppStore:
         self.criteria_path.write_text(cleaned, encoding="utf-8")
         return self.load_criteria()
 
+    def load_prompts(self) -> list[dict[str, Any]]:
+        self.ensure()
+        value = _load_json_file(self.prompts_path, list)
+        if value is None:
+            return [dict(item) for item in SEEDED_PROMPTS]
+        return [item for item in value if isinstance(item, dict)]
+
+    def load_settings(self) -> dict[str, Any]:
+        self.ensure()
+        value = _load_json_file(self.settings_path, dict)
+        if value is None:
+            return dict(SEEDED_SETTINGS)
+        return {**SEEDED_SETTINGS, **value}
+
+    def load_lists(self) -> dict[str, Any]:
+        self.ensure()
+        value = _load_json_file(self.lists_path, dict)
+        if value is None:
+            return json.loads(json.dumps(SEEDED_LISTS))
+        return {**json.loads(json.dumps(SEEDED_LISTS)), **value}
+
     def list_runs(self) -> list[dict[str, Any]]:
         self.ensure()
         if not self.index_path.exists():
-            return []
+            return [_run_summary(seeded_run())]
         try:
             items = json.loads(self.index_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            return []
+            return [_run_summary(seeded_run())]
         if not isinstance(items, list):
-            return []
-        return sorted(items, key=lambda item: item.get("created_at", ""), reverse=True)
+            return [_run_summary(seeded_run())]
+        return sorted(items, key=lambda item: str(item.get("created_at") or ""), reverse=True)
 
     def save_run(self, run: dict[str, Any]) -> dict[str, Any]:
         self.ensure()
@@ -77,15 +103,17 @@ class AppStore:
         run_path = self.runs_dir / f"{run_id}.json"
         run_path.write_text(json.dumps(run, indent=2, sort_keys=True), encoding="utf-8")
 
-        index = [item for item in self.list_runs() if item.get("id") != run_id]
+        index = [item for item in self.list_runs() if item.get("id") not in {run_id, SEED_RUN_ID}]
         index.append(_run_summary(run))
-        self.index_path.write_text(json.dumps(sorted(index, key=lambda item: item.get("created_at", ""), reverse=True), indent=2, sort_keys=True), encoding="utf-8")
+        self.index_path.write_text(json.dumps(sorted(index, key=lambda item: str(item.get("created_at") or ""), reverse=True), indent=2, sort_keys=True), encoding="utf-8")
         return run
 
     def load_run(self, run_id: str) -> dict[str, Any] | None:
         self.ensure()
         run_path = self.runs_dir / f"{run_id}.json"
         if not run_path.exists():
+            if run_id == SEED_RUN_ID:
+                return seeded_run()
             return None
         try:
             value = json.loads(run_path.read_text(encoding="utf-8"))
@@ -97,6 +125,9 @@ class AppStore:
         runs = self.list_runs()
         return {
             "criteria": self.load_criteria(),
+            "prompts": self.load_prompts(),
+            "settings": self.load_settings(),
+            "lists": self.load_lists(),
             "runs": runs,
             "provider_status": provider_status(),
             "latest_run": self.load_run(runs[0]["id"]) if runs else None,
@@ -148,3 +179,13 @@ def _tier_counts(leads: list[dict[str, Any]]) -> dict[str, int]:
         tier = lead.get("score", {}).get("tier", "Unknown")
         counts[tier] = counts.get(tier, 0) + 1
     return counts
+
+
+def _load_json_file(path: Path, expected_type: type) -> Any | None:
+    if not path.exists():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, expected_type) else None

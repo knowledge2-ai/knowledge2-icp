@@ -5,6 +5,9 @@ const state = {
   currentProspects: null,
   prospectsRunId: null,
   previewCandidates: [],
+  prompts: [],
+  settings: {},
+  lists: {},
 };
 
 const AUTH_TOKEN_KEY = "knowledge2.icp.adminToken";
@@ -36,6 +39,12 @@ async function loadState() {
   state.currentRun = payload.latest_run;
   renderProviders(payload.provider_status || {});
   renderCriteria(payload.criteria || {});
+  state.prompts = payload.prompts || [];
+  state.settings = payload.settings || {};
+  state.lists = payload.lists || {};
+  applySeededDefaults();
+  renderSeedSummary();
+  renderSetup();
   renderRuns(payload.runs || []);
   renderRun(state.currentRun);
 }
@@ -75,6 +84,91 @@ function renderProviders(providers) {
       </div>`;
     })
     .join("");
+}
+
+function applySeededDefaults() {
+  if (!$("query").value && state.settings.default_query) {
+    $("query").value = state.settings.default_query;
+  }
+  if (!$("seed-text").value && state.lists.account_universe?.length) {
+    $("seed-text").value = state.lists.account_universe
+      .map((item) => `${item.company}, ${item.domain}`)
+      .join("\n");
+  }
+  if (state.settings.max_companies && $("max-companies").value === "6") {
+    $("max-companies").value = state.settings.max_companies;
+  }
+  if (state.settings.max_pages && $("max-pages").value === "6") {
+    $("max-pages").value = state.settings.max_pages;
+  }
+  if (typeof state.settings.fetch_website_evidence === "boolean") {
+    $("fetch").checked = state.settings.fetch_website_evidence;
+  }
+  if (typeof state.settings.include_github_metadata === "boolean") {
+    $("github").checked = state.settings.include_github_metadata;
+  }
+  if (typeof state.settings.use_apollo_enrichment === "boolean") {
+    $("apollo").checked = state.settings.use_apollo_enrichment;
+  }
+}
+
+function renderSeedSummary() {
+  const root = $("seed-summary");
+  if (!root) return;
+  const accountCount = state.lists.account_universe?.length || 0;
+  const verticalCount = state.lists.priority_verticals?.length || 0;
+  root.innerHTML = `<div class="seed-summary">
+    ${metric("Prompts", state.prompts.length)}
+    ${metric("Accounts", accountCount)}
+    ${metric("Verticals", verticalCount)}
+    ${metric("Mode", state.settings.deployment_mode || "local")}
+  </div>`;
+}
+
+function renderSetup() {
+  const root = $("setup-grid");
+  if (!root) return;
+  const settings = Object.entries(state.settings || {});
+  const accounts = state.lists.account_universe || [];
+  const verticals = state.lists.priority_verticals || [];
+  root.innerHTML = `
+    <section class="setup-section">
+      <h3>Prompts</h3>
+      <div class="prompt-list">
+        ${state.prompts.map((prompt) => `<article class="prompt-item">
+          <span class="status-pill">${escapeHtml(prompt.kind || "prompt")}</span>
+          <strong>${escapeHtml(prompt.label || prompt.id || "")}</strong>
+          <p>${escapeHtml(prompt.text || "")}</p>
+        </article>`).join("") || "<p class=\"muted\">No seeded prompts.</p>"}
+      </div>
+    </section>
+    <section class="setup-section">
+      <h3>Settings</h3>
+      <div class="settings-grid">
+        ${settings.map(([key, value]) => `${kv(key.replaceAll("_", " "), formatSettingValue(value))}`).join("")}
+      </div>
+    </section>
+    <section class="setup-section">
+      <h3>Account List</h3>
+      <div class="account-list">
+        ${accounts.map((item) => `<article class="account-item">
+          <strong>${escapeHtml(item.company || "")}</strong>
+          <span>${escapeHtml(item.domain || "")}</span>
+          <small>${escapeHtml(item.category || "")} · ${escapeHtml(item.hq || "")}</small>
+          <p>${escapeHtml(item.notes || "")}</p>
+        </article>`).join("") || "<p class=\"muted\">No seeded accounts.</p>"}
+      </div>
+    </section>
+    <section class="setup-section">
+      <h3>Priority Verticals</h3>
+      <div class="tag-list">${verticals.map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join("")}</div>
+    </section>`;
+}
+
+function formatSettingValue(value) {
+  if (typeof value === "boolean") return value ? "on" : "off";
+  if (Array.isArray(value)) return value.join(", ");
+  return String(value ?? "");
 }
 
 function runOptionsPayload() {
@@ -477,10 +571,20 @@ function renderProspectsPanel(payload = state.currentProspects) {
       </span>
       <span>${escapeHtml(prospect.title || "")}</span>
       <span><strong>${escapeHtml(prospect.priority_score || 0)}</strong><small>${escapeHtml(prospect.source || "")}</small></span>
-      <span>${prospect.linkedin_url ? `<a href="${escapeAttribute(prospect.linkedin_url)}" target="_blank" rel="noreferrer">LinkedIn</a>` : escapeHtml(prospectContactLabel(prospect))}</span>
+      <span>${prospectContactLink(prospect)}</span>
       <span>${escapeHtml(prospect.outreach_angle || "")}</span>
     </div>`)
     .join("");
+}
+
+function prospectContactLink(prospect) {
+  if (prospect.linkedin_url) {
+    return `<a href="${escapeAttribute(prospect.linkedin_url)}" target="_blank" rel="noreferrer">LinkedIn</a>`;
+  }
+  if (prospect.email) {
+    return `<a href="mailto:${escapeAttribute(prospect.email)}">${escapeHtml(prospect.email)}</a>`;
+  }
+  return escapeHtml(prospectContactLabel(prospect));
 }
 
 function prospectContactLabel(prospect) {

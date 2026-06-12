@@ -33,13 +33,15 @@
 - K2 manifest preview/export, K2 dry-run/apply sync endpoint, and K2 sync CLI.
 - Public `/healthz` and protected `/api/health` readiness endpoints.
 - Optional `ICP_ADMIN_TOKEN` bearer protection for `/api/*`.
+- Seed defaults for prompts, settings, ICP criteria, account lists, and a starter run.
+- Setup view for inspecting seeded prompts, settings, account lists, and priority verticals.
 
 ### Configuration / infrastructure
 
-- Cloudflare Worker shell serving static assets and proxying `/api/*` to `ICP_API_ORIGIN`.
+- Cloudflare Worker serving static assets and seeded dashboard API routes without a local/API origin.
 - Worker edge auth guard and `/healthz` edge liveness endpoint.
 - Wrangler base config with placeholders plus an ignored environment-rendered `wrangler.generated.toml` path for dry-run/deploy.
-- Sanitized deploy preflight for `CLOUDFLARE_ACCOUNT_ID`, Cloudflare API token env, `ICP_API_ORIGIN`, `ICP_ADMIN_TOKEN`, `K2_API_KEY`, and `APOLLO_API_KEY`.
+- Sanitized deploy preflight for `CLOUDFLARE_ACCOUNT_ID`, Cloudflare API token env, `ICP_ADMIN_TOKEN`, `K2_API_KEY`, and `APOLLO_API_KEY`.
 - `.env.example`, Makefile, README, operations, and deployment docs updated.
 
 ### UX / documentation
@@ -93,11 +95,9 @@ This PR intentionally does not deploy or apply live K2 ingestion. Before live de
 
 - Confirm target branch (`dev` vs `main`).
 - Confirm public hostname/subdomain.
-- Confirm API origin.
-- Export `CLOUDFLARE_ACCOUNT_ID`, `ICP_API_ORIGIN`, and optionally `ICP_CLOUDFLARE_ROUTE`; then run `make cloudflare-dry-run`.
+- Export `CLOUDFLARE_ACCOUNT_ID` and optionally `ICP_CLOUDFLARE_ROUTE`; then run `make cloudflare-dry-run`.
 - Export `CLOUDFLARE_API_TOKEN`, `ICP_ADMIN_TOKEN`, `K2_API_KEY`, and `APOLLO_API_KEY`; then run `make cloudflare-preflight`.
 - Configure Cloudflare `ICP_ADMIN_TOKEN`, `K2_API_KEY`, and `APOLLO_API_KEY` as secrets.
-- Configure the same `ICP_ADMIN_TOKEN` on the origin.
 - Run K2 sync dry-run before any `--apply`.
 
 ## Related Issues

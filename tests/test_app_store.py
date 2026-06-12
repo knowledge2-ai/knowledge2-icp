@@ -8,6 +8,19 @@ from icp_engine.app_store import AppStore
 
 
 class AppStoreTest(unittest.TestCase):
+    def test_empty_state_exposes_seeded_prompts_settings_lists_and_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp) / "state", Path(tmp) / "missing-icp.md")
+
+            state = store.state()
+
+            self.assertIn("Seeded ICP Criteria", state["criteria"]["markdown"])
+            self.assertEqual(state["settings"]["deployment_mode"], "cloudflare-seeded-worker")
+            self.assertGreaterEqual(len(state["prompts"]), 1)
+            self.assertGreaterEqual(len(state["lists"]["account_universe"]), 3)
+            self.assertEqual(state["latest_run"]["id"], "run-seeded-icp")
+            self.assertGreaterEqual(state["latest_run"]["leads"][0]["score"]["total_score"], 75)
+
     def test_criteria_defaults_to_icp_path_and_can_be_overridden(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -49,4 +62,3 @@ class AppStoreTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

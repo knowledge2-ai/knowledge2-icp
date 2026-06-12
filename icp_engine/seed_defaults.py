@@ -1,0 +1,475 @@
+from __future__ import annotations
+
+from copy import deepcopy
+from typing import Any
+
+
+SEEDED_CRITERIA_MARKDOWN = """# Seeded ICP Criteria
+
+Source: local `icp.md`.
+
+## Bottom line
+
+Pre-2025 incumbent software companies with proprietary workflow/data assets,
+enough customers to feel competitive pressure, and either no public AI
+narrative or a shallow AI feature that does not yet change the customer core
+workflow.
+
+## Hard gates
+
+- Founded before 2025.
+- Product company, not primarily services or consulting.
+- B2B or B2B2C with business customers, enterprise accounts, or partner channels.
+- Has proprietary workflow/data such as trips, claims, inventory, tickets,
+  inspections, schedules, diagnostics, documents, or transactions.
+- Enough budget: roughly 25-2000 employees, or smaller when clearly funded.
+- Not AI-native as the founding premise or core category.
+
+## Scoring settings
+
+- AI gap: 30 points.
+- Data/workflow moat: 25 points.
+- Commercial urgency: 20 points.
+- Budget/access: 15 points.
+- Feasibility: 10 points.
+- Tier A threshold: 75.
+- Tier B threshold: 60.
+- Reject or nurture below 60.
+
+## Priority verticals
+
+Priority verticals: automotive, dealer, dealership, fleet, telematics,
+field service, maintenance, logistics, warehouse, construction, property,
+facilities, insurance, claims, healthcare admin, manufacturing, ERP,
+compliance, govtech, permitting, legal, accounting, TMS, WMS, CMMS, RCM.
+
+## Limited AI traction checks
+
+Look for missing AI-specific product docs, paid AI SKUs, case studies, adoption
+proof, release cadence, review mentions, action-capable workflow depth, data
+grounding, and governance controls.
+"""
+
+
+SEEDED_PROMPTS: list[dict[str, Any]] = [
+    {
+        "id": "prompt-discovery-priority-verticals",
+        "label": "Discovery query",
+        "kind": "search",
+        "text": "workflow SaaS companies with fleet, dealership, field service, claims, or logistics data and limited public AI positioning",
+    },
+    {
+        "id": "prompt-ai-posture-audit",
+        "label": "AI posture audit",
+        "kind": "research",
+        "text": "Which Tier A or B leads have proprietary workflow data but weak AI posture, and what public evidence supports the recommendation?",
+    },
+    {
+        "id": "prompt-apollo-personas",
+        "label": "Apollo persona targets",
+        "kind": "prospecting",
+        "text": "Find product, engineering, data, and vertical GM leaders who can own an AI workflow opportunity map.",
+    },
+    {
+        "id": "prompt-k2-manifest",
+        "label": "K2 metadata manifest",
+        "kind": "k2",
+        "text": "Upload lead evidence with run_id, criteria_hash, source_type, page_category, signal_tags, persona_titles, and outreach_angle metadata.",
+    },
+]
+
+
+SEEDED_SETTINGS: dict[str, Any] = {
+    "default_query": SEEDED_PROMPTS[0]["text"],
+    "max_companies": 6,
+    "max_pages": 6,
+    "fetch_website_evidence": True,
+    "include_github_metadata": True,
+    "use_apollo_enrichment": False,
+    "tier_a_threshold": 75,
+    "tier_b_threshold": 60,
+    "employee_range": "25-2000 employees",
+    "deployment_mode": "cloudflare-seeded-worker",
+}
+
+
+SEEDED_LISTS: dict[str, Any] = {
+    "account_universe": [
+        {
+            "company": "Mojio Example",
+            "domain": "moj.io",
+            "category": "connected mobility software",
+            "founded_year": 2012,
+            "employee_count": 120,
+            "hq": "Canada",
+            "notes": "Connected vehicle platform with trips diagnostics telematics data API integrations and partner workflows.",
+        },
+        {
+            "company": "Automate Example",
+            "domain": "automate.co.za",
+            "category": "dealership management software",
+            "founded_year": 1980,
+            "employee_count": 150,
+            "hq": "South Africa",
+            "notes": "Dealership management software trusted by dealerships with inventory transactions reporting and business workflows.",
+        },
+        {
+            "company": "AI Native Example",
+            "domain": "example.com",
+            "category": "AI agents",
+            "founded_year": 2025,
+            "employee_count": 20,
+            "hq": "US",
+            "notes": "AI-native autonomous agent platform for every business.",
+        },
+    ],
+    "priority_verticals": [
+        "automotive",
+        "fleet",
+        "telematics",
+        "dealership",
+        "field service",
+        "logistics",
+        "construction",
+        "insurance claims",
+        "healthcare admin",
+        "manufacturing",
+        "govtech",
+        "legal practice software",
+    ],
+}
+
+
+SEED_RUN_ID = "run-seeded-icp"
+SEED_CREATED_AT = "2026-06-12T00:00:00+00:00"
+
+
+def seeded_run() -> dict[str, Any]:
+    run = {
+        "id": SEED_RUN_ID,
+        "query": SEEDED_SETTINGS["default_query"],
+        "created_at": SEED_CREATED_AT,
+        "status": "completed",
+        "criteria": {
+            "hash": "seeded-icp-v1",
+            "source": "icp.md",
+            "updated_at": SEED_CREATED_AT,
+            "profile": {
+                "source": "icp.md",
+                "hash": "seeded-icp-v1",
+                "tier_a_threshold": 75,
+                "tier_b_threshold": 60,
+                "min_employee_count": 25,
+                "max_employee_count": 2000,
+                "priority_terms": list(SEEDED_LISTS["priority_verticals"]),
+                "warnings": [],
+            },
+        },
+        "warnings": [],
+        "k2": {
+            "status": "ready_for_sdk_sync",
+            "reason": "Seeded Worker/Python deployment can export this manifest to K2 when K2_API_KEY is configured.",
+            "document_count": 14,
+        },
+        "leads": [
+            _seed_lead(
+                company="Mojio Example",
+                domain="moj.io",
+                category="connected mobility software",
+                founded_year=2012,
+                employee_count=120,
+                hq="Canada",
+                tier="A",
+                score=82,
+                ai_posture=0,
+                data_workflow=5,
+                feasibility=4,
+                vertical="fleet",
+                evidence_text=(
+                    "Founded in 2012. Enterprise software platform for fleet workflow, dispatch, "
+                    "telematics records, integrations, API, permissions, analytics, and customer operations."
+                ),
+                source_url="https://moj.io/platform",
+                docs_url="https://moj.io/docs/api",
+                github_url="https://github.com/mojio",
+                linkedin_url="https://www.linkedin.com/company/mojio",
+            ),
+            _seed_lead(
+                company="Automate Example",
+                domain="automate.co.za",
+                category="dealership management software",
+                founded_year=1980,
+                employee_count=150,
+                hq="South Africa",
+                tier="A",
+                score=79,
+                ai_posture=0,
+                data_workflow=4,
+                feasibility=3,
+                vertical="dealership",
+                evidence_text=(
+                    "40+ years of dealership-management software experience, trusted by 1,000+ dealerships "
+                    "with inventory, transactions, reporting, BI, and operational workflow data."
+                ),
+                source_url="https://www.automate.co.za/",
+                docs_url="https://www.automate.co.za/solutions",
+                github_url="",
+                linkedin_url="https://www.linkedin.com/company/automate-dms",
+            ),
+            _seed_lead(
+                company="AI Native Example",
+                domain="example.com",
+                category="AI agents",
+                founded_year=2025,
+                employee_count=20,
+                hq="US",
+                tier="Reject",
+                score=24,
+                ai_posture=5,
+                data_workflow=1,
+                feasibility=2,
+                vertical="AI-native",
+                evidence_text="AI-native autonomous agent platform for every business, founded in 2025.",
+                source_url="https://example.com/",
+                docs_url="",
+                github_url="",
+                linkedin_url="",
+            ),
+        ],
+    }
+    return deepcopy(run)
+
+
+def _seed_lead(
+    *,
+    company: str,
+    domain: str,
+    category: str,
+    founded_year: int,
+    employee_count: int,
+    hq: str,
+    tier: str,
+    score: int,
+    ai_posture: int,
+    data_workflow: int,
+    feasibility: int,
+    vertical: str,
+    evidence_text: str,
+    source_url: str,
+    docs_url: str,
+    github_url: str,
+    linkedin_url: str,
+) -> dict[str, Any]:
+    signal_tags = ["workflow", "data", "commercial"]
+    if docs_url:
+        signal_tags.append("integration")
+    personas = _personas(vertical, tier)
+    source_refs = {
+        "careers_urls": [],
+        "contact_urls": [],
+        "docs_urls": [docs_url] if docs_url else [],
+        "github_urls": [github_url] if github_url else [],
+        "linkedin_urls": [linkedin_url] if linkedin_url else [],
+        "marketplace_urls": [],
+        "other_urls": [],
+        "pricing_urls": [],
+        "social_urls": [],
+    }
+    return {
+        "id": f"{SEED_RUN_ID}:{domain}",
+        "candidate": {
+            "source_url": source_url,
+            "source_title": "Seeded local account list",
+            "github_urls": source_refs["github_urls"],
+            "linkedin_urls": source_refs["linkedin_urls"],
+            "other_urls": [],
+        },
+        "score": {
+            "company": {
+                "company": company,
+                "domain": domain,
+                "category": category,
+                "founded_year": founded_year,
+                "employee_count": employee_count,
+                "hq": hq,
+                "notes": next(
+                    (item["notes"] for item in SEEDED_LISTS["account_universe"] if item["domain"] == domain),
+                    "",
+                ),
+            },
+            "gates": _gates(tier, founded_year),
+            "classification": {
+                "ai_posture": ai_posture,
+                "data_workflow": data_workflow,
+                "commercial_urgency": 3 if tier != "Reject" else 1,
+                "budget_access": 3 if tier != "Reject" else 1,
+                "feasibility": feasibility,
+                "reasons": {
+                    "ai_posture": "Seeded from local ICP examples and public-positioning notes.",
+                    "data_workflow": f"Signals include {vertical} workflow data and operational systems.",
+                    "criteria": "Scored with seeded local ICP criteria.",
+                },
+                "evidence_ids": {
+                    "ai_posture": ["seed-evidence"],
+                    "data_workflow": ["seed-evidence"],
+                    "commercial_urgency": ["seed-evidence"],
+                    "feasibility": ["seed-evidence"] if docs_url else [],
+                },
+                "confidence": 0.72 if tier != "Reject" else 0.55,
+                "source": "seed",
+            },
+            "ai_gap_score": 30 if ai_posture <= 1 else 0,
+            "data_workflow_score": min(25, data_workflow * 5),
+            "commercial_urgency_score": 14 if tier != "Reject" else 3,
+            "budget_access_score": 12 if tier != "Reject" else 2,
+            "feasibility_score": min(10, feasibility * 2),
+            "total_score": score,
+            "tier": tier,
+            "next_action": "Prioritize for Apollo enrichment and human account research."
+            if tier == "A"
+            else "Reject from this ICP; keep only as a negative-control list item.",
+            "warnings": [] if tier != "Reject" else ["Fails seeded hard gates for pre-2025 non-AI-native incumbents."],
+            "hard_gate_failed": tier == "Reject",
+            "hard_gate_unknown": False,
+        },
+        "strategy": {
+            "headline": f"{company}: {_wedge(ai_posture)}",
+            "wedge": _wedge(ai_posture),
+            "urgency": "Peers are adding AI; durable differentiation depends on proprietary workflow data.",
+            "offer": f"Propose a 2-week AI opportunity map for {vertical} workflows, grounded in existing product data and metadata.",
+            "outreach_angle": (
+                f"{company} appears to have meaningful {vertical} data but limited public AI positioning."
+                if tier != "Reject"
+                else "Not a fit: public positioning is AI-native or too early for this incumbent-software ICP."
+            ),
+            "first_step": "Enrich product, engineering, data, and vertical-GM contacts in Apollo.",
+            "objections": ["Verify current AI roadmap ownership and commercial urgency."],
+            "personas": personas,
+            "apollo_titles": sorted({title for persona in personas for title in persona.get("apollo_titles", [])}),
+        },
+        "evidence": [
+            {
+                "evidence_id": "seed-evidence",
+                "url": source_url,
+                "title": "Seeded local evidence",
+                "text": evidence_text,
+                "source_type": "website",
+                "metadata": {
+                    "page_category": "product" if tier != "Reject" else "company",
+                    "links": [value for value in [docs_url, github_url, linkedin_url] if value],
+                    "external_links": [value for value in [github_url, linkedin_url] if value],
+                },
+            }
+        ],
+        "metadata": {
+            "company": company,
+            "domain": domain,
+            "criteria_profile": {
+                "source": "icp.md",
+                "hash": "seeded-icp-v1",
+                "tier_a_threshold": 75,
+                "tier_b_threshold": 60,
+                "min_employee_count": 25,
+                "max_employee_count": 2000,
+                "priority_terms": list(SEEDED_LISTS["priority_verticals"]),
+                "warnings": [],
+            },
+            "source_counts": {"website:product": 1},
+            "source_refs": source_refs,
+            "signal_tags": signal_tags,
+            "public_profile_count": len(source_refs["github_urls"]) + len(source_refs["linkedin_urls"]),
+            "public_resource_count": len(source_refs["docs_urls"]),
+            "public_emails": [],
+            "intelligence_coverage": {
+                "has_contact_path": False,
+                "has_docs_or_api": bool(docs_url),
+                "has_github_profile": bool(github_url),
+                "has_marketplace_profile": False,
+                "has_pricing_or_commercial": tier != "Reject",
+                "has_social_profile": bool(linkedin_url),
+                "has_website_evidence": True,
+            },
+            "evidence_metadata": [
+                {
+                    "evidence_id": "seed-evidence",
+                    "url": source_url,
+                    "title": "Seeded local evidence",
+                    "source_type": "website",
+                    "page_category": "product" if tier != "Reject" else "company",
+                    "signal_tags": signal_tags,
+                    "link_count": len([value for value in [docs_url, github_url, linkedin_url] if value]),
+                    "external_link_count": len([value for value in [github_url, linkedin_url] if value]),
+                }
+            ],
+            "k2_metadata_preview": {
+                "company": company,
+                "domain": domain,
+                "signal_tags": signal_tags,
+                "source_count": 1,
+                "source_types": ["website:product"],
+            },
+            "apollo_organizations": {
+                "status": "seeded",
+                "reason": "Seeded account list is available before live Apollo enrichment.",
+                "organizations": [],
+            },
+        },
+    }
+
+
+def _gates(tier: str, founded_year: int) -> list[dict[str, Any]]:
+    if tier == "Reject":
+        return [
+            {"name": "Founded before 2025", "status": "fail", "reason": f"Founded year {founded_year}.", "evidence_ids": []},
+            {"name": "Product company", "status": "pass", "reason": "Seeded software product.", "evidence_ids": []},
+            {"name": "B2B or B2B2C", "status": "unknown", "reason": "Negative-control account.", "evidence_ids": []},
+            {"name": "Has proprietary workflow/data", "status": "unknown", "reason": "No incumbent workflow data proved.", "evidence_ids": []},
+            {"name": "Enough budget", "status": "fail", "reason": "Below seeded employee range.", "evidence_ids": []},
+            {"name": "Not AI-native", "status": "fail", "reason": "AI-native category.", "evidence_ids": []},
+        ]
+    return [
+        {"name": "Founded before 2025", "status": "pass", "reason": f"Founded year {founded_year}.", "evidence_ids": []},
+        {"name": "Product company", "status": "pass", "reason": "Seeded software platform evidence.", "evidence_ids": []},
+        {"name": "B2B or B2B2C", "status": "pass", "reason": "Business customer and partner workflows.", "evidence_ids": []},
+        {"name": "Has proprietary workflow/data", "status": "pass", "reason": "Operational workflow and data signals.", "evidence_ids": []},
+        {"name": "Enough budget", "status": "pass", "reason": "Inside seeded employee range.", "evidence_ids": []},
+        {"name": "Not AI-native", "status": "pass", "reason": "No AI-native founding/category signal.", "evidence_ids": []},
+    ]
+
+
+def _personas(vertical: str, tier: str) -> list[dict[str, Any]]:
+    base = [
+        {
+            "title": f"VP {vertical.title()} Product" if tier != "Reject" else "Do Not Prospect",
+            "priority": "primary" if tier != "Reject" else "reject",
+            "rationale": "Vertical owner likely cares about workflow depth and AI differentiation.",
+            "apollo_titles": [f"vp {vertical.lower()} product", "vp product", "general manager"],
+        },
+        {
+            "title": "Chief Product Officer",
+            "priority": "primary",
+            "rationale": "Owns AI product strategy, roadmap tradeoffs, and customer-facing differentiation.",
+            "apollo_titles": ["chief product officer", "vp product", "head of product"],
+        },
+        {
+            "title": "VP Engineering",
+            "priority": "primary",
+            "rationale": "Owns integration architecture and delivery capacity for workflow AI.",
+            "apollo_titles": ["vp engineering", "head of engineering", "chief technology officer"],
+        },
+        {
+            "title": "Chief Data Officer",
+            "priority": "secondary",
+            "rationale": "Owns proprietary data readiness, governance, and metadata quality.",
+            "apollo_titles": ["chief data officer", "head of data", "vp data"],
+        },
+    ]
+    return base[:1] if tier == "Reject" else base
+
+
+def _wedge(ai_posture: int) -> str:
+    if ai_posture <= 1:
+        return "turn proprietary workflow data into a visible AI product narrative"
+    if ai_posture >= 4:
+        return "reject or reposition toward AI governance rather than first-feature buildout"
+    return "upgrade shallow AI features into governed workflow automation"

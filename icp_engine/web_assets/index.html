@@ -62,6 +62,11 @@
           <div id="providers"></div>
         </section>
 
+        <section class="panel seed-panel">
+          <h2>Seeded Pack</h2>
+          <div id="seed-summary"></div>
+        </section>
+
         <section class="panel auth-panel">
           <h2>Admin Access</h2>
           <label>
@@ -90,6 +95,7 @@
           <button class="tab" data-view="prospects">Prospects</button>
           <button class="tab" data-view="research">Research</button>
           <button class="tab" data-view="k2">K2</button>
+          <button class="tab" data-view="setup">Setup</button>
           <button class="tab" data-view="criteria">Criteria</button>
           <button class="tab" data-view="runs">Runs</button>
         </nav>
@@ -169,6 +175,16 @@
             </div>
           </div>
           <section id="k2-panel" class="detail-panel empty">Run research before exporting a K2 manifest.</section>
+        </section>
+
+        <section id="view-setup" class="view">
+          <div class="section-heading setup-heading">
+            <div>
+              <p class="eyebrow">Seeded Configuration</p>
+              <h2>Prompts, Settings, And Lists</h2>
+            </div>
+          </div>
+          <div id="setup-grid" class="setup-grid"></div>
         </section>
 
         <section id="view-criteria" class="view">

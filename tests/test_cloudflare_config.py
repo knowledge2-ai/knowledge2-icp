@@ -17,6 +17,8 @@ class CloudflareConfigTest(unittest.TestCase):
         self.assertIn("K2_API_KEY", config["secrets"]["required"])
         self.assertIn("APOLLO_API_KEY", config["secrets"]["required"])
         self.assertIn("ICP_ADMIN_TOKEN", config["secrets"]["required"])
+        self.assertEqual(config["vars"]["ICP_DEPLOYMENT_MODE"], "seeded-worker")
+        self.assertEqual(config["vars"]["K2_BASE_URL"], "https://api-dev.knowledge2.ai")
 
         raw = path.read_text(encoding="utf-8")
         worker = Path("deployment/cloudflare/worker.js").read_text(encoding="utf-8")
@@ -26,23 +28,26 @@ class CloudflareConfigTest(unittest.TestCase):
         self.assertNotRegex(raw, r"(K2_API_KEY|APOLLO_API_KEY|ICP_ADMIN_TOKEN)\s*=\s*[\"'][A-Za-z0-9_-]{12,}[\"']")
         self.assertIn('url.pathname === "/healthz"', worker)
         self.assertIn("authorizeApiRequest", worker)
-        self.assertIn("ICP_ADMIN_TOKEN is required for Worker API proxying.", worker)
+        self.assertIn("ICP_ADMIN_TOKEN is required for Worker API routes.", worker)
+        self.assertIn("SEED_PROMPTS", worker)
+        self.assertIn("handleApiRequest", worker)
+        self.assertNotIn("proxyApiRequest", worker)
         self.assertIn("replace-with-cloudflare-account-id", raw)
 
     def test_generated_worker_config_uses_environment_values_without_committing_secrets(self) -> None:
         renderer = _load_renderer()
         rendered = renderer.render_config(
             account_id="0" * 32,
-            api_origin="https://api.gtm.example.com",
             route="gtm-dev.knowledge2.ai",
         )
         config = tomllib.loads(rendered)
 
         self.assertEqual(config["account_id"], "0" * 32)
-        self.assertEqual(config["vars"]["ICP_API_ORIGIN"], "https://api.gtm.example.com")
+        self.assertEqual(config["vars"]["ICP_DEPLOYMENT_MODE"], "seeded-worker")
+        self.assertEqual(config["vars"]["K2_BASE_URL"], "https://api-dev.knowledge2.ai")
         self.assertEqual(config["routes"][0]["pattern"], "gtm-dev.knowledge2.ai")
         self.assertNotIn("replace-with-cloudflare-account-id", rendered)
-        self.assertNotIn("replace-with-api-origin", rendered)
+        self.assertNotIn("ICP_API_ORIGIN", rendered)
         self.assertNotIn("cf" + "at_", rendered)
 
     def test_generated_worker_config_rejects_token_as_account_id(self) -> None:
@@ -51,7 +56,6 @@ class CloudflareConfigTest(unittest.TestCase):
         with self.assertRaises(renderer.ConfigError):
             renderer.render_config(
                 account_id="cf" + "at_not-an-account-id",
-                api_origin="https://api.gtm.example.com",
             )
 
     def test_deploy_preflight_validates_env_without_printing_secret_values(self) -> None:
@@ -59,7 +63,6 @@ class CloudflareConfigTest(unittest.TestCase):
         env = {
             "CLOUDFLARE_ACCOUNT_ID": "0" * 32,
             "CLOUDFLARE_API_TOKEN": "cf" + "at_secret_value",
-            "ICP_API_ORIGIN": "https://api.gtm.example.com",
             "ICP_CLOUDFLARE_ROUTE": "gtm-dev.knowledge2.ai",
             "ICP_ADMIN_TOKEN": "admin-secret",
             "K2_API_KEY": "k2-secret",

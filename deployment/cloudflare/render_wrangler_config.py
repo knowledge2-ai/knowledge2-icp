@@ -11,7 +11,6 @@ from urllib.parse import urlparse
 DEFAULT_BASE_CONFIG = Path(__file__).with_name("wrangler.toml")
 DEFAULT_OUTPUT = Path(__file__).with_name("wrangler.generated.toml")
 PLACEHOLDER_ACCOUNT_ID = "replace-with-cloudflare-account-id"
-PLACEHOLDER_API_ORIGIN = "https://replace-with-api-origin.example.com"
 DEFAULT_ROUTE = "gtm-dev.knowledge2.ai"
 CLOUDFLARE_API_TOKEN_PREFIX = "cf" + "at_"
 
@@ -24,16 +23,14 @@ def render_config(
     base_config: Path = DEFAULT_BASE_CONFIG,
     *,
     account_id: str | None = None,
-    api_origin: str | None = None,
     route: str | None = None,
 ) -> str:
     config = tomllib.loads(base_config.read_text(encoding="utf-8"))
     selected_account_id = _valid_account_id(account_id or os.environ.get("CLOUDFLARE_ACCOUNT_ID", ""))
-    selected_api_origin = _valid_origin(api_origin or os.environ.get("ICP_API_ORIGIN", ""))
     selected_route = _valid_route(route or os.environ.get("ICP_CLOUDFLARE_ROUTE", DEFAULT_ROUTE))
 
     config["account_id"] = selected_account_id
-    config.setdefault("vars", {})["ICP_API_ORIGIN"] = selected_api_origin
+    config.setdefault("vars", {})["ICP_DEPLOYMENT_MODE"] = "seeded-worker"
     routes = config.get("routes")
     if not isinstance(routes, list) or not routes:
         raise ConfigError("base wrangler config must contain at least one route")
@@ -42,7 +39,7 @@ def render_config(
     routes[0]["pattern"] = selected_route
 
     rendered = _to_toml(config)
-    if PLACEHOLDER_ACCOUNT_ID in rendered or PLACEHOLDER_API_ORIGIN in rendered:
+    if PLACEHOLDER_ACCOUNT_ID in rendered:
         raise ConfigError("generated config still contains placeholders")
     if CLOUDFLARE_API_TOKEN_PREFIX in rendered:
         raise ConfigError("generated config must not contain Cloudflare API tokens")
@@ -54,10 +51,9 @@ def write_config(
     *,
     base_config: Path = DEFAULT_BASE_CONFIG,
     account_id: str | None = None,
-    api_origin: str | None = None,
     route: str | None = None,
 ) -> Path:
-    rendered = render_config(base_config, account_id=account_id, api_origin=api_origin, route=route)
+    rendered = render_config(base_config, account_id=account_id, route=route)
     output.write_text(rendered, encoding="utf-8")
     return output
 
@@ -67,14 +63,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base-config", type=Path, default=DEFAULT_BASE_CONFIG)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--account-id", default=None, help="Cloudflare account ID. Defaults to CLOUDFLARE_ACCOUNT_ID.")
-    parser.add_argument("--api-origin", default=None, help="Dashboard API origin. Defaults to ICP_API_ORIGIN.")
     parser.add_argument("--route", default=None, help="Custom domain route. Defaults to ICP_CLOUDFLARE_ROUTE or gtm-dev.knowledge2.ai.")
     args = parser.parse_args(argv)
     path = write_config(
         args.out,
         base_config=args.base_config,
         account_id=args.account_id,
-        api_origin=args.api_origin,
         route=args.route,
     )
     print(path)
@@ -87,16 +81,6 @@ def _valid_account_id(value: str) -> str:
         raise ConfigError("CLOUDFLARE_ACCOUNT_ID must be an account ID, not an API token")
     if not re.fullmatch(r"[a-fA-F0-9]{32}", cleaned):
         raise ConfigError("CLOUDFLARE_ACCOUNT_ID must be a 32-character hex account ID")
-    return cleaned
-
-
-def _valid_origin(value: str) -> str:
-    cleaned = value.strip().rstrip("/")
-    parsed = urlparse(cleaned)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ConfigError("ICP_API_ORIGIN must be an http(s) origin")
-    if parsed.path not in {"", "/"} or parsed.params or parsed.query or parsed.fragment:
-        raise ConfigError("ICP_API_ORIGIN must not include a path, query, or fragment")
     return cleaned
 
 

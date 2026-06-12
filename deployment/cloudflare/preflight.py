@@ -15,7 +15,6 @@ from render_wrangler_config import ConfigError, DEFAULT_ROUTE, render_config
 
 REQUIRED_ENV = [
     "CLOUDFLARE_ACCOUNT_ID",
-    "ICP_API_ORIGIN",
     "ICP_ADMIN_TOKEN",
     "K2_API_KEY",
     "APOLLO_API_KEY",
@@ -60,17 +59,16 @@ def run_preflight(env: Mapping[str, str] | None = None, *, check_wrangler: bool 
         )
 
     account_id = selected_env.get("CLOUDFLARE_ACCOUNT_ID", "")
-    api_origin = selected_env.get("ICP_API_ORIGIN", "")
     route = selected_env.get("ICP_CLOUDFLARE_ROUTE", DEFAULT_ROUTE)
-    if account_id.strip() and api_origin.strip():
+    if account_id.strip():
         try:
-            render_config(account_id=account_id, api_origin=api_origin, route=route)
+            render_config(account_id=account_id, route=route)
         except ConfigError as exc:
             checks.append(PreflightCheck("wrangler_config", "fail", str(exc)))
         else:
             checks.append(PreflightCheck("wrangler_config", "ok", "Generated Wrangler config validates without embedding secrets."))
     else:
-        checks.append(PreflightCheck("wrangler_config", "fail", "CLOUDFLARE_ACCOUNT_ID and ICP_API_ORIGIN are required to render config."))
+        checks.append(PreflightCheck("wrangler_config", "fail", "CLOUDFLARE_ACCOUNT_ID is required to render config."))
 
     return checks
 

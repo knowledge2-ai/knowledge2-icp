@@ -77,6 +77,11 @@ def main() -> int:
                 page.locator("#k2-preview").click()
                 expect(page.locator("#k2-panel .manifest-preview")).to_contain_text("source_type", timeout=timeout)
 
+                page.locator("button.tab[data-view='setup']").click()
+                expect(page.locator("#setup-grid")).to_contain_text("Discovery query", timeout=timeout)
+                expect(page.locator("#setup-grid")).to_contain_text("Mojio Example", timeout=timeout)
+                expect(page.locator("#setup-grid")).to_contain_text("cloudflare-seeded-worker", timeout=timeout)
+
                 page.locator("button.tab[data-view='criteria']").click()
                 expect(page.locator("#criteria-markdown")).not_to_be_empty(timeout=timeout)
 
@@ -87,6 +92,10 @@ def main() -> int:
                 f"{base_url}/api/research",
                 {"run_id": run["id"], "question": "Which lead has workflow API evidence and who should we contact?"},
             )
+            state = _json_get(f"{base_url}/api/state")
+            _assert(state.get("prompts"), "Expected seeded prompts in API state.")
+            _assert(state.get("settings", {}).get("deployment_mode") == "cloudflare-seeded-worker", "Expected seeded deployment mode.")
+            _assert(state.get("lists", {}).get("account_universe"), "Expected seeded account universe list.")
             _assert(research.get("provider") == "local", "Expected local research provider for isolated E2E smoke.")
             _assert(research.get("metadata_used", {}).get("persona_titles"), "Expected metadata_used persona titles.")
             _assert(research.get("citations"), "Expected research citations.")
@@ -196,6 +205,12 @@ def _fake_evidence(company: CompanyInput, cache_dir: Path) -> tuple[list[Evidenc
 def _post_json(url: str, payload: dict[str, Any]) -> dict[str, Any]:
     body = json.dumps(payload).encode("utf-8")
     request = Request(url, data=body, method="POST", headers={"Content-Type": "application/json"})
+    with urlopen(request, timeout=10) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _json_get(url: str) -> dict[str, Any]:
+    request = Request(url)
     with urlopen(request, timeout=10) as response:
         return json.loads(response.read().decode("utf-8"))
 
