@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from html.parser import HTMLParser
+from urllib.parse import urljoin
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -11,13 +12,17 @@ class _HTMLTextExtractor(HTMLParser):
         self.title = ""
         self._in_title = False
         self.parts: list[str] = []
+        self.links: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag = tag.lower()
+        attrs_dict = dict(attrs)
         if tag in {"script", "style", "noscript", "svg"}:
             self._skip_depth += 1
         if tag == "title":
             self._in_title = True
+        if tag == "a" and attrs_dict.get("href"):
+            self.links.append(attrs_dict["href"] or "")
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
@@ -45,6 +50,13 @@ def html_to_text(html: str) -> tuple[str, str]:
     parser = _HTMLTextExtractor()
     parser.feed(html)
     return parser.title, normalize_whitespace(" ".join(parser.parts))
+
+
+def html_to_text_and_links(html: str, base_url: str) -> tuple[str, str, list[str]]:
+    parser = _HTMLTextExtractor()
+    parser.feed(html)
+    links = [urljoin(base_url, link) for link in parser.links if link and not link.startswith("#")]
+    return parser.title, normalize_whitespace(" ".join(parser.parts)), links
 
 
 def compact_snippet(text: str, max_chars: int = 700) -> str:

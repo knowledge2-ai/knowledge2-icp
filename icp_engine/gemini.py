@@ -4,8 +4,8 @@ import json
 import os
 from dataclasses import asdict
 
+from .evidence import select_prompt_evidence
 from .models import Classification, CompanyInput, Evidence
-from .text import compact_snippet
 
 
 RESPONSE_SCHEMA = {
@@ -54,11 +54,13 @@ def classify_with_gemini(company: CompanyInput, evidence: list[Evidence]) -> Cla
 
     model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
     thinking_budget = int(os.environ.get("GEMINI_THINKING_BUDGET", "0"))
+    prompt = _prompt(company, evidence)
+    _write_prompt_debug(company.company, prompt)
     client = genai.Client(vertexai=True, project=project, location=location)
     try:
         response = client.models.generate_content(
             model=model,
-            contents=_prompt(company, evidence),
+            contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_json_schema=RESPONSE_SCHEMA,
@@ -93,15 +95,7 @@ def classify_with_gemini(company: CompanyInput, evidence: list[Evidence]) -> Cla
 
 
 def _prompt(company: CompanyInput, evidence: list[Evidence]) -> str:
-    evidence_json = [
-        {
-            "evidence_id": item.evidence_id,
-            "url": item.url,
-            "title": item.title,
-            "text": compact_snippet(item.text, 1800),
-        }
-        for item in evidence[:10]
-    ]
+    evidence_json = [item.__dict__ for item in select_prompt_evidence(evidence, limit=10, snippet_chars=900)]
     return f"""
 You are scoring companies for Knowledge2's incumbent software ICP.
 
@@ -125,7 +119,9 @@ Score 0-5:
 
 Rules:
 - Use only provided evidence.
+- Score AI posture from the Company and Evidence sections only, not from this rubric.
 - Do not infer facts such as founding year, funding, or employee count if not present.
+- Do not count the word "intelligence" as AI unless the evidence explicitly says AI, artificial intelligence, machine learning, GPT, LLM, copilot, assistant, or agent.
 - Return evidence_ids that support each score.
 - Keep confidence low when evidence is sparse.
 
@@ -135,3 +131,15 @@ Company:
 Evidence:
 {json.dumps(evidence_json, indent=2)}
 """
+
+
+def _write_prompt_debug(company_name: str, prompt: str) -> None:
+    debug_dir = os.environ.get("ICP_DEBUG_PROMPT_DIR")
+    if not debug_dir:
+        return
+    from pathlib import Path
+
+    safe_name = "".join(char.lower() if char.isalnum() else "-" for char in company_name).strip("-")
+    path = Path(debug_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    (path / f"{safe_name or 'company'}.prompt.txt").write_text(prompt, encoding="utf-8")

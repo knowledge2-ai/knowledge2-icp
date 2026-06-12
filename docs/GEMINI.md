@@ -30,6 +30,11 @@ It has:
 
 The JSON key must stay outside git. This repo ignores `.secrets/`.
 
+## Prompt Debugging
+
+Set `ICP_DEBUG_PROMPT_DIR=out/prompts` to write the exact prompt sent to Gemini
+for each company. This is useful for auditing token use and evidence selection.
+
 ## Local Run
 
 ```bash

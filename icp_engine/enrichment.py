@@ -9,8 +9,9 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+from .evidence import dedupe_evidence, is_high_value_url
 from .models import CompanyInput, Evidence
-from .text import compact_snippet, html_to_text
+from .text import compact_snippet, html_to_text_and_links
 
 
 DEFAULT_PATHS = [
@@ -72,7 +73,16 @@ def fetch_company_evidence(
     warnings: list[str] = []
     first_homepage_error: str | None = None
 
-    for url in candidate_urls(company.domain):
+    urls = candidate_urls(company.domain)
+    seen_urls: set[str] = set()
+    index = 0
+    while index < len(urls):
+        url = urls[index]
+        index += 1
+        normalized_url = _normalized_url_key(url)
+        if normalized_url in seen_urls:
+            continue
+        seen_urls.add(normalized_url)
         if len(evidence) >= max_pages:
             break
         try:
@@ -91,6 +101,11 @@ def fetch_company_evidence(
                 text=item["text"],
             )
         )
+        for link in _interesting_links(item.get("links", []), company.domain):
+            if _normalized_url_key(link) not in seen_urls:
+                urls.append(link)
+
+    evidence = dedupe_evidence(evidence)
 
     if not evidence:
         if first_homepage_error:
@@ -119,8 +134,37 @@ def _fetch_or_read_cache(url: str, cache_dir: Path, timeout_seconds: float) -> d
         raw = response.read(1_000_000)
         charset = response.headers.get_content_charset() or "utf-8"
         body = raw.decode(charset, errors="replace")
-        title, text = html_to_text(body) if "html" in content_type else ("", body)
+        if "html" in content_type:
+            title, text, links = html_to_text_and_links(body, url)
+        else:
+            title, text, links = "", body, []
 
-    item = {"url": url, "title": title, "text": compact_snippet(text, 5000)}
+    item = {"url": url, "title": title, "text": compact_snippet(text, 5000), "links": links}
     cache_path.write_text(json.dumps(item, indent=2, sort_keys=True), encoding="utf-8")
     return item
+
+
+def _interesting_links(links: list[str], domain: str) -> list[str]:
+    clean_domain = normalize_domain(domain)
+    candidates = []
+    for link in links:
+        parsed = urlparse(link)
+        if parsed.scheme not in {"http", "https"}:
+            continue
+        host = parsed.netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+        if host != clean_domain.removeprefix("www."):
+            continue
+        if is_high_value_url(link):
+            candidates.append(link.split("#", 1)[0])
+    return candidates[:20]
+
+
+def _normalized_url_key(url: str) -> str:
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    path = parsed.path.rstrip("/").lower()
+    return f"{host}{path}"
