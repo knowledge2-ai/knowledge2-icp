@@ -115,7 +115,14 @@ def dedupe_evidence(items: list[Evidence]) -> list[Evidence]:
         seen.update(keys)
         deduped.append(item)
     return [
-        Evidence(evidence_id=f"e{index}", url=item.url, title=item.title, text=item.text)
+        Evidence(
+            evidence_id=f"e{index}",
+            url=item.url,
+            title=item.title,
+            text=item.text,
+            source_type=item.source_type,
+            metadata=dict(item.metadata),
+        )
         for index, item in enumerate(deduped, start=1)
     ]
 

@@ -27,6 +27,8 @@ class Evidence:
     url: str
     title: str
     text: str
+    source_type: str = "website"
+    metadata: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass

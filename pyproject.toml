@@ -8,9 +8,12 @@ dependencies = []
 [project.optional-dependencies]
 gemini = ["google-genai>=1.0.0"]
 dev = ["pytest>=8.0.0"]
+e2e = ["playwright>=1.40.0"]
 
 [project.scripts]
 icp = "icp_engine.cli:main"
+icp-web = "icp_engine.web:main"
+icp-k2-sync = "icp_engine.k2_sync:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -22,3 +25,6 @@ pythonpath = ["."]
 
 [tool.hatch.build.targets.wheel]
 packages = ["icp_engine"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"icp_engine/web_assets" = "icp_engine/web_assets"

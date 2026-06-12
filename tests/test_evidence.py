@@ -7,7 +7,13 @@ from icp_engine.models import Evidence
 class EvidenceSelectionTests(unittest.TestCase):
     def test_dedupe_removes_www_and_same_text_duplicates(self):
         items = [
-            Evidence("e1", "https://example.com/products", "Products", "Same product platform text."),
+            Evidence(
+                "e1",
+                "https://example.com/products",
+                "Products",
+                "Same product platform text.",
+                metadata={"page_category": "product", "links": ["https://github.com/example"]},
+            ),
             Evidence("e2", "https://www.example.com/products/", "Products", "Same product platform text."),
             Evidence("e3", "https://example.com/docs", "Docs", "API documentation and integrations."),
         ]
@@ -16,6 +22,7 @@ class EvidenceSelectionTests(unittest.TestCase):
 
         self.assertEqual([item.url for item in deduped], ["https://example.com/products", "https://example.com/docs"])
         self.assertEqual([item.evidence_id for item in deduped], ["e1", "e2"])
+        self.assertEqual(deduped[0].metadata["page_category"], "product")
 
     def test_prompt_selection_prefers_ai_docs_over_homepage(self):
         items = [

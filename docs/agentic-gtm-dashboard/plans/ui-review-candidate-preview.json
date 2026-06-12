@@ -1,0 +1,51 @@
+{
+  "settings": {
+    "base_url": "http://127.0.0.1:8765",
+    "output_dir": "docs/agentic-gtm-dashboard/designs/screenshots/original",
+    "viewport": {
+      "width": 1440,
+      "height": 980
+    },
+    "color_scheme": "light",
+    "full_page": true,
+    "settle_ms": 1000,
+    "nav_timeout_ms": 20000,
+    "loading_selectors": []
+  },
+  "variables": {},
+  "scenarios": [
+    {
+      "name": "candidate_preview",
+      "description": "Capture the Discover candidate preview and selection state.",
+      "steps": [
+        {
+          "action": "goto",
+          "url": "/"
+        },
+        {
+          "action": "fill",
+          "selector": "#query",
+          "value": "workflow SaaS companies with public APIs"
+        },
+        {
+          "action": "fill",
+          "selector": "#seed-text",
+          "value": "Mojio, moj.io\nAutomate, automate.co.za"
+        },
+        {
+          "action": "click",
+          "selector": "#preview-button"
+        },
+        {
+          "action": "wait_for_selector",
+          "selector": "#candidate-panel .candidate-row",
+          "timeout_ms": 10000
+        },
+        {
+          "action": "screenshot",
+          "name": "07_candidate_preview"
+        }
+      ]
+    }
+  ]
+}

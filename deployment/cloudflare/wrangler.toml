@@ -1,0 +1,17 @@
+name = "knowledge2-icp-gtm-dashboard"
+main = "worker.js"
+compatibility_date = "2026-06-12"
+account_id = "replace-with-cloudflare-account-id"
+workers_dev = false
+
+assets = { directory = "../../icp_engine/web_assets", binding = "ASSETS" }
+
+routes = [
+  { pattern = "gtm-dev.knowledge2.ai", custom_domain = true }
+]
+
+[vars]
+ICP_API_ORIGIN = "https://replace-with-api-origin.example.com"
+
+[secrets]
+required = ["K2_API_KEY", "APOLLO_API_KEY", "ICP_ADMIN_TOKEN"]

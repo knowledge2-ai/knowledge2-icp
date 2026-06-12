@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Knowledge2 Agentic GTM Dashboard</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-mark">K2</span>
+          <div>
+            <strong>Agentic GTM</strong>
+            <span>ICP discovery console</span>
+          </div>
+        </div>
+
+        <form id="run-form" class="panel">
+          <h2>Discover</h2>
+          <label>
+            Search query
+            <textarea id="query" rows="4" placeholder="vertical SaaS companies with workflow data but weak AI positioning"></textarea>
+          </label>
+          <label>
+            Seed companies
+            <textarea id="seed-text" rows="4" placeholder="Mojio, moj.io&#10;Automate, automate.co.za"></textarea>
+          </label>
+          <div class="inline-grid">
+            <label>
+              Max companies
+              <input id="max-companies" type="number" min="1" max="25" value="6" />
+            </label>
+            <label>
+              Max pages
+              <input id="max-pages" type="number" min="0" max="20" value="6" />
+            </label>
+          </div>
+          <label class="check-row">
+            <input id="fetch" type="checkbox" checked />
+            Fetch website evidence
+          </label>
+          <label class="check-row">
+            <input id="github" type="checkbox" checked />
+            Include GitHub metadata
+          </label>
+          <label class="check-row">
+            <input id="apollo" type="checkbox" />
+            Use Apollo enrichment
+          </label>
+          <div class="button-row">
+            <button id="preview-button" type="button" class="secondary">Preview candidates</button>
+            <button id="run-button" type="submit">Run research</button>
+          </div>
+          <p id="run-status" class="muted"></p>
+          <section id="candidate-panel" class="candidate-panel" aria-live="polite"></section>
+        </form>
+
+        <section class="panel provider-panel">
+          <h2>Providers</h2>
+          <div id="providers"></div>
+        </section>
+
+        <section class="panel auth-panel">
+          <h2>Admin Access</h2>
+          <label>
+            API token
+            <input id="admin-token" type="password" autocomplete="off" />
+          </label>
+          <div class="button-row">
+            <button id="save-admin-token" type="button">Save</button>
+            <button id="clear-admin-token" type="button" class="secondary">Clear</button>
+          </div>
+          <p id="auth-status" class="muted"></p>
+        </section>
+      </aside>
+
+      <main>
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Knowledge2 ICP Engine</p>
+            <h1>Lead Discovery Dashboard</h1>
+          </div>
+          <div class="summary-strip" id="summary-strip"></div>
+        </header>
+
+        <nav class="tabs" aria-label="Dashboard views">
+          <button class="tab active" data-view="leads">Leads</button>
+          <button class="tab" data-view="prospects">Prospects</button>
+          <button class="tab" data-view="research">Research</button>
+          <button class="tab" data-view="k2">K2</button>
+          <button class="tab" data-view="criteria">Criteria</button>
+          <button class="tab" data-view="runs">Runs</button>
+        </nav>
+
+        <section id="view-leads" class="view active">
+          <div class="toolbar">
+            <input id="lead-filter" type="search" placeholder="Filter leads, domains, tiers, warnings" />
+            <select id="tier-filter" aria-label="Tier filter">
+              <option value="">All tiers</option>
+              <option value="A">Tier A</option>
+              <option value="B">Tier B</option>
+              <option value="C">Tier C</option>
+              <option value="Reject">Reject</option>
+            </select>
+          </div>
+          <div class="content-grid">
+            <section class="lead-list">
+              <div class="table-head">
+                <span>Company</span>
+                <span>Tier</span>
+                <span>Score</span>
+                <span>Strategy</span>
+              </div>
+              <div id="lead-rows" class="lead-rows"></div>
+            </section>
+            <section id="lead-detail" class="detail-panel"></section>
+          </div>
+        </section>
+
+        <section id="view-prospects" class="view">
+          <div class="section-heading prospects-heading">
+            <div>
+              <p class="eyebrow">Outreach Targets</p>
+              <h2>Prospects And Personas</h2>
+            </div>
+            <div class="button-row">
+              <button id="refresh-prospects" type="button" class="secondary">Refresh</button>
+              <button id="download-prospects" type="button">Download CSV</button>
+              <button id="download-prospects-json" type="button" class="secondary">Open JSON</button>
+            </div>
+          </div>
+          <section id="prospect-summary" class="detail-panel empty">Run research before inspecting prospects.</section>
+          <section class="prospect-list">
+            <div class="prospect-head">
+              <span>Prospect</span>
+              <span>Title</span>
+              <span>Priority</span>
+              <span>Contact</span>
+              <span>Angle</span>
+            </div>
+            <div id="prospect-rows" class="prospect-rows"></div>
+          </section>
+        </section>
+
+        <section id="view-research" class="view">
+          <div class="research-layout">
+            <form id="research-form" class="panel wide">
+              <h2>Ask About This Run</h2>
+              <textarea id="research-question" rows="4" placeholder="Which Tier A leads have proprietary workflow data but weak AI posture?"></textarea>
+              <button type="submit">Ask</button>
+            </form>
+            <section id="research-answer" class="detail-panel"></section>
+          </div>
+        </section>
+
+        <section id="view-k2" class="view">
+          <div class="section-heading k2-heading">
+            <div>
+              <p class="eyebrow">Metadata Export</p>
+              <h2>K2 Manifest</h2>
+            </div>
+            <div class="button-row">
+              <button id="k2-preview" type="button" class="secondary">Preview manifest</button>
+              <button id="k2-export" type="button">Export JSON</button>
+              <button id="k2-sync-dry-run" type="button" class="secondary">Sync dry-run</button>
+              <button id="k2-sync-apply" type="button" class="secondary">Apply sync</button>
+            </div>
+          </div>
+          <section id="k2-panel" class="detail-panel empty">Run research before exporting a K2 manifest.</section>
+        </section>
+
+        <section id="view-criteria" class="view">
+          <form id="criteria-form" class="criteria-editor">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Admin</p>
+                <h2>ICP Criteria Markdown</h2>
+              </div>
+              <button type="submit">Save criteria</button>
+            </div>
+            <textarea id="criteria-markdown" spellcheck="false"></textarea>
+            <p id="criteria-status" class="muted"></p>
+          </form>
+        </section>
+
+        <section id="view-runs" class="view">
+          <div id="run-list" class="run-list"></div>
+        </section>
+      </main>
+    </div>
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

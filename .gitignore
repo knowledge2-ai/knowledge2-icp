@@ -6,3 +6,4 @@ __pycache__/
 out/
 .pytest_cache/
 .DS_Store
+deployment/cloudflare/wrangler.generated.toml

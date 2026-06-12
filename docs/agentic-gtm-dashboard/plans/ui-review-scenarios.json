@@ -1,0 +1,109 @@
+{
+  "settings": {
+    "base_url": "http://127.0.0.1:8765",
+    "output_dir": "docs/agentic-gtm-dashboard/designs/screenshots/original",
+    "viewport": {
+      "width": 1440,
+      "height": 980
+    },
+    "color_scheme": "light",
+    "full_page": true,
+    "settle_ms": 1200,
+    "nav_timeout_ms": 20000,
+    "loading_selectors": []
+  },
+  "seed_commands": [
+    {
+      "command": "python3 - <<'PY'\nfrom pathlib import Path\nfrom icp_engine.app_store import AppStore\nfrom icp_engine.models import CompanyInput, Evidence\nfrom icp_engine.research import ResearchPipeline\n\ndef fake_evidence(company: CompanyInput, cache_dir: Path):\n    return ([Evidence(evidence_id='e1', url=f'https://{company.domain}/platform', title='Platform', text='Founded in 2012. Enterprise software platform for fleet workflow, dispatch, telematics records, integrations, API, permissions, analytics, and customer operations. Trusted by customers and partners. Contact sales@example.com.', metadata={'page_category': 'product', 'links': ['https://www.linkedin.com/company/mojio', 'https://github.com/mojio', f'https://{company.domain}/docs/api'], 'external_links': ['https://github.com/mojio']})], [])\n\nstore = AppStore()\nrun = ResearchPipeline(store, evidence_fetcher=fake_evidence).create_run(query='', seed_text='Mojio, moj.io', include_github=False, use_apollo=False)\nprint('run_id=' + run['id'])\nPY",
+      "capture_variables": {
+        "run_id": "run_id=([A-Za-z0-9_-]+)"
+      }
+    }
+  ],
+  "variables": {},
+  "scenarios": [
+    {
+      "name": "01_dashboard_tabs",
+      "description": "Capture the populated GTM dashboard tabs and K2 manifest state.",
+      "steps": [
+        {
+          "action": "goto",
+          "url": "/"
+        },
+        {
+          "action": "wait_for_selector",
+          "selector": "#lead-rows .lead-row",
+          "timeout_ms": 10000
+        },
+        {
+          "action": "screenshot",
+          "name": "01_leads"
+        },
+        {
+          "action": "click",
+          "selector": "button.tab[data-view='prospects']"
+        },
+        {
+          "action": "wait_for_selector",
+          "selector": "#prospect-rows .prospect-row",
+          "timeout_ms": 10000
+        },
+        {
+          "action": "screenshot",
+          "name": "02_prospects"
+        },
+        {
+          "action": "click",
+          "selector": "button.tab[data-view='research']"
+        },
+        {
+          "action": "fill",
+          "selector": "#research-question",
+          "value": "Which lead has workflow API evidence and who should we contact?"
+        },
+        {
+          "action": "click",
+          "selector": "#research-form button[type='submit']"
+        },
+        {
+          "action": "wait_for_selector",
+          "selector": ".research-answer-text",
+          "timeout_ms": 10000
+        },
+        {
+          "action": "screenshot",
+          "name": "03_research"
+        },
+        {
+          "action": "click",
+          "selector": "button.tab[data-view='k2']"
+        },
+        {
+          "action": "screenshot",
+          "name": "04_k2"
+        },
+        {
+          "action": "click",
+          "selector": "#k2-preview"
+        },
+        {
+          "action": "wait_for_selector",
+          "selector": "#k2-panel .manifest-preview",
+          "timeout_ms": 10000
+        },
+        {
+          "action": "screenshot",
+          "name": "05_k2_manifest"
+        },
+        {
+          "action": "click",
+          "selector": "button.tab[data-view='criteria']"
+        },
+        {
+          "action": "screenshot",
+          "name": "06_criteria"
+        }
+      ]
+    }
+  ]
+}
