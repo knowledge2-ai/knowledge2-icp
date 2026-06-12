@@ -1,0 +1,40 @@
+{
+  "framework": {
+    "name": "agentic-gtm-dashboard-e2e",
+    "version": "1.0.0",
+    "outputDir": "tests/e2e",
+    "testPlanPath": "tests/e2e/e2e-test-plan.md"
+  },
+  "application": {
+    "name": "Knowledge2 Agentic GTM Dashboard",
+    "host": "127.0.0.1",
+    "port": 9876,
+    "healthCheckPath": "/healthz",
+    "startTimeoutSeconds": 15
+  },
+  "auth": {
+    "mode": "none"
+  },
+  "seed": {
+    "strategy": "python-fixture",
+    "companies": [
+      {
+        "company": "Mojio",
+        "domain": "moj.io"
+      }
+    ]
+  },
+  "execution": {
+    "browser": "chromium",
+    "headless": true,
+    "viewport": {
+      "width": 1440,
+      "height": 980
+    },
+    "timeoutMs": 10000
+  },
+  "validation": {
+    "channels": ["ui", "api", "console"],
+    "artifactDir": "out/e2e"
+  }
+}

@@ -1,0 +1,395 @@
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+from .k2_client import K2RestClient
+from .prospects import build_run_prospects
+
+
+class K2Backend:
+    def __init__(self, *, api_key: str | None = None, base_url: str | None = None) -> None:
+        self.api_key = api_key if api_key is not None else os.environ.get("K2_API_KEY")
+        self.base_url = base_url or os.environ.get("K2_BASE_URL", "https://api.knowledge2.ai")
+        self.research_corpus_id = os.environ.get("K2_RESEARCH_CORPUS_ID", "").strip()
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.api_key)
+
+    def build_documents(self, run: dict[str, Any]) -> list[dict[str, Any]]:
+        documents: list[dict[str, Any]] = []
+        for lead in run.get("leads", []):
+            score = lead.get("score", {})
+            company = score.get("company", {})
+            strategy = lead.get("strategy", {})
+            lead_metadata = lead.get("metadata", {})
+            documents.append(_account_summary_document(run, lead, score, company, strategy, lead_metadata))
+            for item in lead.get("evidence", []):
+                item_metadata = item.get("metadata", {}) if isinstance(item.get("metadata"), dict) else {}
+                source_type = item.get("source_type") or item_metadata.get("source_type") or _source_type(item.get("url", ""))
+                page_category = item_metadata.get("page_category") or _page_category(item.get("url", ""))
+                documents.append(
+                    {
+                        "id": f"{run.get('id')}:{company.get('domain')}:{item.get('evidence_id')}",
+                        "text": item.get("text", ""),
+                        "metadata": {
+                            "run_id": run.get("id"),
+                            "query": run.get("query"),
+                            "criteria_hash": run.get("criteria", {}).get("hash"),
+                            "company": company.get("company"),
+                            "domain": company.get("domain"),
+                            "tier": score.get("tier"),
+                            "total_score": score.get("total_score"),
+                            "ai_posture": score.get("classification", {}).get("ai_posture"),
+                            "source_type": source_type,
+                            "page_category": page_category,
+                            "source_url": item.get("url"),
+                            "source_title": item.get("title"),
+                            "evidence_id": item.get("evidence_id"),
+                            "signal_tags": _evidence_signal_tags(lead_metadata, item.get("evidence_id")),
+                            "persona_titles": [persona.get("title") for persona in strategy.get("personas", [])],
+                            "outreach_angle": strategy.get("outreach_angle"),
+                        },
+                    }
+                )
+        for prospect in build_run_prospects(run).get("prospects", []):
+            if isinstance(prospect, dict):
+                documents.append(_prospect_document(run, prospect))
+        return documents
+
+    def build_manifest(self, run: dict[str, Any]) -> dict[str, Any]:
+        documents = self.build_documents(run)
+        metadata_keys = sorted({key for document in documents for key in document.get("metadata", {})})
+        return {
+            "status": "ready",
+            "k2_configured": self.configured,
+            "base_url": self.base_url,
+            "run_id": run.get("id"),
+            "query": run.get("query"),
+            "document_count": len(documents),
+            "metadata_keys": metadata_keys,
+            "documents": documents,
+        }
+
+    def export_manifest(self, run: dict[str, Any], out_path: Path) -> dict[str, Any]:
+        manifest = {
+            **self.build_manifest(run),
+            "export_path": str(out_path),
+        }
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+        return manifest
+
+    def sync_run(self, run: dict[str, Any]) -> dict[str, Any]:
+        if not self.configured:
+            return {
+                "status": "skipped",
+                "reason": "K2_API_KEY is not configured.",
+                "document_count": len(self.build_documents(run)),
+            }
+        return {
+            "status": "ready_for_sdk_sync",
+            "reason": "Python sync is intentionally metadata-first in this slice. Use exported documents with the K2 SDK ingestion job.",
+            "base_url": self.base_url,
+            "document_count": len(self.build_documents(run)),
+        }
+
+    def build_upload_documents(self, run: dict[str, Any]) -> list[dict[str, Any]]:
+        upload_documents: list[dict[str, Any]] = []
+        for document in self.build_documents(run):
+            metadata = document.get("metadata", {}) if isinstance(document.get("metadata"), dict) else {}
+            source_uri = str(metadata.get("source_url") or f"inline://knowledge2-icp/{document.get('id')}")
+            if not source_uri.startswith(("http://", "https://", "inline://")):
+                source_uri = f"inline://knowledge2-icp/{source_uri}"
+            upload_documents.append(
+                {
+                    "sourceUri": f"{source_uri}#k2-icp-{metadata.get('evidence_id', document.get('id'))}",
+                    "rawText": str(document.get("text", "")),
+                    "metadata": metadata,
+                }
+            )
+        return [document for document in upload_documents if document["rawText"].strip()]
+
+    def sync_manifest(
+        self,
+        run: dict[str, Any],
+        *,
+        project_name: str = "Knowledge2 ICP GTM",
+        corpus_name: str | None = None,
+        description: str = "Agentic GTM lead research evidence and metadata.",
+        apply: bool = False,
+        client: K2RestClient | None = None,
+    ) -> dict[str, Any]:
+        documents = self.build_upload_documents(run)
+        corpus_name = corpus_name or f"ICP Run {run.get('id')}"
+        if not apply:
+            return {
+                "status": "dry_run",
+                "project_name": project_name,
+                "corpus_name": corpus_name,
+                "document_count": len(documents),
+                "k2_configured": self.configured,
+            }
+        if not self.configured and client is None:
+            return {
+                "status": "error",
+                "reason": "K2_API_KEY is required when apply=true.",
+                "document_count": len(documents),
+            }
+        live_client = client or K2RestClient(api_key=self.api_key or "", base_url=self.base_url)
+        project = live_client.ensure_project(project_name)
+        project_id = str(project.get("id") or project.get("projectId") or "")
+        corpus = live_client.ensure_corpus(project_id, corpus_name, description)
+        corpus_id = str(corpus.get("id") or corpus.get("corpusId") or "")
+        upload = live_client.upload_documents(
+            corpus_id,
+            documents,
+            idempotency_key=f"knowledge2-icp-{run.get('id')}",
+            auto_index=False,
+        )
+        return {
+            "status": "uploaded",
+            "project_id": project_id,
+            "project_name": project.get("name", project_name),
+            "corpus_id": corpus_id,
+            "corpus_name": corpus.get("name", corpus_name),
+            "document_count": len(documents),
+            "upload": upload,
+        }
+
+    def answer_question(
+        self,
+        run: dict[str, Any],
+        question: str,
+        *,
+        client: K2RestClient | None = None,
+    ) -> dict[str, Any]:
+        corpus_id = self._research_corpus_id(run)
+        if not corpus_id:
+            return {
+                "status": "skipped",
+                "reason": "No K2 research corpus is configured for this run.",
+            }
+        if not self.configured and client is None:
+            return {
+                "status": "skipped",
+                "reason": "K2_API_KEY is not configured.",
+                "corpus_id": corpus_id,
+            }
+        live_client = client or K2RestClient(api_key=self.api_key or "", base_url=self.base_url)
+        payload = live_client.generate_answer(
+            corpus_id,
+            question,
+            top_k=8,
+            filters=_run_metadata_filter(str(run.get("id") or "")),
+        )
+        return {
+            "status": "ok",
+            "provider": "k2",
+            "corpus_id": corpus_id,
+            "answer": str(payload.get("answer") or ""),
+            "model": payload.get("model"),
+            "citations": _k2_citations(payload.get("results", [])),
+            "raw_result_count": len(payload.get("results", [])) if isinstance(payload.get("results"), list) else 0,
+        }
+
+    def _research_corpus_id(self, run: dict[str, Any]) -> str:
+        k2_status = run.get("k2", {}) if isinstance(run.get("k2"), dict) else {}
+        return str(k2_status.get("corpus_id") or self.research_corpus_id or "").strip()
+
+
+def _source_type(url: str) -> str:
+    host = url.lower()
+    if "github.com" in host:
+        return "github"
+    if "linkedin.com" in host:
+        return "linkedin"
+    return "website"
+
+
+def _page_category(url: str) -> str:
+    path = url.lower()
+    if any(term in path for term in ["/docs", "/developers", "/api"]):
+        return "docs"
+    if "pricing" in path:
+        return "pricing"
+    if "case" in path or "customers" in path:
+        return "customers"
+    if "careers" in path or "jobs" in path:
+        return "careers"
+    if "contact" in path or "demo" in path:
+        return "contact"
+    if any(term in path for term in ["ai", "copilot", "assistant", "gpt"]):
+        return "ai"
+    if any(term in path for term in ["product", "platform", "solutions"]):
+        return "product"
+    return "homepage" if path.rstrip("/").count("/") <= 2 else "other"
+
+
+def _run_metadata_filter(run_id: str) -> dict[str, Any]:
+    filters: list[dict[str, Any]] = []
+    if run_id:
+        filters.append({"key": "run_id", "op": "==", "value": run_id})
+    return {"condition": "and", "filters": filters}
+
+
+def _k2_citations(results: object) -> list[dict[str, Any]]:
+    if not isinstance(results, list):
+        return []
+    citations = []
+    for item in results[:8]:
+        if not isinstance(item, dict):
+            continue
+        metadata = _merged_result_metadata(item)
+        citations.append(
+            {
+                "company": metadata.get("company"),
+                "domain": metadata.get("domain"),
+                "url": metadata.get("source_url") or metadata.get("sourceUri") or metadata.get("url"),
+                "evidence_id": metadata.get("evidence_id") or item.get("documentId") or item.get("document_id"),
+                "snippet": str(item.get("text") or "")[:420],
+                "score": item.get("score"),
+                "source_type": metadata.get("source_type"),
+                "page_category": metadata.get("page_category"),
+            }
+        )
+    return citations
+
+
+def _merged_result_metadata(item: dict[str, Any]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for key in ("metadata", "customMetadata", "custom_metadata", "systemMetadata", "system_metadata"):
+        value = item.get(key)
+        if isinstance(value, dict):
+            merged.update(value)
+    system = item.get("systemMetadata") or item.get("system_metadata")
+    provenance = system.get("provenance") if isinstance(system, dict) and isinstance(system.get("provenance"), dict) else {}
+    if provenance:
+        merged.update({key: value for key, value in provenance.items() if key not in merged})
+    return merged
+
+
+def _account_summary_document(
+    run: dict[str, Any],
+    lead: dict[str, Any],
+    score: dict[str, Any],
+    company: dict[str, Any],
+    strategy: dict[str, Any],
+    lead_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    source_refs = lead_metadata.get("source_refs", {}) if isinstance(lead_metadata.get("source_refs"), dict) else {}
+    criteria_profile = lead_metadata.get("criteria_profile", {}) if isinstance(lead_metadata.get("criteria_profile"), dict) else {}
+    text = "\n".join(
+        [
+            f"Company: {company.get('company')} ({company.get('domain')})",
+            f"Tier: {score.get('tier')} score {score.get('total_score')}",
+            f"Criteria: Tier A >= {criteria_profile.get('tier_a_threshold', 75)}, Tier B >= {criteria_profile.get('tier_b_threshold', 60)}, employee range {criteria_profile.get('min_employee_count', 25)}-{criteria_profile.get('max_employee_count', 2000)}",
+            f"Strategy: {strategy.get('outreach_angle')}",
+            f"Offer: {strategy.get('offer')}",
+            f"Personas: {', '.join(persona.get('title', '') for persona in strategy.get('personas', []))}",
+            f"Signals: {', '.join(lead_metadata.get('signal_tags', []))}",
+            f"Source counts: {lead_metadata.get('source_counts', {})}",
+            f"Public profiles and resources: {_source_ref_summary(source_refs)}",
+        ]
+    )
+    return {
+        "id": f"{run.get('id')}:{company.get('domain')}:account-summary",
+        "text": text,
+        "metadata": {
+            "run_id": run.get("id"),
+            "query": run.get("query"),
+            "criteria_hash": run.get("criteria", {}).get("hash"),
+            "company": company.get("company"),
+            "domain": company.get("domain"),
+            "tier": score.get("tier"),
+            "total_score": score.get("total_score"),
+            "ai_posture": score.get("classification", {}).get("ai_posture"),
+            "source_type": "account_summary",
+            "page_category": "summary",
+            "source_url": company.get("domain"),
+            "evidence_id": "account-summary",
+            "signal_tags": lead_metadata.get("signal_tags", []),
+            "criteria_tier_a_threshold": criteria_profile.get("tier_a_threshold"),
+            "criteria_tier_b_threshold": criteria_profile.get("tier_b_threshold"),
+            "criteria_min_employee_count": criteria_profile.get("min_employee_count"),
+            "criteria_max_employee_count": criteria_profile.get("max_employee_count"),
+            "criteria_priority_terms": criteria_profile.get("priority_terms", []),
+            "github_urls": _source_ref_values(source_refs, "github_urls"),
+            "linkedin_urls": _source_ref_values(source_refs, "linkedin_urls"),
+            "social_urls": _source_ref_values(source_refs, "social_urls"),
+            "marketplace_urls": _source_ref_values(source_refs, "marketplace_urls"),
+            "docs_urls": _source_ref_values(source_refs, "docs_urls"),
+            "pricing_urls": _source_ref_values(source_refs, "pricing_urls"),
+            "contact_urls": _source_ref_values(source_refs, "contact_urls"),
+            "public_profile_count": lead_metadata.get("public_profile_count", 0),
+            "public_resource_count": lead_metadata.get("public_resource_count", 0),
+            "persona_titles": [persona.get("title") for persona in strategy.get("personas", [])],
+            "outreach_angle": strategy.get("outreach_angle"),
+        },
+    }
+
+
+def _prospect_document(run: dict[str, Any], prospect: dict[str, Any]) -> dict[str, Any]:
+    name = prospect.get("name") or prospect.get("persona")
+    text = "\n".join(
+        [
+            f"Company: {prospect.get('company')} ({prospect.get('domain')})",
+            f"Prospect: {name}",
+            f"Title: {prospect.get('title')}",
+            f"Persona: {prospect.get('persona')} ({prospect.get('persona_priority')})",
+            f"Source: {prospect.get('source')} status {prospect.get('status')}",
+            f"LinkedIn: {prospect.get('linkedin_url')}",
+            f"Outreach angle: {prospect.get('outreach_angle')}",
+            f"First step: {prospect.get('first_step')}",
+        ]
+    )
+    return {
+        "id": f"{prospect.get('id')}:prospect",
+        "text": text,
+        "metadata": {
+            "run_id": run.get("id"),
+            "query": run.get("query"),
+            "criteria_hash": run.get("criteria", {}).get("hash"),
+            "company": prospect.get("company"),
+            "domain": prospect.get("domain"),
+            "tier": prospect.get("tier"),
+            "total_score": prospect.get("company_score"),
+            "source_type": "prospect",
+            "page_category": "apollo" if prospect.get("source") == "apollo" else "persona",
+            "source_url": prospect.get("linkedin_url") or prospect.get("domain"),
+            "evidence_id": prospect.get("id"),
+            "prospect_name": prospect.get("name"),
+            "prospect_title": prospect.get("title"),
+            "persona_title": prospect.get("persona"),
+            "persona_priority": prospect.get("persona_priority"),
+            "prospect_source": prospect.get("source"),
+            "prospect_status": prospect.get("status"),
+            "priority_score": prospect.get("priority_score"),
+            "outreach_angle": prospect.get("outreach_angle"),
+        },
+    }
+
+
+def _evidence_signal_tags(lead_metadata: dict[str, Any], evidence_id: object) -> list[str]:
+    for item in lead_metadata.get("evidence_metadata", []):
+        if isinstance(item, dict) and item.get("evidence_id") == evidence_id:
+            tags = item.get("signal_tags", [])
+            return [str(tag) for tag in tags] if isinstance(tags, list) else []
+    return []
+
+
+def _source_ref_values(source_refs: dict[str, Any], key: str) -> list[str]:
+    values = source_refs.get(key, [])
+    return [str(value) for value in values] if isinstance(values, list) else []
+
+
+def _source_ref_summary(source_refs: dict[str, Any]) -> str:
+    parts = []
+    for key in ["linkedin_urls", "github_urls", "social_urls", "marketplace_urls", "docs_urls", "pricing_urls", "contact_urls"]:
+        values = _source_ref_values(source_refs, key)
+        if values:
+            parts.append(f"{key}={values[:3]}")
+    return "; ".join(parts) if parts else "none captured"

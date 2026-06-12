@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from .criteria import CriteriaProfile
 from .models import (
     Classification,
     CompanyInput,
@@ -178,10 +179,17 @@ def score_company(
     *,
     model_classification: Classification | None = None,
     fetch_warnings: list[str] | None = None,
+    criteria_profile: CriteriaProfile | None = None,
 ) -> ScoreResult:
+    profile = criteria_profile or CriteriaProfile()
     text = _combined_text(company, evidence)
-    gates = _hard_gates(company, evidence, text)
-    classification = _merge_classification(_rules_classification(company, evidence, text), model_classification)
+    gates = _hard_gates(company, evidence, text, profile)
+    classification = _merge_classification(_rules_classification(company, evidence, text, profile), model_classification)
+    classification.reasons["criteria"] = (
+        f"Scored with criteria hash {profile.hash or 'default'}; "
+        f"Tier A >= {profile.tier_a_threshold}, Tier B >= {profile.tier_b_threshold}, "
+        f"budget range {profile.min_employee_count}-{profile.max_employee_count} employees."
+    )
 
     ai_gap_score = _ai_gap_points(classification.ai_posture)
     data_workflow_score = round((classification.data_workflow / 5) * 25)
@@ -193,10 +201,10 @@ def score_company(
     if any(gate.status == GateStatus.FAIL for gate in gates):
         tier = "Reject"
         next_action = "Reject or nurture; one or more hard gates failed."
-    elif total_score >= 75:
+    elif total_score >= profile.tier_a_threshold:
         tier = "A"
         next_action = "Prioritize human research and outbound."
-    elif total_score >= 60:
+    elif total_score >= profile.tier_b_threshold:
         tier = "B"
         next_action = "Review manually; qualify trigger and budget."
     else:
@@ -227,13 +235,13 @@ def _combined_text(company: CompanyInput, evidence: list[Evidence]) -> str:
     return normalize_whitespace(" ".join(chunks)).lower()
 
 
-def _hard_gates(company: CompanyInput, evidence: list[Evidence], text: str) -> list[GateResult]:
+def _hard_gates(company: CompanyInput, evidence: list[Evidence], text: str, profile: CriteriaProfile) -> list[GateResult]:
     return [
         _founded_gate(company, text),
         _keyword_gate("Product company", text, PRODUCT_KEYWORDS, SERVICES_KEYWORDS),
         _keyword_gate("B2B or B2B2C", text, B2B_KEYWORDS, []),
         _keyword_gate("Has proprietary workflow/data", text, DATA_WORKFLOW_KEYWORDS, []),
-        _budget_gate(company, text),
+        _budget_gate(company, text, profile),
         _not_ai_native_gate(text),
     ]
 
@@ -276,13 +284,21 @@ def _keyword_gate(
     return GateResult(name, GateStatus.UNKNOWN, "Not enough public evidence.")
 
 
-def _budget_gate(company: CompanyInput, text: str) -> GateResult:
+def _budget_gate(company: CompanyInput, text: str, profile: CriteriaProfile) -> GateResult:
     if company.employee_count is not None:
-        if 25 <= company.employee_count <= 2000:
-            return GateResult("Enough budget", GateStatus.PASS, f"Employee count {company.employee_count}.")
-        if company.employee_count > 2000:
+        if profile.min_employee_count <= company.employee_count <= profile.max_employee_count:
+            return GateResult(
+                "Enough budget",
+                GateStatus.PASS,
+                f"Employee count {company.employee_count}; active criteria range {profile.min_employee_count}-{profile.max_employee_count}.",
+            )
+        if company.employee_count > profile.max_employee_count:
             return GateResult("Enough budget", GateStatus.PASS, f"Employee count {company.employee_count}; enterprise-size target.")
-        return GateResult("Enough budget", GateStatus.UNKNOWN, f"Employee count {company.employee_count}; may be too small unless funded/high-ARR.")
+        return GateResult(
+            "Enough budget",
+            GateStatus.UNKNOWN,
+            f"Employee count {company.employee_count}; below active criteria minimum {profile.min_employee_count} unless funded/high-ARR.",
+        )
     if any(term in text for term in ["enterprise customers", "funded", "profitable", "trusted by", "thousands of customers"]):
         return GateResult("Enough budget", GateStatus.PASS, "Public copy suggests budget or customer scale.")
     return GateResult("Enough budget", GateStatus.UNKNOWN, "No employee count or funding/customer scale found.")
@@ -295,7 +311,7 @@ def _not_ai_native_gate(text: str) -> GateResult:
     return GateResult("Not AI-native", GateStatus.PASS, "No strong AI-native founding/category signal.")
 
 
-def _rules_classification(company: CompanyInput, evidence: list[Evidence], text: str) -> Classification:
+def _rules_classification(company: CompanyInput, evidence: list[Evidence], text: str, profile: CriteriaProfile) -> Classification:
     ai_hits = keyword_hits(f" {text} ", AI_KEYWORDS)
     thin_hits = keyword_hits(text, THIN_AI_KEYWORDS)
     deep_hits = keyword_hits(text, DEEP_AI_KEYWORDS)
@@ -303,7 +319,7 @@ def _rules_classification(company: CompanyInput, evidence: list[Evidence], text:
     data_hits = keyword_hits(text, DATA_WORKFLOW_KEYWORDS)
     urgency_hits = keyword_hits(text, URGENCY_KEYWORDS)
     feasibility_hits = keyword_hits(text, FEASIBILITY_KEYWORDS)
-    vertical_hits = keyword_hits(f"{company.category} {text}", HIGH_PRIORITY_VERTICALS)
+    vertical_hits = keyword_hits(f"{company.category} {text}", profile.priority_terms or HIGH_PRIORITY_VERTICALS)
 
     if len(native_hits) >= 2:
         ai_posture = 5
@@ -322,7 +338,7 @@ def _rules_classification(company: CompanyInput, evidence: list[Evidence], text:
     if vertical_hits and data_workflow < 4:
         data_workflow += 1
     commercial_urgency = min(5, len(set(urgency_hits)) + (1 if ai_posture in {0, 1, 2} else 0))
-    budget_access = _budget_points(company, text)
+    budget_access = _budget_points(company, text, profile)
     feasibility = min(5, max(1 if evidence else 0, len(set(feasibility_hits)) // 2))
 
     return Classification(
@@ -344,12 +360,12 @@ def _rules_classification(company: CompanyInput, evidence: list[Evidence], text:
     )
 
 
-def _budget_points(company: CompanyInput, text: str) -> int:
+def _budget_points(company: CompanyInput, text: str, profile: CriteriaProfile) -> int:
     if company.employee_count is None:
         return 3 if any(term in text for term in ["enterprise", "trusted by", "customers", "funded"]) else 1
-    if 25 <= company.employee_count <= 2000:
+    if profile.min_employee_count <= company.employee_count <= profile.max_employee_count:
         return 5
-    if company.employee_count > 2000:
+    if company.employee_count > profile.max_employee_count:
         return 4
     return 2
 
