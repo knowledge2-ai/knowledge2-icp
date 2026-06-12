@@ -20,6 +20,13 @@ export default {
       return proxyApiRequest(request, env);
     }
 
+    if (url.pathname.startsWith("/assets/")) {
+      const assetUrl = new URL(request.url);
+      assetUrl.pathname = `/${url.pathname.split("/").pop() || ""}`;
+      const assetResponse = await env.ASSETS.fetch(new Request(assetUrl, request));
+      if (assetResponse.status !== 404) return withSecurityHeaders(assetResponse);
+    }
+
     const assetResponse = await env.ASSETS.fetch(request);
     if (assetResponse.status !== 404) return withSecurityHeaders(assetResponse);
 
