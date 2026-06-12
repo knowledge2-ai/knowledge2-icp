@@ -1,6 +1,33 @@
 const SEED_CREATED_AT = "2026-06-12T00:00:00+00:00";
 const SEED_RUN_ID = "run-seeded-icp";
 const MAX_APOLLO_ENRICH_LEADS = 12;
+const BLOCKED_DISCOVERY_HOSTS = new Set([
+  "bing.com",
+  "capterra.com",
+  "crunchbase.com",
+  "duckduckgo.com",
+  "facebook.com",
+  "g2.com",
+  "github.com",
+  "google.com",
+  "linkedin.com",
+  "twitter.com",
+  "x.com",
+  "youtube.com",
+]);
+const DISCOVERY_QUERY_STOPWORDS = new Set([
+  "companies",
+  "company",
+  "data",
+  "limited",
+  "platform",
+  "public",
+  "saas",
+  "software",
+  "workflow",
+  "workflows",
+  "with",
+]);
 
 const SEED_CRITERIA_MARKDOWN = `# Seeded ICP Criteria
 
@@ -71,11 +98,12 @@ const SEED_PROMPTS = [
 
 const SEED_SETTINGS = {
   default_query: SEED_PROMPTS[0].text,
-  max_companies: 6,
+  max_companies: 50,
   max_pages: 6,
   fetch_website_evidence: true,
   include_github_metadata: true,
   use_apollo_enrichment: false,
+  use_serp_discovery: true,
   tier_a_threshold: 75,
   tier_b_threshold: 60,
   employee_range: "25-2000 employees",
@@ -199,13 +227,13 @@ async function handleApiRequest(request, env, url) {
 
   if (method === "POST" && url.pathname === "/api/search") {
     const payload = await readJson(request);
-    const candidates = discoverCandidates(payload, lists);
-    return json({ candidates, warnings: candidates.length ? [] : ["No seed candidates matched the request."] });
+    const result = await discoverCandidates(payload, lists, env);
+    return json(result);
   }
 
   if (method === "POST" && url.pathname === "/api/runs") {
     const payload = await readJson(request);
-    const run = createRuntimeRun(payload, lists);
+    const run = await createRuntimeRun(payload, lists, env);
     runtime.runs.set(run.id, run);
     return json(run);
   }
@@ -309,6 +337,7 @@ function normalizeSeedAccounts(accounts) {
       source_url: String(account.source_url || "").trim(),
       source: String(account.source || "").trim(),
       notes: String(account.notes || "").trim(),
+      qualification: account.qualification && typeof account.qualification === "object" ? clone(account.qualification) : {},
     }))
     .filter((account) => account.company && account.domain);
 }
@@ -336,7 +365,15 @@ function providerStatus(env) {
       research_corpus_configured: false,
     },
     github: { configured: false, env: "GITHUB_TOKEN", public_fallback: true },
-    search: { configured: true, provider: "seeded-worker" },
+    search: {
+      configured: true,
+      provider: env.SERPER_API_KEY || env.SERP_API_KEY
+        ? "serper"
+        : env.APOLLO_API_KEY
+          ? "apollo-company-search"
+          : "seeded-worker",
+      serp_configured: Boolean(env.SERPER_API_KEY || env.SERP_API_KEY),
+    },
   };
 }
 
@@ -390,17 +427,163 @@ function tierCounts(leads) {
   }, {});
 }
 
-function discoverCandidates(payload, lists) {
+async function discoverCandidates(payload, lists, env = {}) {
   const fromSeedText = parseSeedText(String(payload.seed_text || ""));
   const query = String(payload.query || "").toLowerCase();
+  const maxCompanies = Number(payload.max_companies || 10);
+  const warnings = [];
+  const live = query ? await discoverLiveCandidates(query, maxCompanies, env, warnings) : [];
+  const terms = queryTerms(query);
   const seeded = lists.account_universe
+    .map((item) => ({ item, rank: seedMatchScore(item, terms) }))
     .filter((item) => {
       if (!query) return true;
-      const haystack = `${item.company} ${item.domain} ${item.category} ${item.notes}`.toLowerCase();
-      return queryTerms(query).some((term) => haystack.includes(term));
+      return item.rank > 0;
     })
-    .map((item) => candidateFromAccount(item, "Seeded local account list"));
-  return dedupeCandidates([...fromSeedText, ...seeded]).slice(0, Number(payload.max_companies || 10));
+    .sort((left, right) => right.rank - left.rank || Number(right.item.qualification?.total_score || 0) - Number(left.item.qualification?.total_score || 0) || String(left.item.company || "").localeCompare(String(right.item.company || "")))
+    .map(({ item }) => candidateFromAccount(item, "Seeded local account list"));
+  const candidates = dedupeCandidates([...fromSeedText, ...seeded, ...live]).slice(0, maxCompanies);
+  if (!candidates.length && !warnings.length) warnings.push("No candidates matched the request.");
+  return { candidates, warnings };
+}
+
+async function discoverLiveCandidates(query, maxCompanies, env, warnings) {
+  if (!query.trim()) return [];
+  if (env.SERPER_API_KEY || env.SERP_API_KEY) {
+    const result = await serperSearchCompanies(env, query, maxCompanies);
+    if (result.status === "ok") return result.candidates;
+    warnings.push(result.reason || "Serper search failed.");
+  }
+  if (env.APOLLO_API_KEY) {
+    const result = await apolloSearchOrganizations(env, query, maxCompanies);
+    if (result.status === "ok") return result.candidates;
+    warnings.push(result.reason || "Apollo company search failed.");
+  }
+  if (!env.SERPER_API_KEY && !env.SERP_API_KEY && !env.APOLLO_API_KEY) {
+    warnings.push("Live SERP discovery is not configured; using seeded accounts and manual seed text only.");
+  }
+  return [];
+}
+
+function seedMatchScore(item, terms) {
+  if (!terms.length) return 1;
+  const weighted = [
+    [String(item.company || ""), 4],
+    [String(item.domain || ""), 3],
+    [String(item.category || ""), 3],
+    [String(item.notes || ""), 2],
+    [String(item.source_group || ""), 1],
+  ];
+  return weighted.reduce((score, [value, weight]) => {
+    const haystack = value.toLowerCase();
+    return score + terms.filter((term) => haystack.includes(term)).length * weight;
+  }, 0);
+}
+
+async function serperSearchCompanies(env, query, maxCompanies) {
+  const apiKey = env.SERPER_API_KEY || env.SERP_API_KEY;
+  const baseUrl = String(env.SERPER_BASE_URL || "https://google.serper.dev").replace(/\/+$/, "");
+  try {
+    const response = await fetch(`${baseUrl}/search`, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        "user-agent": "Knowledge2ICPWorker/0.1",
+        "x-api-key": apiKey,
+      },
+      body: JSON.stringify({ q: query, num: Math.max(10, Math.min(Number(maxCompanies || 10) * 2, 100)) }),
+    });
+    if (!response.ok) return { status: "error", reason: `Serper returned HTTP ${response.status}.`, candidates: [] };
+    const payload = await response.json();
+    return {
+      status: "ok",
+      candidates: candidatesFromSearchResults(Array.isArray(payload.organic) ? payload.organic : [], "Serper SERP result", maxCompanies),
+    };
+  } catch (error) {
+    return { status: "error", reason: `Serper search failed: ${error?.message || error}`, candidates: [] };
+  }
+}
+
+async function apolloSearchOrganizations(env, query, maxCompanies) {
+  const baseUrl = String(env.APOLLO_BASE_URL || "https://api.apollo.io/api/v1").replace(/\/+$/, "");
+  const params = new URLSearchParams();
+  params.append("per_page", String(Math.max(10, Math.min(Number(maxCompanies || 10) * 2, 100))));
+  params.append("q_keywords", query);
+  try {
+    const response = await fetch(`${baseUrl}/mixed_companies/search?${params.toString()}`, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "cache-control": "no-cache",
+        "content-type": "application/json",
+        "user-agent": "Knowledge2ICPWorker/0.1",
+        "x-api-key": env.APOLLO_API_KEY,
+      },
+      body: "{}",
+    });
+    if (!response.ok) return { status: "error", reason: `Apollo returned HTTP ${response.status}.`, candidates: [] };
+    const payload = await response.json();
+    const items = Array.isArray(payload.organizations) ? payload.organizations : Array.isArray(payload.accounts) ? payload.accounts : [];
+    return { status: "ok", candidates: candidatesFromApolloOrganizations(items, maxCompanies, queryTerms(query)) };
+  } catch (error) {
+    return { status: "error", reason: `Apollo company search failed: ${error?.message || error}`, candidates: [] };
+  }
+}
+
+function candidatesFromSearchResults(items, sourceTitle, maxCompanies) {
+  const candidates = [];
+  for (const item of items) {
+    const link = String(item?.link || item?.url || "").trim();
+    const title = String(item?.title || "").trim();
+    const snippet = String(item?.snippet || "").trim();
+    const domain = companyDomainFromUrl(link);
+    if (!domain || isBlockedDiscoveryDomain(domain) || candidates.some((candidate) => candidate.domain === domain)) continue;
+    candidates.push({
+      company: companyNameFromTitleOrDomain(title, domain),
+      domain,
+      source_url: link || `https://${domain}`,
+      source_title: title || sourceTitle,
+      notes: snippet ? `${sourceTitle}: ${snippet}` : sourceTitle,
+      github_urls: [],
+      linkedin_urls: [],
+      other_urls: [],
+    });
+    if (candidates.length >= maxCompanies) break;
+  }
+  return candidates;
+}
+
+function candidatesFromApolloOrganizations(items, maxCompanies, terms) {
+  const candidates = [];
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    const domain = companyDomainFromUrl(item.website_url || item.primary_domain || item.domain || "");
+    if (!domain || isBlockedDiscoveryDomain(domain) || candidates.some((candidate) => candidate.domain === domain)) continue;
+    const haystack = [
+      item.name,
+      domain,
+      item.industry,
+      item.short_description,
+      item.seo_description,
+      ...(Array.isArray(item.keywords) ? item.keywords : []),
+    ].join(" ").toLowerCase();
+    if (terms.length && !terms.some((term) => haystack.includes(term))) continue;
+    const location = [item.city, item.state, item.country].map((part) => String(part || "").trim()).filter(Boolean).join(", ");
+    const employeeCount = item.estimated_num_employees ? `${item.estimated_num_employees} employees` : "";
+    candidates.push({
+      company: String(item.name || companyNameFromTitleOrDomain("", domain)),
+      domain,
+      source_url: item.website_url || `https://${domain}`,
+      source_title: "Apollo company search",
+      notes: [item.industry, employeeCount, location].filter(Boolean).join(" · ") || "Discovered from Apollo company search.",
+      github_urls: [],
+      linkedin_urls: item.linkedin_url ? [String(item.linkedin_url)] : [],
+      other_urls: [],
+    });
+    if (candidates.length >= maxCompanies) break;
+  }
+  return candidates;
 }
 
 function parseSeedText(seedText) {
@@ -451,10 +634,16 @@ function dedupeCandidates(candidates) {
   return result;
 }
 
-function createRuntimeRun(payload, lists) {
-  const candidates = Array.isArray(payload.candidates) && payload.candidates.length
-    ? dedupeCandidates(payload.candidates)
-    : discoverCandidates(payload, lists);
+async function createRuntimeRun(payload, lists, env = {}) {
+  let discoveryWarnings = [];
+  let candidates;
+  if (Array.isArray(payload.candidates) && payload.candidates.length) {
+    candidates = dedupeCandidates(payload.candidates);
+  } else {
+    const discovery = await discoverCandidates(payload, lists, env);
+    candidates = discovery.candidates;
+    discoveryWarnings = discovery.warnings || [];
+  }
   const runId = `run-worker-${Date.now().toString(36)}`;
   const leads = candidates.slice(0, Number(payload.max_companies || 8)).map((candidate) => leadFromCandidate(runId, candidate, lists));
   leads.sort((left, right) => Number(right.score.total_score || 0) - Number(left.score.total_score || 0));
@@ -469,7 +658,7 @@ function createRuntimeRun(payload, lists) {
       updated_at: currentCriteria().updated_at,
       profile: seededCriteriaProfile(lists),
     },
-    warnings: candidates.length ? [] : ["No selected candidates were provided for this run."],
+    warnings: candidates.length ? discoveryWarnings : ["No selected candidates were provided for this run.", ...discoveryWarnings],
     leads,
   };
   run.k2 = {
@@ -537,11 +726,16 @@ function seededCriteriaProfile(lists) {
 }
 
 function seedLead(runId, account, candidate) {
-  const reject = account.domain === "example.com" || String(account.category || "").toLowerCase().includes("ai agents");
+  const qualification = account.qualification && typeof account.qualification === "object" ? account.qualification : {};
+  const qualifiedTier = String(qualification.tier || "");
+  const reject = qualifiedTier === "Reject" || account.domain === "example.com" || String(account.category || "").toLowerCase().includes("ai agents");
   const vertical = verticalFor(account);
   const highPriority = isHighPriorityVertical(vertical);
-  const score = reject ? 24 : account.domain === "moj.io" ? 82 : highPriority ? 79 : 68;
-  const tier = reject ? "Reject" : highPriority ? "A" : "B";
+  const tier = qualifiedTier || (reject ? "Reject" : highPriority ? "A" : "B");
+  const score = qualifiedNumber(qualification, "total_score", reject ? 24 : account.domain === "moj.io" ? 82 : highPriority ? 79 : 68);
+  const aiPosture = qualifiedNumber(qualification, "ai_posture", reject ? 5 : 0);
+  const dataWorkflow = Math.max(0, Math.min(5, Math.round(qualifiedNumber(qualification, "data_workflow_score", reject ? 5 : account.domain === "moj.io" ? 25 : 22) / 5)));
+  const feasibility = Math.max(0, Math.min(5, Math.round(qualifiedNumber(qualification, "feasibility_score", reject ? 4 : 8) / 2)));
   const docsUrl = account.domain === "moj.io"
     ? "https://moj.io/docs/api"
     : account.domain === "automate.co.za"
@@ -561,7 +755,7 @@ function seedLead(runId, account, candidate) {
     pricing_urls: [],
     social_urls: [],
   };
-  const signalTags = reject ? ["ai-native"] : ["workflow", "data", "commercial", ...(docsUrl ? ["integration"] : [])];
+  const signalTags = reject ? ["ai-native"] : ["workflow", "data", "commercial", ...(docsUrl ? ["integration"] : []), ...(Object.keys(qualification).length ? ["qualified-data"] : [])];
   const personas = reject ? [{
     title: "Do Not Prospect",
     priority: "reject",
@@ -582,11 +776,11 @@ function seedLead(runId, account, candidate) {
       company: account,
       gates: gatesFor(account, reject),
       classification: {
-        ai_posture: reject ? 5 : 0,
-        data_workflow: reject ? 1 : account.domain === "moj.io" ? 5 : 4,
+        ai_posture: aiPosture,
+        data_workflow: dataWorkflow,
         commercial_urgency: reject ? 1 : 3,
         budget_access: reject ? 1 : 3,
-        feasibility: reject ? 2 : 4,
+        feasibility,
         reasons: {
           ai_posture: reject ? "AI-native positioning is a seeded reject signal." : "No deep public AI positioning in the local seed notes.",
           data_workflow: `Signals include ${vertical} workflow data and operational systems.`,
@@ -598,22 +792,22 @@ function seedLead(runId, account, candidate) {
           commercial_urgency: ["seed-evidence"],
           feasibility: docsUrl ? ["seed-evidence"] : [],
         },
-        confidence: reject ? 0.55 : 0.72,
-        source: "seed",
+        confidence: Object.keys(qualification).length && !reject ? 0.82 : reject ? 0.55 : 0.72,
+        source: qualification.classification_source || "seed",
       },
-      ai_gap_score: reject ? 0 : 30,
-      data_workflow_score: reject ? 5 : account.domain === "moj.io" ? 25 : 22,
-      commercial_urgency_score: reject ? 3 : 14,
-      budget_access_score: reject ? 2 : 12,
-      feasibility_score: reject ? 4 : 8,
+      ai_gap_score: qualifiedNumber(qualification, "ai_gap_score", reject ? 0 : 30),
+      data_workflow_score: qualifiedNumber(qualification, "data_workflow_score", reject ? 5 : account.domain === "moj.io" ? 25 : 22),
+      commercial_urgency_score: qualifiedNumber(qualification, "commercial_urgency_score", reject ? 3 : 14),
+      budget_access_score: qualifiedNumber(qualification, "budget_access_score", reject ? 2 : 12),
+      feasibility_score: qualifiedNumber(qualification, "feasibility_score", reject ? 4 : 8),
       total_score: score,
       tier,
-      next_action: reject
+      next_action: qualification.next_action || (reject
         ? "Reject from this ICP; keep only as a negative-control list item."
-        : "Prioritize for Apollo enrichment and human account research.",
-      warnings: reject ? ["Fails seeded hard gates for pre-2025 non-AI-native incumbents."] : [],
-      hard_gate_failed: reject,
-      hard_gate_unknown: false,
+        : "Prioritize for Apollo enrichment and human account research."),
+      warnings: Array.isArray(qualification.warnings) && qualification.warnings.length ? qualification.warnings : reject ? ["Fails seeded hard gates for pre-2025 non-AI-native incumbents."] : [],
+      hard_gate_failed: typeof qualification.hard_gate_failed === "boolean" ? qualification.hard_gate_failed : reject,
+      hard_gate_unknown: typeof qualification.hard_gate_unknown === "boolean" ? qualification.hard_gate_unknown : false,
     },
     strategy: {
       headline: `${account.company}: ${reject ? "not a fit for the incumbent-software ICP" : "turn proprietary workflow data into a visible AI product narrative"}`,
@@ -645,7 +839,7 @@ function seedLead(runId, account, candidate) {
     metadata: {
       company: account.company,
       domain: account.domain,
-        criteria_profile: seededCriteriaProfile(SEED_LISTS),
+      criteria_profile: seededCriteriaProfile(SEED_LISTS),
       source_counts: { [reject ? "website:company" : "website:product"]: 1 },
       source_refs: sourceRefs,
       signal_tags: signalTags,
@@ -683,6 +877,7 @@ function seedLead(runId, account, candidate) {
         reason: "Seeded account list is available before live Apollo enrichment.",
         organizations: [],
       },
+      qualification,
     },
   };
 }
@@ -702,6 +897,12 @@ function verticalFor(account) {
 
 function isHighPriorityVertical(vertical) {
   return ["dealership", "fleet", "claims", "healthcare admin", "govtech", "field service"].includes(vertical);
+}
+
+function qualifiedNumber(qualification, key, fallback) {
+  const value = qualification?.[key];
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
 }
 
 function evidenceTextFor(account) {
@@ -1323,11 +1524,34 @@ function normalizeDomain(value) {
     .toLowerCase();
 }
 
+function companyDomainFromUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw.includes("://") ? raw : `https://${raw}`);
+    return normalizeDomain(parsed.hostname);
+  } catch {
+    return normalizeDomain(raw);
+  }
+}
+
+function isBlockedDiscoveryDomain(domain) {
+  const clean = normalizeDomain(domain);
+  if (!clean || !clean.includes(".")) return true;
+  return [...BLOCKED_DISCOVERY_HOSTS].some((host) => clean === host || clean.endsWith(`.${host}`));
+}
+
+function companyNameFromTitleOrDomain(title, domain) {
+  const cleanTitle = String(title || "").split(/[-|:]/, 1)[0].replace(/\b(official site|homepage|software|platform)\b/gi, "").trim();
+  if (cleanTitle && cleanTitle.length <= 80) return cleanTitle;
+  return titleCase(normalizeDomain(domain).split(".", 1)[0].replace(/[-_]+/g, " "));
+}
+
 function queryTerms(query) {
   return String(query || "")
     .toLowerCase()
     .split(/[^a-z0-9]+/)
-    .filter((term) => term.length >= 4);
+    .filter((term) => term.length >= 4 && !DISCOVERY_QUERY_STOPWORDS.has(term));
 }
 
 function terms(value) {

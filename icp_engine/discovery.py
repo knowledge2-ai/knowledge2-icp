@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import html
+import json
+import os
 import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
@@ -13,6 +15,7 @@ from .text import normalize_whitespace
 
 
 SEARCH_TIMEOUT_SECONDS = 10
+SERPER_BASE_URL = "https://google.serper.dev"
 BLOCKED_RESULT_HOSTS = {
     "duckduckgo.com",
     "google.com",
@@ -94,19 +97,69 @@ def discover_companies(
     if not query.strip():
         return [], ["Search query is empty."]
 
+    provider = os.environ.get("ICP_SEARCH_PROVIDER", "").strip().lower()
+    serper_key = os.environ.get("SERPER_API_KEY") or os.environ.get("SERP_API_KEY")
+    if fetcher is None and serper_key and provider in {"", "serper", "serp"}:
+        candidates, warnings = discover_companies_with_serper(query, max_results=max_results, api_key=serper_key)
+        if candidates:
+            return candidates, warnings
+        warnings.append("Falling back to DuckDuckGo HTML search.")
+    else:
+        warnings = []
+
     url = f"https://duckduckgo.com/html/?q={quote_plus(query)}"
-    warnings: list[str] = []
     fetch = fetcher or _fetch_url
     try:
         body = fetch(url)
     except Exception as exc:
-        return [], [f"Search provider failed: {exc}"]
+        return [], [*warnings, f"Search provider failed: {exc}"]
 
     links = extract_search_links(body)
     candidates = candidates_from_links(links, max_results=max_results)
     if not candidates:
         warnings.append("No company domains were discovered from search results.")
     return candidates, warnings
+
+
+def discover_companies_with_serper(
+    query: str,
+    *,
+    max_results: int = 10,
+    api_key: str | None = None,
+    fetcher: Callable[[str, bytes, dict[str, str]], str] | None = None,
+) -> tuple[list[DiscoveryCandidate], list[str]]:
+    key = api_key or os.environ.get("SERPER_API_KEY") or os.environ.get("SERP_API_KEY")
+    if not key:
+        return [], ["SERPER_API_KEY or SERP_API_KEY is not configured."]
+    payload = json.dumps({"q": query, "num": max(10, min(max_results * 2, 100))}).encode("utf-8")
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "Knowledge2ICPDiscovery/0.1 (+https://knowledge2.ai)",
+        "X-API-KEY": key,
+    }
+    try:
+        body = (fetcher or _post_json_text)(f"{SERPER_BASE_URL}/search", payload, headers)
+        data = json.loads(body)
+    except Exception as exc:
+        return [], [f"Serper search provider failed: {exc}"]
+    candidates = candidates_from_serper_payload(data, max_results=max_results)
+    warnings = [] if candidates else ["No company domains were discovered from Serper results."]
+    return candidates, warnings
+
+
+def candidates_from_serper_payload(payload: dict[str, object], *, max_results: int = 10) -> list[DiscoveryCandidate]:
+    organic = payload.get("organic")
+    items = organic if isinstance(organic, list) else []
+    links = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        link = str(item.get("link") or "")
+        title = str(item.get("title") or "")
+        snippet = str(item.get("snippet") or "")
+        links.append((link, title or snippet))
+    return candidates_from_links(links, max_results=max_results)
 
 
 def extract_search_links(body: str) -> list[tuple[str, str]]:
@@ -183,6 +236,12 @@ def _fetch_url(url: str) -> str:
             "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
         },
     )
+    with urlopen(request, timeout=SEARCH_TIMEOUT_SECONDS) as response:
+        return response.read(1_500_000).decode(response.headers.get_content_charset() or "utf-8", errors="replace")
+
+
+def _post_json_text(url: str, payload: bytes, headers: dict[str, str]) -> str:
+    request = Request(url, data=payload, method="POST", headers=headers)
     with urlopen(request, timeout=SEARCH_TIMEOUT_SECONDS) as response:
         return response.read(1_500_000).decode(response.headers.get_content_charset() or "utf-8", errors="replace")
 

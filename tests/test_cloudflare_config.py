@@ -34,13 +34,17 @@ class CloudflareConfigTest(unittest.TestCase):
         self.assertNotIn("Admin token required.", worker)
         self.assertIn("SEED_PROMPTS", worker)
         self.assertIn("seed-companies.json", worker)
+        self.assertIn("SERPER_API_KEY", worker)
+        self.assertIn("apollo-company-search", worker)
         self.assertIn("MAX_APOLLO_ENRICH_LEADS", worker)
         self.assertIn("handleApiRequest", worker)
         self.assertNotIn("proxyApiRequest", worker)
         self.assertIn("replace-with-cloudflare-account-id", raw)
 
         seed = json.loads(Path("icp_engine/web_assets/seed-companies.json").read_text(encoding="utf-8"))
-        self.assertGreaterEqual(len(seed["account_universe"]), 300)
+        self.assertGreaterEqual(len(seed["account_universe"]), 428)
+        servicetitan = next(item for item in seed["account_universe"] if item["company"] == "ServiceTitan")
+        self.assertEqual(servicetitan["qualification"]["total_score"], 86)
 
     def test_generated_worker_config_uses_environment_values_without_committing_secrets(self) -> None:
         renderer = _load_renderer()

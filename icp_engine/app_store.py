@@ -153,7 +153,11 @@ def provider_status() -> dict[str, dict[str, Any]]:
         },
         "search": {
             "configured": True,
-            "provider": os.environ.get("ICP_SEARCH_PROVIDER", "duckduckgo-html"),
+            "provider": os.environ.get(
+                "ICP_SEARCH_PROVIDER",
+                "serper" if os.environ.get("SERPER_API_KEY") or os.environ.get("SERP_API_KEY") else "duckduckgo-html",
+            ),
+            "serp_configured": bool(os.environ.get("SERPER_API_KEY") or os.environ.get("SERP_API_KEY")),
         },
     }
 

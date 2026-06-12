@@ -10,6 +10,9 @@ dashboard.
 - `/api/*` requests are served by the Worker from committed seed defaults.
 - Read-only dashboard data, search, run creation, criteria edits, research,
   prospects, CSV export, and K2 dry-runs work without a token.
+- Search expands from the committed seed pack through `SERPER_API_KEY` /
+  `SERP_API_KEY` when configured, or Apollo company search when only
+  `APOLLO_API_KEY` is configured.
 - K2 apply sync requires `ICP_ADMIN_TOKEN` and `Authorization: Bearer <token>`.
 - Secrets are declared by name only in `wrangler.toml`.
 - The K2 tab can dry-run manifest export without K2. With `K2_API_KEY`
@@ -42,7 +45,12 @@ cd deployment/cloudflare
 wrangler secret put K2_API_KEY
 wrangler secret put APOLLO_API_KEY
 wrangler secret put ICP_ADMIN_TOKEN
+wrangler secret put SERPER_API_KEY
 ```
+
+`SERPER_API_KEY` is optional. Without it, the Worker uses Apollo company search
+for live expansion when `APOLLO_API_KEY` is present and otherwise searches the
+committed seed pack plus manual seed text.
 
 Do not use the Cloudflare API token as the dashboard admin token.
 

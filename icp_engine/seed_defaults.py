@@ -83,11 +83,12 @@ SEEDED_PROMPTS: list[dict[str, Any]] = [
 
 SEEDED_SETTINGS: dict[str, Any] = {
     "default_query": SEEDED_PROMPTS[0]["text"],
-    "max_companies": 6,
+    "max_companies": 50,
     "max_pages": 6,
     "fetch_website_evidence": True,
     "include_github_metadata": True,
     "use_apollo_enrichment": False,
+    "use_serp_discovery": True,
     "tier_a_threshold": 75,
     "tier_b_threshold": 60,
     "employee_range": "25-2000 employees",
@@ -160,10 +161,13 @@ def seeded_run() -> dict[str, Any]:
 
 
 def _seed_lead_from_account(account: dict[str, Any]) -> dict[str, Any]:
-    reject = "ai-native" in f"{account.get('category', '')} {account.get('notes', '')}".lower()
+    qualification = _qualification_for(account)
+    qualified_tier = str(qualification.get("tier") or "")
+    reject = qualified_tier == "Reject" or "ai-native" in f"{account.get('category', '')} {account.get('notes', '')}".lower()
     vertical = _vertical_for(account)
-    tier = "Reject" if reject else ("A" if _high_priority_vertical(vertical) else "B")
-    score = 24 if reject else (82 if tier == "A" else 68)
+    tier = qualified_tier if qualified_tier else ("Reject" if reject else ("A" if _high_priority_vertical(vertical) else "B"))
+    fallback_score = 24 if reject else (82 if tier == "A" else 68)
+    score = _qualified_int(qualification, "total_score", fallback_score)
     return _seed_lead(
         company=str(account.get("company", "")),
         domain=str(account.get("domain", "")),
@@ -173,15 +177,16 @@ def _seed_lead_from_account(account: dict[str, Any]) -> dict[str, Any]:
         hq=str(account.get("hq", "")),
         tier=tier,
         score=score,
-        ai_posture=5 if reject else 1,
-        data_workflow=1 if reject else (5 if tier == "A" else 4),
-        feasibility=2 if reject else 3,
+        ai_posture=_qualified_int(qualification, "ai_posture", 5 if reject else 1),
+        data_workflow=_component_level(qualification, "data_workflow_score", 1 if reject else (5 if tier == "A" else 4)),
+        feasibility=_component_level(qualification, "feasibility_score", 2 if reject else 3),
         vertical=vertical,
         evidence_text=str(account.get("notes") or f"{account.get('company')} is listed in a seeded vertical-market software portfolio."),
         source_url=str(account.get("source_url") or f"https://{account.get('domain', '')}"),
         docs_url="",
         github_url="",
         linkedin_url="",
+        qualification=qualification,
     )
 
 
@@ -204,8 +209,12 @@ def _seed_lead(
     docs_url: str,
     github_url: str,
     linkedin_url: str,
+    qualification: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    qualification = qualification or {}
     signal_tags = ["workflow", "data", "commercial"]
+    if qualification:
+        signal_tags.append("qualified-data")
     if docs_url:
         signal_tags.append("integration")
     personas = _personas(vertical, tier)
@@ -260,22 +269,27 @@ def _seed_lead(
                     "commercial_urgency": ["seed-evidence"],
                     "feasibility": ["seed-evidence"] if docs_url else [],
                 },
-                "confidence": 0.72 if tier != "Reject" else 0.55,
-                "source": "seed",
+                "confidence": 0.82 if qualification and tier != "Reject" else 0.72 if tier != "Reject" else 0.55,
+                "source": str(qualification.get("classification_source") or "seed"),
             },
-            "ai_gap_score": 30 if ai_posture <= 1 else 0,
-            "data_workflow_score": min(25, data_workflow * 5),
-            "commercial_urgency_score": 14 if tier != "Reject" else 3,
-            "budget_access_score": 12 if tier != "Reject" else 2,
-            "feasibility_score": min(10, feasibility * 2),
+            "ai_gap_score": _qualified_int(qualification, "ai_gap_score", 30 if ai_posture <= 1 else 0),
+            "data_workflow_score": _qualified_int(qualification, "data_workflow_score", min(25, data_workflow * 5)),
+            "commercial_urgency_score": _qualified_int(qualification, "commercial_urgency_score", 14 if tier != "Reject" else 3),
+            "budget_access_score": _qualified_int(qualification, "budget_access_score", 12 if tier != "Reject" else 2),
+            "feasibility_score": _qualified_int(qualification, "feasibility_score", min(10, feasibility * 2)),
             "total_score": score,
             "tier": tier,
-            "next_action": "Prioritize for Apollo enrichment and human account research."
-            if tier == "A"
-            else "Reject from this ICP; keep only as a negative-control list item.",
-            "warnings": [] if tier != "Reject" else ["Fails seeded hard gates for pre-2025 non-AI-native incumbents."],
-            "hard_gate_failed": tier == "Reject",
-            "hard_gate_unknown": False,
+            "next_action": str(
+                qualification.get("next_action")
+                or (
+                    "Prioritize for Apollo enrichment and human account research."
+                    if tier == "A"
+                    else "Reject from this ICP; keep only as a negative-control list item."
+                )
+            ),
+            "warnings": _qualified_warnings(qualification, [] if tier != "Reject" else ["Fails seeded hard gates for pre-2025 non-AI-native incumbents."]),
+            "hard_gate_failed": bool(qualification.get("hard_gate_failed")) if "hard_gate_failed" in qualification else tier == "Reject",
+            "hard_gate_unknown": bool(qualification.get("hard_gate_unknown")) if "hard_gate_unknown" in qualification else False,
         },
         "strategy": {
             "headline": f"{company}: {_wedge(ai_posture)}",
@@ -358,8 +372,35 @@ def _seed_lead(
                 "reason": "Seeded account list is available before live Apollo enrichment.",
                 "organizations": [],
             },
+            "qualification": qualification,
         },
     }
+
+
+def _qualification_for(account: dict[str, Any]) -> dict[str, Any]:
+    value = account.get("qualification")
+    return value if isinstance(value, dict) else {}
+
+
+def _qualified_int(qualification: dict[str, Any], key: str, default: int) -> int:
+    try:
+        value = qualification.get(key)
+        return int(value) if value is not None and value != "" else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _component_level(qualification: dict[str, Any], key: str, default: int) -> int:
+    if key == "feasibility_score":
+        return max(0, min(5, round(_qualified_int(qualification, key, default * 2) / 2)))
+    return max(0, min(5, round(_qualified_int(qualification, key, default * 5) / 5)))
+
+
+def _qualified_warnings(qualification: dict[str, Any], default: list[str]) -> list[str]:
+    warnings = qualification.get("warnings")
+    if isinstance(warnings, list):
+        return [str(item) for item in warnings if str(item).strip()]
+    return default
 
 
 def _gates(tier: str, founded_year: int | None) -> list[dict[str, Any]]:

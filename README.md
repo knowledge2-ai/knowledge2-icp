@@ -30,15 +30,22 @@ Open `http://127.0.0.1:8765`.
 
 The dashboard can:
 
-- discover company candidates from a search query and manual seeds
+- discover company candidates from a search query, committed seeds, manual seeds,
+  and optional Serper/Apollo company search
 - fetch public website evidence and reuse the existing ICP scoring engine
 - inspect ranked leads, hard gates, evidence, strategy, and recommended personas
 - inspect and export Apollo-backed prospects or strategy persona targets
-- start from a committed 328-account seed universe with Volaris/Harris
-  Constellation portfolio companies plus the named ICP examples from `icp.md`
+- start from a committed 428-account seed universe with Volaris/Harris
+  Constellation portfolio companies, named ICP examples from `icp.md`, and
+  the qualified 100-company data run under `data/`
 - edit the active ICP criteria markdown in local app state
 - ask natural language questions over stored run evidence and metadata
 - optionally call Apollo and GitHub providers when environment variables are configured
+
+Set `SERPER_API_KEY` or `SERP_API_KEY` to use Google SERP discovery through
+Serper. Without it, local Python falls back to DuckDuckGo HTML search and the
+Cloudflare Worker falls back to Apollo company search when `APOLLO_API_KEY` is
+configured, then to seeded/manual candidates.
 
 Local app state is stored under `out/app_state` by default and is ignored by git.
 

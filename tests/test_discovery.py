@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from icp_engine.discovery import candidates_from_links, discover_companies, extract_search_links, parse_seed_companies
+from icp_engine.discovery import candidates_from_links, candidates_from_serper_payload, discover_companies, extract_search_links, parse_seed_companies
 
 
 SEARCH_HTML = """
@@ -41,6 +41,31 @@ class DiscoveryTest(unittest.TestCase):
 
         self.assertFalse(warnings)
         self.assertEqual(candidates[1].domain, "automate.co.za")
+
+    def test_candidates_from_serper_payload(self) -> None:
+        candidates = candidates_from_serper_payload(
+            {
+                "organic": [
+                    {
+                        "title": "ServiceTitan - Software for the Trades",
+                        "link": "https://www.servicetitan.com/",
+                        "snippet": "Field service workflow platform.",
+                    },
+                    {
+                        "title": "LinkedIn ServiceTitan",
+                        "link": "https://www.linkedin.com/company/servicetitan",
+                    },
+                    {
+                        "title": "Samsara: Connected Operations",
+                        "link": "https://samsara.com/",
+                    },
+                ]
+            },
+            max_results=5,
+        )
+
+        self.assertEqual([item.domain for item in candidates], ["servicetitan.com", "samsara.com"])
+        self.assertEqual(candidates[0].company, "ServiceTitan")
 
     def test_parse_seed_companies_accepts_csvish_lines(self) -> None:
         candidates = parse_seed_companies("Mojio, moj.io\nAutomate | automate.co.za\n")

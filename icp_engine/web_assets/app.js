@@ -92,12 +92,7 @@ function applySeededDefaults() {
   if (!$("query").value && state.settings.default_query) {
     $("query").value = state.settings.default_query;
   }
-  if (!$("seed-text").value && state.lists.account_universe?.length) {
-    $("seed-text").value = state.lists.account_universe
-      .map((item) => `${item.company}, ${item.domain}`)
-      .join("\n");
-  }
-  if (state.settings.max_companies && $("max-companies").value === "6") {
+  if (state.settings.max_companies && ["6", "50"].includes($("max-companies").value)) {
     $("max-companies").value = state.settings.max_companies;
   }
   if (state.settings.max_pages && $("max-pages").value === "6") {
