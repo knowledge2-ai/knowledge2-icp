@@ -195,9 +195,25 @@
                 <p class="eyebrow">Criteria</p>
                 <h2>ICP Criteria Markdown</h2>
               </div>
-              <button type="submit">Save criteria</button>
+              <div class="criteria-toolbar" role="toolbar" aria-label="Criteria editor controls">
+                <button id="criteria-undo" type="button" class="secondary" title="Back one edit">Back</button>
+                <button id="criteria-redo" type="button" class="secondary" title="Forward one edit">Forward</button>
+                <button id="criteria-format" type="button" class="secondary">Format</button>
+                <button id="criteria-lint" type="button" class="secondary">Lint</button>
+                <button id="criteria-save" type="submit">Save</button>
+              </div>
             </div>
-            <textarea id="criteria-markdown" spellcheck="false"></textarea>
+            <div class="criteria-version-bar">
+              <button id="criteria-version-back" type="button" class="secondary" title="Previous saved version">Previous version</button>
+              <select id="criteria-version-select" aria-label="Saved criteria versions"></select>
+              <button id="criteria-version-forward" type="button" class="secondary" title="Next saved version">Next version</button>
+              <button id="criteria-restore" type="button" class="secondary">Restore version</button>
+            </div>
+            <p id="criteria-editor-meta" class="criteria-editor-meta"></p>
+            <div class="criteria-workspace">
+              <textarea id="criteria-markdown" spellcheck="false" aria-label="ICP criteria markdown"></textarea>
+              <aside id="criteria-lint-panel" class="criteria-lint-panel" aria-live="polite"></aside>
+            </div>
             <p id="criteria-status" class="muted"></p>
           </form>
         </section>

@@ -37,11 +37,24 @@ class AppStoreTest(unittest.TestCase):
             icp_path.write_text("# Original ICP\n", encoding="utf-8")
             store = AppStore(root / "state", icp_path)
 
-            self.assertEqual(store.load_criteria()["markdown"], "# Original ICP\n")
-            updated = store.save_criteria("# New ICP\n\n- Gate")
+            original = store.load_criteria()
+            self.assertEqual(original["markdown"], "# Original ICP\n")
+            updated = store.save_criteria("# New ICP  \n\n* Gate\t")
 
             self.assertEqual(updated["markdown"], "# New ICP\n\n- Gate\n")
             self.assertTrue((root / "state" / "criteria.md").exists())
+            versions = store.list_criteria_versions()
+            version_hashes = {item["hash"] for item in versions}
+            self.assertIn(original["hash"], version_hashes)
+            self.assertIn(updated["hash"], version_hashes)
+
+            lint = store.lint_criteria("# ICP  \n* Gate")
+            self.assertTrue(lint["changed"])
+            self.assertGreaterEqual(lint["warning_count"], 1)
+
+            restored = store.restore_criteria_version(original["hash"])
+            self.assertIsNotNone(restored)
+            self.assertEqual(restored["markdown"], "# Original ICP\n")
 
     def test_save_run_updates_index_and_loads_latest_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

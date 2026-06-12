@@ -9,6 +9,11 @@ const state = {
   prompts: [],
   settings: {},
   lists: {},
+  criteriaVersions: [],
+  criteriaUndoStack: [],
+  criteriaRedoStack: [],
+  criteriaSuppressHistory: false,
+  criteriaSavedHash: "",
 };
 
 const AUTH_TOKEN_KEY = "knowledge2.icp.adminToken";
@@ -40,7 +45,8 @@ async function loadState() {
   const payload = await api("/api/state");
   state.currentRun = payload.latest_run;
   renderProviders(payload.provider_status || {});
-  renderCriteria(payload.criteria || {});
+  state.criteriaVersions = payload.criteria_versions || [];
+  renderCriteria(payload.criteria || {}, state.criteriaVersions);
   state.prompts = payload.prompts || [];
   state.settings = payload.settings || {};
   state.lists = payload.lists || {};
@@ -239,11 +245,251 @@ function clearCandidatePreview() {
   $("run-status").textContent = "Candidate preview cleared after search inputs changed.";
 }
 
-function renderCriteria(criteria) {
-  $("criteria-markdown").value = criteria.markdown || "";
+function renderCriteria(criteria, versions = state.criteriaVersions, lint = null) {
+  state.criteriaVersions = Array.isArray(versions) ? versions : [];
+  state.criteriaSavedHash = criteria.hash || "";
+  state.criteriaUndoStack = [];
+  state.criteriaRedoStack = [];
+  setCriteriaMarkdown(criteria.markdown || "", { capture: false, renderLint: false });
+  renderCriteriaVersions(criteria.hash || "");
+  renderCriteriaLint(lint || lintCriteriaMarkdown(criteria.markdown || ""));
   $("criteria-status").textContent = criteria.source
-    ? `Loaded from ${criteria.source}; hash ${criteria.hash || "unknown"}`
+    ? `Loaded from ${criteria.source}; active hash ${criteria.hash || "unknown"}`
     : "";
+  updateCriteriaEditorControls();
+}
+
+function criteriaInput() {
+  return $("criteria-markdown");
+}
+
+function setCriteriaMarkdown(value, options = {}) {
+  const input = criteriaInput();
+  if (!input) return;
+  const capture = options.capture !== false;
+  const renderLint = options.renderLint !== false;
+  if (capture && !state.criteriaSuppressHistory && input.value !== value) {
+    pushCriteriaUndo(input.value);
+    state.criteriaRedoStack = [];
+  }
+  state.criteriaSuppressHistory = true;
+  input.value = value;
+  state.criteriaSuppressHistory = false;
+  if (renderLint) renderCriteriaLint(lintCriteriaMarkdown(input.value));
+  updateCriteriaEditorControls();
+}
+
+function pushCriteriaUndo(value) {
+  const stack = state.criteriaUndoStack;
+  if (!stack.length || stack[stack.length - 1] !== value) {
+    stack.push(value);
+  }
+  if (stack.length > 100) stack.shift();
+}
+
+function undoCriteriaEdit() {
+  const input = criteriaInput();
+  if (!input || !state.criteriaUndoStack.length) return;
+  const previous = state.criteriaUndoStack.pop();
+  state.criteriaRedoStack.push(input.value);
+  setCriteriaMarkdown(previous, { capture: false });
+  $("criteria-status").textContent = "Moved back one edit.";
+}
+
+function redoCriteriaEdit() {
+  const input = criteriaInput();
+  if (!input || !state.criteriaRedoStack.length) return;
+  const next = state.criteriaRedoStack.pop();
+  pushCriteriaUndo(input.value);
+  setCriteriaMarkdown(next, { capture: false });
+  $("criteria-status").textContent = "Moved forward one edit.";
+}
+
+function renderCriteriaVersions(selectedHash = "") {
+  const select = $("criteria-version-select");
+  if (!select) return;
+  const versions = state.criteriaVersions || [];
+  select.innerHTML = versions.length
+    ? versions.map((version, index) => `<option value="${escapeAttribute(version.hash || version.id || "")}">
+        ${escapeHtml(criteriaVersionLabel(version, index))}
+      </option>`).join("")
+    : "<option value=\"\">No saved versions</option>";
+  const hash = selectedHash || state.criteriaSavedHash || versions[versions.length - 1]?.hash || "";
+  if (hash && Array.from(select.options).some((option) => option.value === hash)) {
+    select.value = hash;
+  } else if (versions.length) {
+    select.selectedIndex = versions.length - 1;
+  }
+  updateCriteriaEditorControls();
+}
+
+function selectedCriteriaVersion() {
+  const select = $("criteria-version-select");
+  if (!select) return null;
+  const id = select.value;
+  return (state.criteriaVersions || []).find((version) => version.hash === id || version.id === id) || null;
+}
+
+function loadSelectedCriteriaVersion(offset = 0) {
+  const select = $("criteria-version-select");
+  if (!select || !select.options.length || select.value === "") return;
+  if (offset) {
+    const nextIndex = Math.max(0, Math.min(select.options.length - 1, select.selectedIndex + offset));
+    select.selectedIndex = nextIndex;
+  }
+  const version = selectedCriteriaVersion();
+  if (!version) return;
+  setCriteriaMarkdown(version.markdown || "", { capture: true });
+  const active = version.hash === state.criteriaSavedHash ? "active" : "preview";
+  $("criteria-status").textContent = `Loaded ${active} version ${shortHash(version.hash || version.id)} from ${formatVersionDate(version.updated_at)}.`;
+  updateCriteriaEditorControls();
+}
+
+function formatCriteriaMarkdown(markdown) {
+  const lines = String(markdown || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const formatted = [];
+  let blankCount = 0;
+  let inFence = false;
+  for (const rawLine of lines) {
+    let line = rawLine.replace(/\s+$/g, "").replace(/\t/g, "  ");
+    if (line.trim().startsWith("```")) inFence = !inFence;
+    if (!inFence) {
+      line = line.replace(/^(\s*)[*+]\s+(.+)$/, "$1- $2");
+      if (line.startsWith("#") && formatted.length && formatted[formatted.length - 1] !== "") {
+        formatted.push("");
+      }
+    }
+    if (line === "") {
+      blankCount += 1;
+      if (blankCount <= 1) formatted.push(line);
+      continue;
+    }
+    blankCount = 0;
+    formatted.push(line);
+  }
+  while (formatted[0] === "") formatted.shift();
+  while (formatted[formatted.length - 1] === "") formatted.pop();
+  return `${formatted.join("\n")}\n`;
+}
+
+function lintCriteriaMarkdown(markdown) {
+  const text = String(markdown || "");
+  const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const diagnostics = [];
+  const headings = [];
+  let h1Count = 0;
+  let inFence = false;
+  if (!text.trim()) diagnostics.push(criteriaDiagnostic("error", 1, "empty", "Criteria markdown is empty."));
+  lines.forEach((line, index) => {
+    const lineNumber = index + 1;
+    const trimmed = line.trim();
+    if (trimmed.startsWith("```")) inFence = !inFence;
+    if (inFence) return;
+    if (line.replace(/\s+$/g, "") !== line) diagnostics.push(criteriaDiagnostic("warning", lineNumber, "trailing-whitespace", "Remove trailing whitespace."));
+    if (line.includes("\t")) diagnostics.push(criteriaDiagnostic("warning", lineNumber, "tab-indentation", "Use spaces instead of tabs."));
+    if (/^[*+]\s+/.test(trimmed)) diagnostics.push(criteriaDiagnostic("info", lineNumber, "bullet-style", "Use '-' for markdown bullets."));
+    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      const level = heading[1].length;
+      headings.push({ line: lineNumber, level });
+      if (level === 1) h1Count += 1;
+    }
+  });
+  if (text.trim() && !lines.some((line) => line.startsWith("# "))) {
+    diagnostics.push(criteriaDiagnostic("warning", 1, "missing-h1", "Add a top-level '# ...' heading."));
+  }
+  if (h1Count > 1) diagnostics.push(criteriaDiagnostic("warning", 1, "multiple-h1", "Use one top-level H1 heading."));
+  let previousLevel = 0;
+  headings.forEach((heading) => {
+    if (previousLevel && heading.level > previousLevel + 1) {
+      diagnostics.push(criteriaDiagnostic("warning", heading.line, "heading-jump", "Do not skip heading levels."));
+    }
+    previousLevel = heading.level;
+  });
+  const lowered = text.toLowerCase();
+  if (!lowered.includes("tier a")) diagnostics.push(criteriaDiagnostic("info", 1, "tier-a-default", "No Tier A threshold found; default scoring threshold applies."));
+  if (!lowered.includes("tier b")) diagnostics.push(criteriaDiagnostic("info", 1, "tier-b-default", "No Tier B threshold found; default scoring threshold applies."));
+  if (!lowered.includes("employee") && !lowered.includes("budget")) {
+    diagnostics.push(criteriaDiagnostic("info", 1, "budget-default", "No employee or budget range found; default budget gates apply."));
+  }
+  const formatted = formatCriteriaMarkdown(text);
+  return {
+    diagnostics,
+    error_count: diagnostics.filter((item) => item.severity === "error").length,
+    warning_count: diagnostics.filter((item) => item.severity === "warning").length,
+    info_count: diagnostics.filter((item) => item.severity === "info").length,
+    formatted,
+    changed: formatted !== text,
+  };
+}
+
+function criteriaDiagnostic(severity, line, rule, message) {
+  return { severity, line, rule, message };
+}
+
+function renderCriteriaLint(lint) {
+  const panel = $("criteria-lint-panel");
+  if (!panel) return;
+  const diagnostics = lint?.diagnostics || [];
+  const summary = `${lint?.error_count || 0} errors · ${lint?.warning_count || 0} warnings · ${lint?.info_count || 0} notes`;
+  panel.innerHTML = `<div class="criteria-lint-summary">
+      <strong>${escapeHtml(summary)}</strong>
+      <span>${lint?.changed ? "Formatting changes available" : "Formatting is clean"}</span>
+    </div>
+    <div class="criteria-lint-list">
+      ${diagnostics.length
+        ? diagnostics.map((item) => `<div class="criteria-lint-item ${escapeAttribute(item.severity)}">
+            <span>${escapeHtml(item.severity)}</span>
+            <p><strong>Line ${escapeHtml(item.line)} · ${escapeHtml(item.rule)}</strong>${escapeHtml(item.message)}</p>
+          </div>`).join("")
+        : "<div class=\"criteria-lint-item ok\"><span>ok</span><p><strong>No lint issues</strong>The criteria markdown passes the current checks.</p></div>"}
+    </div>`;
+  updateCriteriaMeta(lint);
+}
+
+function updateCriteriaMeta(lint = lintCriteriaMarkdown(criteriaInput()?.value || "")) {
+  const input = criteriaInput();
+  const meta = $("criteria-editor-meta");
+  if (!input || !meta) return;
+  const lineCount = input.value ? input.value.split(/\n/).length : 0;
+  const wordCount = (input.value.trim().match(/\S+/g) || []).length;
+  const selected = selectedCriteriaVersion();
+  const versionText = selected ? `selected ${shortHash(selected.hash || selected.id)}` : "no saved version";
+  meta.textContent = `${lineCount} lines · ${wordCount} words · ${lint.error_count || 0} errors · ${lint.warning_count || 0} warnings · active ${shortHash(state.criteriaSavedHash)} · ${versionText}`;
+}
+
+function updateCriteriaEditorControls() {
+  const input = criteriaInput();
+  const select = $("criteria-version-select");
+  const selectedIndex = select ? select.selectedIndex : -1;
+  const versionCount = select?.options.length || 0;
+  if ($("criteria-undo")) $("criteria-undo").disabled = !state.criteriaUndoStack.length;
+  if ($("criteria-redo")) $("criteria-redo").disabled = !state.criteriaRedoStack.length;
+  if ($("criteria-format")) $("criteria-format").disabled = !input?.value.trim();
+  if ($("criteria-lint")) $("criteria-lint").disabled = !input;
+  if ($("criteria-save")) $("criteria-save").disabled = !input?.value.trim();
+  if ($("criteria-version-back")) $("criteria-version-back").disabled = selectedIndex <= 0;
+  if ($("criteria-version-forward")) $("criteria-version-forward").disabled = selectedIndex < 0 || selectedIndex >= versionCount - 1;
+  if ($("criteria-restore")) $("criteria-restore").disabled = !selectedCriteriaVersion();
+}
+
+function criteriaVersionLabel(version, index) {
+  const prefix = index + 1;
+  const date = formatVersionDate(version.updated_at);
+  const source = version.source ? ` · ${version.source}` : "";
+  return `${prefix}. ${shortHash(version.hash || version.id)} · ${date}${source}`;
+}
+
+function formatVersionDate(value) {
+  if (!value) return "unknown time";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function shortHash(value) {
+  const text = String(value || "");
+  return text ? text.slice(0, 10) : "unknown";
 }
 
 function renderRuns(runs) {
@@ -873,12 +1119,77 @@ $("run-form").addEventListener("submit", async (event) => {
 
 $("criteria-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const payload = await api("/api/criteria", {
-    method: "POST",
-    body: JSON.stringify({ markdown: $("criteria-markdown").value }),
-  });
-  renderCriteria(payload.criteria || {});
-  $("criteria-status").textContent = `Saved criteria hash ${payload.criteria?.hash || ""}`;
+  const button = $("criteria-save");
+  button.disabled = true;
+  $("criteria-status").textContent = "Saving criteria...";
+  try {
+    const payload = await api("/api/criteria", {
+      method: "POST",
+      body: JSON.stringify({ markdown: $("criteria-markdown").value }),
+    });
+    renderCriteria(payload.criteria || {}, payload.versions || state.criteriaVersions, payload.lint || null);
+    $("criteria-status").textContent = `Saved criteria hash ${payload.criteria?.hash || ""}`;
+  } catch (error) {
+    $("criteria-status").textContent = error.message;
+  } finally {
+    updateCriteriaEditorControls();
+  }
+});
+
+$("criteria-markdown").addEventListener("beforeinput", () => {
+  if (state.criteriaSuppressHistory) return;
+  pushCriteriaUndo($("criteria-markdown").value);
+});
+
+$("criteria-markdown").addEventListener("input", () => {
+  if (!state.criteriaSuppressHistory) state.criteriaRedoStack = [];
+  renderCriteriaLint(lintCriteriaMarkdown($("criteria-markdown").value));
+  $("criteria-status").textContent = "Unsaved criteria edits.";
+  updateCriteriaEditorControls();
+});
+
+$("criteria-undo").addEventListener("click", undoCriteriaEdit);
+$("criteria-redo").addEventListener("click", redoCriteriaEdit);
+
+$("criteria-format").addEventListener("click", () => {
+  const lint = lintCriteriaMarkdown($("criteria-markdown").value);
+  setCriteriaMarkdown(lint.formatted, { capture: true });
+  $("criteria-status").textContent = lint.changed ? "Formatted locally. Save to publish the formatted criteria." : "Criteria formatting is already clean.";
+});
+
+$("criteria-lint").addEventListener("click", async () => {
+  $("criteria-status").textContent = "Linting criteria...";
+  try {
+    const lint = await api("/api/criteria/lint", {
+      method: "POST",
+      body: JSON.stringify({ markdown: $("criteria-markdown").value }),
+    });
+    renderCriteriaLint(lint);
+    $("criteria-status").textContent = `Lint complete: ${lint.error_count || 0} errors, ${lint.warning_count || 0} warnings.`;
+  } catch (error) {
+    renderCriteriaLint(lintCriteriaMarkdown($("criteria-markdown").value));
+    $("criteria-status").textContent = error.message;
+  }
+});
+
+$("criteria-version-select").addEventListener("change", () => loadSelectedCriteriaVersion());
+$("criteria-version-back").addEventListener("click", () => loadSelectedCriteriaVersion(-1));
+$("criteria-version-forward").addEventListener("click", () => loadSelectedCriteriaVersion(1));
+
+$("criteria-restore").addEventListener("click", async () => {
+  const version = selectedCriteriaVersion();
+  if (!version) return;
+  $("criteria-status").textContent = "Restoring criteria version...";
+  try {
+    const payload = await api("/api/criteria/restore", {
+      method: "POST",
+      body: JSON.stringify({ id: version.id || version.hash }),
+    });
+    renderCriteria(payload.criteria || {}, payload.versions || state.criteriaVersions, payload.lint || null);
+    $("criteria-status").textContent = `Restored criteria hash ${payload.criteria?.hash || ""}`;
+  } catch (error) {
+    $("criteria-status").textContent = error.message;
+  }
 });
 
 $("research-form").addEventListener("submit", async (event) => {

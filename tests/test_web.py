@@ -46,6 +46,7 @@ class WebApiTest(unittest.TestCase):
             try:
                 state = _json_get(f"{base_url}/api/state")
                 self.assertIn("criteria", state)
+                original_hash = state["criteria"]["hash"]
 
                 health = _json_get(f"{base_url}/healthz")
                 self.assertEqual(health["status"], "ok")
@@ -55,8 +56,21 @@ class WebApiTest(unittest.TestCase):
                 self.assertEqual(readiness["status"], "ok")
                 self.assertIn("provider_status", readiness)
 
-                updated = _json_post(f"{base_url}/api/criteria", {"markdown": "# ICP\n\n- Test"})
+                updated = _json_post(f"{base_url}/api/criteria", {"markdown": "# ICP  \n\n* Test"})
                 self.assertEqual(updated["criteria"]["markdown"], "# ICP\n\n- Test\n")
+                self.assertIn("versions", updated)
+                self.assertIn("lint", updated)
+                self.assertGreaterEqual(len(updated["versions"]), 2)
+
+                lint = _json_post(f"{base_url}/api/criteria/lint", {"markdown": "# ICP  \n* Test"})
+                self.assertTrue(lint["changed"])
+                self.assertGreaterEqual(lint["warning_count"], 1)
+
+                versions = _json_get(f"{base_url}/api/criteria/versions")
+                self.assertIn(original_hash, {item["hash"] for item in versions["versions"]})
+
+                restored = _json_post(f"{base_url}/api/criteria/restore", {"id": original_hash})
+                self.assertEqual(restored["criteria"]["hash"], original_hash)
 
                 run = _json_post(
                     f"{base_url}/api/runs",

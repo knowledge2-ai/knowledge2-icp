@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .criteria_editor import format_criteria_markdown, lint_criteria_markdown
 from .seed_defaults import SEEDED_CRITERIA_MARKDOWN, SEEDED_LISTS, SEEDED_PROMPTS, SEEDED_SETTINGS, SEED_RUN_ID, seeded_run
 
 
@@ -27,6 +28,7 @@ class AppStore:
         self.state_dir = Path(state_dir)
         self.icp_path = Path(icp_path)
         self.criteria_path = self.state_dir / "criteria.md"
+        self.criteria_versions_path = self.state_dir / "criteria_versions.json"
         self.prompts_path = self.state_dir / "prompts.json"
         self.settings_path = self.state_dir / "settings.json"
         self.lists_path = self.state_dir / "lists.json"
@@ -60,8 +62,27 @@ class AppStore:
 
     def save_criteria(self, markdown: str) -> dict[str, Any]:
         self.ensure()
-        cleaned = markdown.strip() + "\n"
+        previous = self.load_criteria()
+        cleaned = format_criteria_markdown(markdown)
+        history = self._criteria_history_with(previous)
         self.criteria_path.write_text(cleaned, encoding="utf-8")
+        saved = self.load_criteria()
+        history = _append_unique_criteria_version(history, saved)
+        self.criteria_versions_path.write_text(json.dumps(history, indent=2, sort_keys=True), encoding="utf-8")
+        return saved
+
+    def lint_criteria(self, markdown: str) -> dict[str, Any]:
+        return lint_criteria_markdown(markdown)
+
+    def list_criteria_versions(self) -> list[dict[str, Any]]:
+        return self._criteria_history_with(self.load_criteria())
+
+    def restore_criteria_version(self, version_id: str) -> dict[str, Any] | None:
+        history = self.list_criteria_versions()
+        selected = next((item for item in history if item.get("id") == version_id or item.get("hash") == version_id), None)
+        if not selected:
+            return None
+        self.criteria_path.write_text(str(selected.get("markdown", "")), encoding="utf-8")
         return self.load_criteria()
 
     def load_prompts(self) -> list[dict[str, Any]]:
@@ -125,6 +146,7 @@ class AppStore:
         runs = self.list_runs()
         return {
             "criteria": self.load_criteria(),
+            "criteria_versions": self.list_criteria_versions(),
             "prompts": self.load_prompts(),
             "settings": self.load_settings(),
             "lists": self.load_lists(),
@@ -132,6 +154,11 @@ class AppStore:
             "provider_status": provider_status(),
             "latest_run": self.load_run(runs[0]["id"]) if runs else None,
         }
+
+    def _criteria_history_with(self, criteria: dict[str, Any]) -> list[dict[str, Any]]:
+        value = _load_json_file(self.criteria_versions_path, list)
+        history = [item for item in value or [] if isinstance(item, dict) and item.get("markdown")]
+        return _append_unique_criteria_version(history, criteria)
 
 
 def provider_status() -> dict[str, dict[str, Any]]:
@@ -183,6 +210,24 @@ def _tier_counts(leads: list[dict[str, Any]]) -> dict[str, int]:
         tier = lead.get("score", {}).get("tier", "Unknown")
         counts[tier] = counts.get(tier, 0) + 1
     return counts
+
+
+def _criteria_version(criteria: dict[str, Any]) -> dict[str, Any]:
+    hash_value = str(criteria.get("hash") or stable_hash(str(criteria.get("markdown", ""))))
+    return {
+        "id": hash_value,
+        "hash": hash_value,
+        "markdown": str(criteria.get("markdown", "")),
+        "source": str(criteria.get("source", "")),
+        "updated_at": str(criteria.get("updated_at", "")),
+    }
+
+
+def _append_unique_criteria_version(history: list[dict[str, Any]], criteria: dict[str, Any]) -> list[dict[str, Any]]:
+    version = _criteria_version(criteria)
+    existing = [item for item in history if item.get("hash") != version["hash"]]
+    existing.append(version)
+    return existing[-50:]
 
 
 def _load_json_file(path: Path, expected_type: type) -> Any | None:

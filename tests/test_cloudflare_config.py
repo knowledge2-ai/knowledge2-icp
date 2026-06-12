@@ -39,6 +39,11 @@ class CloudflareConfigTest(unittest.TestCase):
         self.assertIn("MAX_APOLLO_ENRICH_LEADS", worker)
         self.assertIn("handleApiRequest", worker)
         self.assertNotIn("proxyApiRequest", worker)
+        self.assertIn("criteriaVersions", worker)
+        self.assertIn('url.pathname === "/api/criteria/lint"', worker)
+        self.assertIn('url.pathname === "/api/criteria/restore"', worker)
+        self.assertIn("formatCriteriaMarkdown", worker)
+        self.assertIn("lintCriteriaMarkdown", worker)
         self.assertIn("replace-with-cloudflare-account-id", raw)
 
         seed = json.loads(Path("icp_engine/web_assets/seed-companies.json").read_text(encoding="utf-8"))

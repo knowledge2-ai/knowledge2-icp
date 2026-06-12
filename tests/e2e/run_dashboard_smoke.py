@@ -88,6 +88,18 @@ def main() -> int:
 
                 page.locator("button.tab[data-view='criteria']").click()
                 expect(page.locator("#criteria-markdown")).not_to_be_empty(timeout=timeout)
+                expect(page.locator("#criteria-format")).to_be_visible(timeout=timeout)
+                expect(page.locator("#criteria-lint")).to_be_visible(timeout=timeout)
+                expect(page.locator("#criteria-version-select")).to_be_visible(timeout=timeout)
+                page.locator("#criteria-lint").click()
+                expect(page.locator("#criteria-lint-panel")).to_contain_text("warnings", timeout=timeout)
+                page.locator("#criteria-markdown").fill("# Smoke ICP  \n* Gate")
+                page.locator("#criteria-format").click()
+                expect(page.locator("#criteria-markdown")).to_have_value("# Smoke ICP\n- Gate\n", timeout=timeout)
+                page.locator("#criteria-undo").click()
+                expect(page.locator("#criteria-markdown")).to_have_value("# Smoke ICP  \n* Gate", timeout=timeout)
+                page.locator("#criteria-redo").click()
+                expect(page.locator("#criteria-markdown")).to_have_value("# Smoke ICP\n- Gate\n", timeout=timeout)
 
                 context.close()
                 browser.close()

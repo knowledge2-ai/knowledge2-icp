@@ -158,6 +158,7 @@ const SEED_LISTS = {
 
 const runtime = {
   criteria: null,
+  criteriaVersions: [],
   runs: new Map(),
   seedLists: null,
 };
@@ -217,12 +218,32 @@ async function handleApiRequest(request, env, url) {
     return json(currentState(env, lists));
   }
 
+  if (method === "GET" && url.pathname === "/api/criteria/versions") {
+    return json({ versions: criteriaVersions(), current_hash: currentCriteria().hash });
+  }
+
   if (method === "POST" && url.pathname === "/api/criteria") {
     const payload = await readJson(request);
-    const markdown = String(payload.markdown || "").trim();
-    if (!markdown) return json({ error: "Criteria markdown is required." }, 400);
-    runtime.criteria = criteriaPayload(`${markdown}\n`, "worker-runtime");
-    return json({ criteria: runtime.criteria });
+    const markdown = String(payload.markdown || "");
+    if (!markdown.trim()) return json({ error: "Criteria markdown is required." }, 400);
+    rememberCriteriaVersion(currentCriteria());
+    runtime.criteria = criteriaPayload(formatCriteriaMarkdown(markdown), "worker-runtime", nowIso());
+    rememberCriteriaVersion(runtime.criteria);
+    return json({ criteria: runtime.criteria, versions: criteriaVersions(), lint: lintCriteriaMarkdown(runtime.criteria.markdown) });
+  }
+
+  if (method === "POST" && url.pathname === "/api/criteria/lint") {
+    const payload = await readJson(request);
+    return json(lintCriteriaMarkdown(String(payload.markdown || "")));
+  }
+
+  if (method === "POST" && url.pathname === "/api/criteria/restore") {
+    const payload = await readJson(request);
+    const id = String(payload.id || payload.hash || "");
+    const selected = criteriaVersions().find((item) => item.id === id || item.hash === id);
+    if (!selected) return json({ error: "Criteria version not found." }, 404);
+    runtime.criteria = criteriaPayload(selected.markdown, "worker-runtime", nowIso());
+    return json({ criteria: runtime.criteria, versions: criteriaVersions(), lint: lintCriteriaMarkdown(runtime.criteria.markdown) });
   }
 
   if (method === "POST" && url.pathname === "/api/search") {
@@ -346,6 +367,7 @@ function currentState(env, lists) {
   const runs = listRuns(lists);
   return {
     criteria: currentCriteria(),
+    criteria_versions: criteriaVersions(),
     prompts: clone(SEED_PROMPTS),
     settings: clone(SEED_SETTINGS),
     lists: clone(lists),
@@ -381,13 +403,129 @@ function currentCriteria() {
   return runtime.criteria || criteriaPayload(SEED_CRITERIA_MARKDOWN, "icp.md");
 }
 
-function criteriaPayload(markdown, source) {
+function criteriaPayload(markdown, source, updatedAt = SEED_CREATED_AT) {
+  const hash = criteriaHash(markdown);
   return {
     markdown,
     source,
-    updated_at: SEED_CREATED_AT,
-    hash: "seeded-icp-v1",
+    updated_at: updatedAt,
+    hash,
   };
+}
+
+function criteriaVersions() {
+  rememberCriteriaVersion(currentCriteria());
+  return runtime.criteriaVersions.slice(-50);
+}
+
+function rememberCriteriaVersion(criteria) {
+  const version = {
+    id: criteria.hash,
+    hash: criteria.hash,
+    markdown: criteria.markdown,
+    source: criteria.source,
+    updated_at: criteria.updated_at,
+  };
+  runtime.criteriaVersions = runtime.criteriaVersions.filter((item) => item.hash !== version.hash);
+  runtime.criteriaVersions.push(version);
+  runtime.criteriaVersions = runtime.criteriaVersions.slice(-50);
+}
+
+function formatCriteriaMarkdown(markdown) {
+  const lines = String(markdown || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const formatted = [];
+  let blankCount = 0;
+  let inFence = false;
+  for (const rawLine of lines) {
+    let line = rawLine.replace(/\s+$/g, "").replace(/\t/g, "  ");
+    if (line.trim().startsWith("```")) inFence = !inFence;
+    if (!inFence) {
+      line = line.replace(/^(\s*)[*+]\s+(.+)$/, "$1- $2");
+      if (line.startsWith("#") && formatted.length && formatted[formatted.length - 1] !== "") {
+        formatted.push("");
+      }
+    }
+    if (line === "") {
+      blankCount += 1;
+      if (blankCount <= 1) formatted.push(line);
+      continue;
+    }
+    blankCount = 0;
+    formatted.push(line);
+  }
+  while (formatted[0] === "") formatted.shift();
+  while (formatted[formatted.length - 1] === "") formatted.pop();
+  return `${formatted.join("\n")}\n`;
+}
+
+function lintCriteriaMarkdown(markdown) {
+  const text = String(markdown || "");
+  const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const diagnostics = [];
+  const headings = [];
+  let h1Count = 0;
+  let inFence = false;
+  if (!text.trim()) diagnostics.push(criteriaDiagnostic("error", 1, "empty", "Criteria markdown is empty."));
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const lineNumber = index + 1;
+    const trimmed = line.trim();
+    if (trimmed.startsWith("```")) inFence = !inFence;
+    if (inFence) continue;
+    if (line.replace(/\s+$/g, "") !== line) diagnostics.push(criteriaDiagnostic("warning", lineNumber, "trailing-whitespace", "Remove trailing whitespace."));
+    if (line.includes("\t")) diagnostics.push(criteriaDiagnostic("warning", lineNumber, "tab-indentation", "Use spaces instead of tabs."));
+    if (/^[*+]\s+/.test(trimmed)) diagnostics.push(criteriaDiagnostic("info", lineNumber, "bullet-style", "Use '-' for markdown bullets."));
+    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      const level = heading[1].length;
+      headings.push({ line: lineNumber, level });
+      if (level === 1) h1Count += 1;
+    }
+  }
+  if (text.trim() && !lines.some((line) => line.startsWith("# "))) {
+    diagnostics.push(criteriaDiagnostic("warning", 1, "missing-h1", "Add a top-level '# ...' heading."));
+  }
+  if (h1Count > 1) diagnostics.push(criteriaDiagnostic("warning", 1, "multiple-h1", "Use one top-level H1 heading."));
+  let previousLevel = 0;
+  for (const heading of headings) {
+    if (previousLevel && heading.level > previousLevel + 1) {
+      diagnostics.push(criteriaDiagnostic("warning", heading.line, "heading-jump", "Do not skip heading levels."));
+    }
+    previousLevel = heading.level;
+  }
+  const lowered = text.toLowerCase();
+  if (!lowered.includes("tier a")) diagnostics.push(criteriaDiagnostic("info", 1, "tier-a-default", "No Tier A threshold found; default scoring threshold applies."));
+  if (!lowered.includes("tier b")) diagnostics.push(criteriaDiagnostic("info", 1, "tier-b-default", "No Tier B threshold found; default scoring threshold applies."));
+  if (!lowered.includes("employee") && !lowered.includes("budget")) {
+    diagnostics.push(criteriaDiagnostic("info", 1, "budget-default", "No employee or budget range found; default budget gates apply."));
+  }
+  const formatted = formatCriteriaMarkdown(text);
+  return {
+    diagnostics,
+    error_count: diagnostics.filter((item) => item.severity === "error").length,
+    warning_count: diagnostics.filter((item) => item.severity === "warning").length,
+    info_count: diagnostics.filter((item) => item.severity === "info").length,
+    formatted,
+    changed: formatted !== text,
+  };
+}
+
+function criteriaDiagnostic(severity, line, rule, message) {
+  return { severity, line, rule, message };
+}
+
+function criteriaHash(markdown) {
+  let hash = 2166136261;
+  const text = String(markdown || "");
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `criteria-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function nowIso() {
+  return new Date().toISOString().replace(/\.\d{3}Z$/, "+00:00");
 }
 
 function listRuns(lists) {

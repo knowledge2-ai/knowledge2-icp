@@ -71,6 +71,9 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
             if parsed.path == "/api/state":
                 self._send_json(app.store.state())
                 return
+            if parsed.path == "/api/criteria/versions":
+                self._send_json({"versions": app.store.list_criteria_versions(), "current_hash": app.store.load_criteria().get("hash")})
+                return
             if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/k2-manifest"):
                 run_id = parsed.path.split("/")[3]
                 run = app.store.load_run(run_id)
@@ -120,7 +123,20 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                 if not markdown.strip():
                     self._send_json({"error": "Criteria markdown is required."}, status=HTTPStatus.BAD_REQUEST)
                     return
-                self._send_json({"criteria": app.store.save_criteria(markdown)})
+                criteria = app.store.save_criteria(markdown)
+                self._send_json({"criteria": criteria, "versions": app.store.list_criteria_versions(), "lint": app.store.lint_criteria(criteria["markdown"])})
+                return
+            if parsed.path == "/api/criteria/lint":
+                payload = self._read_json()
+                self._send_json(app.store.lint_criteria(str(payload.get("markdown", ""))))
+                return
+            if parsed.path == "/api/criteria/restore":
+                payload = self._read_json()
+                criteria = app.store.restore_criteria_version(str(payload.get("id") or payload.get("hash") or ""))
+                if not criteria:
+                    self._send_json({"error": "Criteria version not found."}, status=HTTPStatus.NOT_FOUND)
+                    return
+                self._send_json({"criteria": criteria, "versions": app.store.list_criteria_versions(), "lint": app.store.lint_criteria(criteria["markdown"])})
                 return
             if parsed.path == "/api/search":
                 payload = self._read_json()

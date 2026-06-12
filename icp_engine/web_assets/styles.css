@@ -521,11 +521,138 @@ h1 {
   padding: 18px;
 }
 
+.criteria-toolbar,
+.criteria-version-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.criteria-toolbar button,
+.criteria-version-bar button {
+  min-height: 34px;
+  padding: 0 11px;
+}
+
+.criteria-version-bar {
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px;
+}
+
+.criteria-version-bar select {
+  flex: 1 1 280px;
+  min-width: 220px;
+  background: #fff;
+}
+
+.criteria-editor-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.criteria-workspace {
+  display: grid;
+  grid-template-columns: minmax(420px, 1fr) minmax(300px, 0.42fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
 .criteria-editor textarea {
   min-height: 62vh;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.9rem;
   line-height: 1.5;
+}
+
+.criteria-lint-panel {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 280px;
+  max-height: 62vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 12px;
+}
+
+.criteria-lint-summary {
+  display: grid;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 10px;
+}
+
+.criteria-lint-summary span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.criteria-lint-list {
+  display: grid;
+  gap: 8px;
+}
+
+.criteria-lint-item {
+  display: grid;
+  grid-template-columns: 76px 1fr;
+  gap: 8px;
+  align-items: start;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  padding: 9px;
+}
+
+.criteria-lint-item span {
+  border-radius: 999px;
+  padding: 4px 7px;
+  text-align: center;
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.criteria-lint-item p {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.criteria-lint-item strong {
+  color: var(--ink);
+}
+
+.criteria-lint-item.error span {
+  background: #f8dddd;
+  color: #8d2f2f;
+}
+
+.criteria-lint-item.warning span {
+  background: #fff0d6;
+  color: #7d4a11;
+}
+
+.criteria-lint-item.info span {
+  background: #e9edf5;
+  color: #335c99;
+}
+
+.criteria-lint-item.ok span {
+  background: #dff2e7;
+  color: #12613e;
 }
 
 .section-heading {
@@ -856,9 +983,19 @@ h1 {
   }
 
   .prospect-focus,
-  .prospect-company-title {
+  .prospect-company-title,
+  .section-heading {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .criteria-toolbar,
+  .criteria-version-bar {
+    justify-content: flex-start;
+  }
+
+  .criteria-workspace {
+    grid-template-columns: 1fr;
   }
 
   .toolbar,
