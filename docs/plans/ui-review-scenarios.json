@@ -1,0 +1,196 @@
+{
+  "settings": {
+    "base_url": "http://127.0.0.1:8765",
+    "output_dir": "docs/designs/screenshots/original",
+    "viewport": {
+      "width": 1440,
+      "height": 980
+    },
+    "color_scheme": "light",
+    "full_page": true,
+    "settle_ms": 800,
+    "nav_timeout_ms": 15000,
+    "loading_selectors": []
+  },
+  "variables": {},
+  "seed_commands": [],
+  "scenarios": [
+    {
+      "name": "01_core_dashboard",
+      "description": "Capture the primary BDR lead queue and account drilldown state.",
+      "steps": [
+        {
+          "action": "goto",
+          "url": "/",
+          "wait_until": "domcontentloaded"
+        },
+        {
+          "action": "wait_for_selector",
+          "selector": "#lead-rows .lead-row",
+          "timeout_ms": 10000
+        },
+        {
+          "action": "screenshot",
+          "name": "01_leads_queue"
+        },
+        {
+          "action": "click",
+          "selector": "#lead-rows .lead-row"
+        },
+        {
+          "action": "wait_for_selector",
+          "selector": "#account-drilldown .account-title",
+          "timeout_ms": 10000
+        },
+        {
+          "action": "screenshot",
+          "name": "02_account_drilldown"
+        }
+      ]
+    },
+    {
+      "name": "02_sources_and_research",
+      "description": "Capture source management and the research answer flow.",
+      "steps": [
+        {
+          "action": "click",
+          "selector": "button.tab[data-view='sources']"
+        },
+        {
+          "action": "wait_for_selector",
+          "selector": "#source-list .source-item",
+          "timeout_ms": 10000
+        },
+        {
+          "action": "screenshot",
+          "name": "03_sources_manager"
+        },
+        {
+          "action": "click",
+          "selector": "button.tab[data-view='research']"
+        },
+        {
+          "action": "fill",
+          "selector": "#research-question",
+          "value": "Which Tier A companies should a BDR work first, and what proof should they mention?"
+        },
+        {
+          "action": "click",
+          "selector": "#research-form button[type='submit']"
+        },
+        {
+          "action": "wait_for_selector",
+          "selector": ".research-answer-text",
+          "timeout_ms": 10000
+        },
+        {
+          "action": "screenshot",
+          "name": "04_research_answer"
+        }
+      ]
+    },
+    {
+      "name": "03_ops_quality_setup",
+      "description": "Capture K2, eval, and setup/operator surfaces.",
+      "steps": [
+        {
+          "action": "click",
+          "selector": "button.tab[data-view='k2']"
+        },
+        {
+          "action": "click",
+          "selector": "#k2-workspace-status"
+        },
+        {
+          "action": "wait_for_selector",
+          "selector": ".workspace-status-list",
+          "timeout_ms": 10000
+        },
+        {
+          "action": "screenshot",
+          "name": "05_k2_workspace"
+        },
+        {
+          "action": "click",
+          "selector": "button.tab[data-view='evals']"
+        },
+        {
+          "action": "click",
+          "selector": "#run-eval"
+        },
+        {
+          "action": "wait_for_selector",
+          "selector": ".eval-metrics",
+          "timeout_ms": 10000
+        },
+        {
+          "action": "screenshot",
+          "name": "06_evals_summary"
+        },
+        {
+          "action": "click",
+          "selector": "button.tab[data-view='setup']"
+        },
+        {
+          "action": "wait_for_selector",
+          "selector": "#setup-grid",
+          "timeout_ms": 10000
+        },
+        {
+          "action": "screenshot",
+          "name": "07_setup",
+          "full_page": false
+        }
+      ]
+    },
+    {
+      "name": "04_criteria_runs_empty",
+      "description": "Capture criteria editing, run history, and a no-result queue state.",
+      "steps": [
+        {
+          "action": "click",
+          "selector": "button.tab[data-view='criteria']"
+        },
+        {
+          "action": "wait_for_selector",
+          "selector": "#criteria-markdown",
+          "timeout_ms": 10000
+        },
+        {
+          "action": "screenshot",
+          "name": "08_criteria_editor"
+        },
+        {
+          "action": "click",
+          "selector": "button.tab[data-view='runs']"
+        },
+        {
+          "action": "wait_for_selector",
+          "selector": "#run-list",
+          "timeout_ms": 10000
+        },
+        {
+          "action": "screenshot",
+          "name": "09_runs"
+        },
+        {
+          "action": "click",
+          "selector": "button.tab[data-view='leads']"
+        },
+        {
+          "action": "fill",
+          "selector": "#lead-filter",
+          "value": "zzzz-no-matching-account"
+        },
+        {
+          "action": "wait",
+          "ms": 500
+        },
+        {
+          "action": "screenshot",
+          "name": "10_leads_empty_filter"
+        }
+      ]
+    }
+  ]
+}
