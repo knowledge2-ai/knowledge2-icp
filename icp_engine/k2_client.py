@@ -78,6 +78,212 @@ class K2RestClient:
         )
         return _dict_payload(payload)
 
+    def get_job(self, job_id: str) -> dict[str, Any]:
+        payload = self._request("GET", f"/v1/jobs/{job_id}")
+        return _dict_payload(payload)
+
+    def sync_indexes(self, corpus_id: str, *, idempotency_key: str | None = None) -> dict[str, Any]:
+        headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
+        payload = self._request("POST", f"/v1/corpora/{corpus_id}/indexes:sync", headers=headers)
+        return _dict_payload(payload)
+
+    def discover_metadata(
+        self,
+        corpus_id: str,
+        *,
+        refresh: bool = False,
+        include: str | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {}
+        if refresh:
+            params["refresh"] = "true"
+        if include:
+            params["include"] = include
+        payload = self._request("GET", f"/v1/corpora/{corpus_id}/metadata/discover", params=params)
+        return _dict_payload(payload)
+
+    def search_batch(self, corpus_id: str, queries: list[str], *, top_k: int = 5) -> dict[str, Any]:
+        payload = self._request(
+            "POST",
+            f"/v1/corpora/{corpus_id}/search:batch",
+            body={"queries": queries, "top_k": max(1, min(top_k, 20))},
+        )
+        return _dict_payload(payload)
+
+    def list_agents(self, project_id: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+        payload = self._request(
+            "GET",
+            "/v1/agents",
+            params={"project_id": project_id, "limit": limit, "offset": offset},
+        )
+        return _list_from_payload(payload, "agents")
+
+    def create_agent(
+        self,
+        *,
+        project_id: str,
+        name: str,
+        corpus_id: str,
+        description: str = "",
+        task_type: str = "query",
+        instructions: str | None = None,
+        declared_schema: dict[str, Any] | None = None,
+        harvest_policy: str | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "project_id": project_id,
+            "name": name,
+            "corpus_id": corpus_id,
+            "description": description,
+            "task_type": task_type,
+        }
+        if instructions is not None:
+            body["instructions"] = instructions
+        if declared_schema is not None:
+            body["declared_schema"] = declared_schema
+        if harvest_policy is not None:
+            body["harvest_policy"] = harvest_policy
+        payload = self._request("POST", "/v1/agents", body=body)
+        return _dict_payload(payload)
+
+    def ensure_agent(self, *, project_id: str, name: str, **kwargs: Any) -> dict[str, Any]:
+        for agent in self.list_agents(project_id):
+            if agent.get("name") == name:
+                return agent
+        return self.create_agent(project_id=project_id, name=name, **kwargs)
+
+    def update_agent(
+        self,
+        agent_id: str,
+        *,
+        corpus_id: str | None = None,
+        description: str | None = None,
+        task_type: str | None = None,
+        instructions: str | None = None,
+        declared_schema: dict[str, Any] | None = None,
+        harvest_policy: str | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {}
+        if corpus_id is not None:
+            body["corpus_id"] = corpus_id
+        if description is not None:
+            body["description"] = description
+        if task_type is not None:
+            body["task_type"] = task_type
+        if instructions is not None:
+            body["instructions"] = instructions
+        if declared_schema is not None:
+            body["declared_schema"] = declared_schema
+        if harvest_policy is not None:
+            body["harvest_policy"] = harvest_policy
+        payload = self._request("PATCH", f"/v1/agents/{agent_id}", body=body)
+        return _dict_payload(payload)
+
+    def activate_agent(self, agent_id: str) -> dict[str, Any]:
+        payload = self._request("POST", f"/v1/agents/{agent_id}/activate")
+        return _dict_payload(payload)
+
+    def list_feeds(self, project_id: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+        payload = self._request(
+            "GET",
+            "/v1/feeds",
+            params={"project_id": project_id, "limit": limit, "offset": offset},
+        )
+        return _list_from_payload(payload, "feeds")
+
+    def create_feed(
+        self,
+        *,
+        project_id: str,
+        name: str,
+        source_agent_id: str,
+        description: str = "",
+        target_corpus_id: str | None = None,
+        persistent: bool = False,
+        reactive: bool = False,
+        execution_mode: str = "retrieve",
+        schedule_interval: str | None = None,
+        schedule_hour: int | None = None,
+        schedule_cron: str | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "project_id": project_id,
+            "name": name,
+            "source_agent_id": source_agent_id,
+            "description": description,
+            "persistent": persistent,
+            "reactive": reactive,
+            "execution_mode": execution_mode,
+        }
+        if target_corpus_id is not None:
+            body["target_corpus"] = {"existing": target_corpus_id}
+        if schedule_interval is not None:
+            body["schedule_interval"] = schedule_interval
+        if schedule_hour is not None:
+            body["schedule_hour"] = schedule_hour
+        if schedule_cron is not None:
+            body["schedule_cron"] = schedule_cron
+        payload = self._request("POST", "/v1/feeds", body=body)
+        return _dict_payload(payload)
+
+    def ensure_feed(self, *, project_id: str, name: str, **kwargs: Any) -> dict[str, Any]:
+        for feed in self.list_feeds(project_id):
+            if feed.get("name") == name:
+                return feed
+        return self.create_feed(project_id=project_id, name=name, **kwargs)
+
+    def list_pipeline_specs(
+        self,
+        project_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        payload = self._request(
+            "GET",
+            "/v1/pipeline-specs",
+            params={"project_id": project_id, "limit": limit, "offset": offset},
+        )
+        return _list_from_payload(payload, "pipeline_specs")
+
+    def create_pipeline_spec(
+        self,
+        *,
+        project_id: str,
+        name: str,
+        topology: dict[str, Any],
+        description: str = "",
+    ) -> dict[str, Any]:
+        payload = self._request(
+            "POST",
+            "/v1/pipeline-specs",
+            body={
+                "project_id": project_id,
+                "name": name,
+                "description": description,
+                "topology": topology,
+            },
+        )
+        return _dict_payload(payload)
+
+    def ensure_pipeline_spec(
+        self,
+        *,
+        project_id: str,
+        name: str,
+        topology: dict[str, Any],
+        description: str = "",
+    ) -> dict[str, Any]:
+        for spec in self.list_pipeline_specs(project_id):
+            if spec.get("name") == name:
+                return spec
+        return self.create_pipeline_spec(
+            project_id=project_id,
+            name=name,
+            topology=topology,
+            description=description,
+        )
+
     def generate_answer(
         self,
         corpus_id: str,

@@ -68,6 +68,16 @@ K2 sync is dry-run by default:
 python3 -m icp_engine.k2_sync --run-id <run-id> --state-dir out/app_state
 ```
 
+The K2-native ICP workspace bootstrap can create the five ICP corpora,
+seed/index them, and ensure the ICP agents, feeds, and PipelineSpec:
+
+```bash
+K2_API_KEY=<k2-token> K2_BASE_URL=https://api-dev.knowledge2.ai \
+  python3 -m icp_engine.k2_workspace \
+  --project-name "Knowledge2 ICP GTM Dev" \
+  --apply-uploads --apply-indexes --apply-primitives --health-check
+```
+
 The Research tab answers from local run evidence by default. After a live K2
 sync applies and stores a `corpus_id` on the run, or when `K2_RESEARCH_CORPUS_ID`
 is configured, research requests use K2 generation with a `run_id` metadata
