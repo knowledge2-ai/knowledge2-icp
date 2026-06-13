@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import hmac
 import ipaddress
 import json
 import mimetypes
 import os
+import secrets
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -21,6 +25,7 @@ from .research import ResearchPipeline
 
 ASSET_DIR = Path(__file__).with_name("web_assets")
 APP_VERSION = "0.1.0"
+API_SESSION_TTL_SECONDS = 8 * 60 * 60
 
 
 class GTMApp:
@@ -240,6 +245,9 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
+            if parsed.path == "/api/auth/session":
+                self._send_auth_session()
+                return
             if parsed.path.startswith("/api/") and not self._authorize_api():
                 self._send_unauthorized()
                 return
@@ -738,7 +746,28 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
             scheme, _, token = auth_header.partition(" ")
             if scheme.lower() != "bearer" or not token:
                 return False
-            return hmac.compare_digest(token.strip(), app.admin_token)
+            presented = token.strip()
+            return hmac.compare_digest(presented, app.admin_token) or _verify_session_token(app.admin_token, presented)
+
+        def _send_auth_session(self) -> None:
+            if not app.admin_token:
+                self._send_json({"error": "ICP_ADMIN_TOKEN is required for API access."}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            payload = self._read_json()
+            auth_header = self.headers.get("Authorization", "")
+            scheme, _, bearer = auth_header.partition(" ")
+            token = str(payload.get("token") or (bearer if scheme.lower() == "bearer" else "")).strip()
+            if not hmac.compare_digest(token, app.admin_token):
+                self._send_unauthorized()
+                return
+            now = int(time.time())
+            self._send_json(
+                {
+                    "session_token": _create_session_token(app.admin_token, now),
+                    "expires_at": _iso_from_epoch(now + API_SESSION_TTL_SECONDS),
+                    "expires_in_seconds": API_SESSION_TTL_SECONDS,
+                }
+            )
 
         def _send_unauthorized(self) -> None:
             body = json.dumps({"error": "Admin token required."}, indent=2, sort_keys=True).encode("utf-8")
@@ -810,6 +839,48 @@ def _health_payload(app: GTMApp, *, detailed: bool) -> dict[str, Any]:
             }
         )
     return payload
+
+
+def _create_session_token(secret: str, now: int) -> str:
+    payload = {
+        "exp": now + API_SESSION_TTL_SECONDS,
+        "iat": now,
+        "nonce": secrets.token_urlsafe(16),
+    }
+    payload_b64 = _base64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    signature = _session_signature(secret, payload_b64)
+    return f"{payload_b64}.{_base64url_encode(signature)}"
+
+
+def _verify_session_token(secret: str, token: str) -> bool:
+    try:
+        payload_b64, signature_b64 = token.split(".", 1)
+        if "." in signature_b64:
+            return False
+        expected = _base64url_encode(_session_signature(secret, payload_b64))
+        if not hmac.compare_digest(signature_b64, expected):
+            return False
+        payload = json.loads(_base64url_decode(payload_b64).decode("utf-8"))
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    exp = payload.get("exp")
+    return isinstance(exp, int | float) and exp > time.time()
+
+
+def _session_signature(secret: str, payload_b64: str) -> bytes:
+    return hmac.new(secret.encode("utf-8"), payload_b64.encode("ascii"), hashlib.sha256).digest()
+
+
+def _base64url_encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _base64url_decode(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + ("=" * (-len(value) % 4)))
+
+
+def _iso_from_epoch(epoch_seconds: int) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch_seconds))
 
 
 def _candidate_payloads(candidates: list[Any]) -> list[dict[str, Any]]:

@@ -40,6 +40,7 @@ const STATE_COLLECTIONS = [
   { key: "eval_cases", type: "array" },
   { key: "eval_runs", type: "array" },
 ];
+const API_SESSION_TTL_SECONDS = 8 * 60 * 60;
 const BLOCKED_DISCOVERY_HOSTS = new Set([
   "bing.com",
   "capterra.com",
@@ -283,20 +284,33 @@ export default {
 
 async function handleApiRequest(request, env, url) {
   const method = request.method.toUpperCase();
-  const lists = await seedLists(env);
+  if (method === "POST" && url.pathname === "/api/auth/session") {
+    return createApiSessionResponse(request, env);
+  }
+  const auth = await authorizeApiRequest(request, env);
   if (method === "GET" && url.pathname === "/api/health") {
+    const lists = await seedLists(env);
     return json({
       status: "ok",
       service: "knowledge2-icp",
       version: "0.1.0-worker",
-      auth_required: false,
-      protected_actions: ["k2_apply_sync"],
+      auth_required: auth.configured,
+      authenticated: auth.authorized,
+      protected_actions: ["all_api_routes"],
       mode: "seeded-worker",
       run_count: (await listRuns(env, lists)).length,
       provider_status: providerStatus(env),
       provider_controls: await providerControls(env),
     });
   }
+  if (!auth.configured) {
+    return json({ error: "ICP_ADMIN_TOKEN is required for API access." }, 503);
+  }
+  if (!auth.authorized) {
+    return unauthorized("API token required.");
+  }
+
+  const lists = await seedLists(env);
 
   if (method === "GET" && url.pathname === "/api/state") {
     return json(await currentState(env, lists));
@@ -674,7 +688,7 @@ async function handleApiRequest(request, env, url) {
           mode: "cloudflare-worker",
         });
       }
-      const auth = authorizeApiRequest(request, env);
+      const auth = await authorizeApiRequest(request, env);
       if (!auth.configured) {
         return json({ error: "ICP_ADMIN_TOKEN is required for K2 apply sync." }, 503);
       }
@@ -3882,16 +3896,101 @@ async function k2Request(baseUrl, apiKey, method, path, body, extraHeaders = {})
   return payload;
 }
 
-function authorizeApiRequest(request, env) {
+async function createApiSessionResponse(request, env) {
   const expected = String(env.ICP_ADMIN_TOKEN || "").trim();
-  if (!expected) return { configured: false, authorized: false };
+  if (!expected) return json({ error: "ICP_ADMIN_TOKEN is required for API access." }, 503);
+  const payload = await readJson(request);
+  const token = String(payload.token || bearerToken(request) || "").trim();
+  if (!constantTimeEqual(token, expected)) return unauthorized("API token required.");
+  const sessionToken = await createSessionToken(expected);
+  const expiresAt = new Date((Math.floor(Date.now() / 1000) + API_SESSION_TTL_SECONDS) * 1000).toISOString();
+  return json({
+    session_token: sessionToken,
+    expires_at: expiresAt,
+    expires_in_seconds: API_SESSION_TTL_SECONDS,
+  });
+}
+
+async function authorizeApiRequest(request, env) {
+  const expected = String(env.ICP_ADMIN_TOKEN || "").trim();
+  if (!expected) return { configured: false, authorized: false, mode: "missing" };
+  const token = bearerToken(request);
+  if (!token) return { configured: true, authorized: false, mode: "missing" };
+  if (constantTimeEqual(token, expected)) return { configured: true, authorized: true, mode: "admin_token" };
+  if (await verifySessionToken(expected, token)) return { configured: true, authorized: true, mode: "session" };
+  return { configured: true, authorized: false, mode: "invalid" };
+}
+
+function bearerToken(request) {
   const authHeader = request.headers.get("authorization") || "";
   const [scheme, ...parts] = authHeader.split(" ");
-  const token = parts.join(" ").trim();
-  return {
-    configured: true,
-    authorized: scheme.toLowerCase() === "bearer" && constantTimeEqual(token, expected),
-  };
+  if (scheme.toLowerCase() !== "bearer") return "";
+  return parts.join(" ").trim();
+}
+
+async function createSessionToken(secret) {
+  const now = Math.floor(Date.now() / 1000);
+  const payload = base64urlEncodeUtf8(JSON.stringify({
+    exp: now + API_SESSION_TTL_SECONDS,
+    iat: now,
+    nonce: crypto.randomUUID(),
+  }));
+  const signature = await hmacSha256Base64Url(secret, payload);
+  return `${payload}.${signature}`;
+}
+
+async function verifySessionToken(secret, token) {
+  const [payload, signature, extra] = String(token || "").split(".");
+  if (!payload || !signature || extra !== undefined) return false;
+  const expected = await hmacSha256Base64Url(secret, payload);
+  if (!constantTimeEqual(signature, expected)) return false;
+  try {
+    const decoded = JSON.parse(base64urlDecodeUtf8(payload));
+    const exp = Number(decoded.exp || 0);
+    return Number.isFinite(exp) && exp > Math.floor(Date.now() / 1000);
+  } catch {
+    return false;
+  }
+}
+
+async function hmacSha256Base64Url(secret, message) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  return base64urlEncodeBytes(new Uint8Array(signature));
+}
+
+function base64urlEncodeUtf8(value) {
+  return base64urlEncodeBytes(new TextEncoder().encode(value));
+}
+
+function base64urlEncodeBytes(bytes) {
+  let binary = "";
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return encodeBase64(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function base64urlDecodeUtf8(value) {
+  const binary = decodeBase64(value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "="));
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+function encodeBase64(binary) {
+  if (typeof btoa === "function") return btoa(binary);
+  return Buffer.from(binary, "binary").toString("base64");
+}
+
+function decodeBase64(value) {
+  if (typeof atob === "function") return atob(value);
+  return Buffer.from(value, "base64").toString("binary");
 }
 
 function constantTimeEqual(left, right) {

@@ -9,12 +9,14 @@ dashboard.
 - `/healthz` returns public edge liveness metadata.
 - `/api/*` requests are served by the Worker from committed seed defaults plus
   the `ICP_STATE` KV namespace for mutable dashboard state.
-- Read-only dashboard data, search, run creation, criteria edits, research,
-  prospects, CSV export, and K2 dry-runs work without a token.
+- `/api/health` and `/api/auth/session` are public bootstrap endpoints. All
+  other `/api/*` routes require `ICP_ADMIN_TOKEN` or a short-lived session token
+  minted by `/api/auth/session`.
 - Search expands from the committed seed pack through `SERPER_API_KEY` /
   `SERP_API_KEY` when configured, or Apollo company search when only
   `APOLLO_API_KEY` is configured.
-- K2 apply sync requires `ICP_ADMIN_TOKEN` and `Authorization: Bearer <token>`.
+- The dashboard exchanges `ICP_ADMIN_TOKEN` for an eight-hour browser session;
+  the raw admin token is not stored in browser localStorage.
 - Secrets are declared by name only in `wrangler.toml`.
 - Criteria edits, saved sources/scans, provider usage, runtime runs, lead
   workflow states, and quality feedback are persisted in KV.
@@ -36,7 +38,10 @@ Then check:
 
 ```bash
 curl -sS http://127.0.0.1:8787/healthz
-curl -sS http://127.0.0.1:8787/api/state
+curl -sS http://127.0.0.1:8787/api/health
+curl -sS -X POST http://127.0.0.1:8787/api/auth/session \
+  -H 'content-type: application/json' \
+  -d '{"token":"<dashboard-admin-token>"}'
 ```
 
 ## Secret Setup

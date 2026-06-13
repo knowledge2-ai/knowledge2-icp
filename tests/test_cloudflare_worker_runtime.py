@@ -33,10 +33,12 @@ class CloudflareWorkerRuntimeTest(unittest.TestCase):
               return (await import(`${workerUrl}?fresh=${tag}`)).default;
             }
 
-            async function request(worker, env, path, payload) {
+            async function request(worker, env, path, payload, token) {
+              const headers = { "content-type": "application/json" };
+              if (token) headers.authorization = `Bearer ${token}`;
               const init = payload === undefined
-                ? {}
-                : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) };
+                ? { headers }
+                : { method: "POST", headers, body: JSON.stringify(payload) };
               const response = await worker.fetch(new Request(`https://worker.test${path}`, init), env);
               const body = await response.json();
               if (!response.ok) throw new Error(`${path} failed ${response.status}: ${JSON.stringify(body)}`);
@@ -44,28 +46,46 @@ class CloudflareWorkerRuntimeTest(unittest.TestCase):
             }
 
             const kv = new FakeKV();
-            const env = { ICP_STATE: kv };
+            const env = { ICP_STATE: kv, ICP_ADMIN_TOKEN: "admin-secret" };
             const workerOne = await loadWorker("one");
-            await request(workerOne, env, "/api/settings", { max_companies: 77, default_query: "durable state query" });
+            const blocked = await workerOne.fetch(new Request("https://worker.test/api/state"), env);
+            assert.equal(blocked.status, 401);
+            const badSession = await workerOne.fetch(new Request("https://worker.test/api/auth/session", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ token: "wrong" }),
+            }), env);
+            assert.equal(badSession.status, 401);
+
+            const publicHealth = await request(workerOne, env, "/api/health");
+            assert.equal(publicHealth.auth_required, true);
+            assert.equal(publicHealth.authenticated, false);
+            const session = await request(workerOne, env, "/api/auth/session", { token: "admin-secret" });
+            assert.ok(session.session_token);
+            const token = session.session_token;
+            const authenticatedHealth = await request(workerOne, env, "/api/health", undefined, token);
+            assert.equal(authenticatedHealth.authenticated, true);
+
+            await request(workerOne, env, "/api/settings", { max_companies: 77, default_query: "durable state query" }, token);
             await request(workerOne, env, "/api/sources", {
               name: "Durable source",
               type: "manual_seed",
               value: "Durable Fleet, durable.example",
               source_group: "durability-test",
               schedule: "weekly",
-            });
+            }, token);
             const run = await request(workerOne, env, "/api/runs", {
               query: "durable state run",
               candidates: [{ company: "Durable Fleet", domain: "durable.example" }],
               fetch: false,
               include_github: false,
-            });
+            }, token);
 
             const workerTwo = await loadWorker("two");
-            const settings = await request(workerTwo, env, "/api/settings");
-            const sources = await request(workerTwo, env, "/api/sources");
-            const state = await request(workerTwo, env, "/api/state");
-            const workspaceState = await request(workerTwo, env, "/api/workspace-state");
+            const settings = await request(workerTwo, env, "/api/settings", undefined, token);
+            const sources = await request(workerTwo, env, "/api/sources", undefined, token);
+            const state = await request(workerTwo, env, "/api/state", undefined, token);
+            const workspaceState = await request(workerTwo, env, "/api/workspace-state", undefined, token);
 
             assert.equal(settings.settings.max_companies, 77);
             assert.equal(settings.settings.default_query, "durable state query");

@@ -34,7 +34,8 @@ const state = {
   criteriaSavedHash: "",
 };
 
-const AUTH_TOKEN_KEY = "knowledge2.icp.adminToken";
+const AUTH_SESSION_KEY = "knowledge2.icp.sessionToken";
+const LEGACY_AUTH_TOKEN_KEY = "knowledge2.icp.adminToken";
 const ALL_PROSPECTS = "__all__";
 
 const $ = (id) => document.getElementById(id);
@@ -56,7 +57,7 @@ async function authFetch(path, options = {}) {
   if (!(options.body instanceof FormData) && !headers["Content-Type"]) {
     headers["Content-Type"] = "application/json";
   }
-  const token = localStorage.getItem(AUTH_TOKEN_KEY) || "";
+  const token = localStorage.getItem(AUTH_SESSION_KEY) || "";
   if (token) headers.Authorization = `Bearer ${token}`;
   return fetch(path, {
     ...options,
@@ -67,6 +68,9 @@ async function authFetch(path, options = {}) {
 async function api(path, options = {}) {
   const response = await authFetch(path, options);
   const payload = await response.json();
+  if (response.status === 401) {
+    setAuthStatus("Admin session required or expired. Enter the admin token and save a new session.");
+  }
   if (!response.ok) throw new Error(payload.error || `Request failed: ${response.status}`);
   return payload;
 }
@@ -98,26 +102,49 @@ async function loadState() {
 
 function initAuthControls() {
   const tokenInput = $("admin-token");
-  const saved = localStorage.getItem(AUTH_TOKEN_KEY) || "";
-  tokenInput.value = saved;
-  $("auth-status").textContent = saved ? "K2 apply token saved in this browser." : "No K2 apply token saved.";
+  const savedSession = localStorage.getItem(AUTH_SESSION_KEY) || "";
+  const legacyToken = localStorage.getItem(LEGACY_AUTH_TOKEN_KEY) || "";
+  tokenInput.value = savedSession ? "" : legacyToken;
+  if (savedSession) {
+    setAuthStatus("Admin session saved in this browser.");
+  } else if (legacyToken) {
+    setAuthStatus("Legacy token found. Save session to convert it.");
+  } else {
+    setAuthStatus("No admin session saved.");
+  }
 }
 
-function saveAuthToken() {
+async function saveAuthToken() {
   const value = $("admin-token").value.trim();
   if (value) {
-    localStorage.setItem(AUTH_TOKEN_KEY, value);
-    $("auth-status").textContent = "K2 apply token saved in this browser.";
+    setAuthStatus("Creating admin session...");
+    const response = await fetch("/api/auth/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: value }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || `Session failed: ${response.status}`);
+    localStorage.setItem(AUTH_SESSION_KEY, payload.session_token);
+    localStorage.removeItem(LEGACY_AUTH_TOKEN_KEY);
+    $("admin-token").value = "";
+    setAuthStatus(`Admin session active until ${formatVersionDate(payload.expires_at)}.`);
+    await loadState();
   } else {
-    localStorage.removeItem(AUTH_TOKEN_KEY);
-    $("auth-status").textContent = "No K2 apply token saved.";
+    clearAuthToken();
   }
 }
 
 function clearAuthToken() {
-  localStorage.removeItem(AUTH_TOKEN_KEY);
+  localStorage.removeItem(AUTH_SESSION_KEY);
+  localStorage.removeItem(LEGACY_AUTH_TOKEN_KEY);
   $("admin-token").value = "";
-  $("auth-status").textContent = "No K2 apply token saved.";
+  setAuthStatus("No admin session saved.");
+}
+
+function setAuthStatus(message) {
+  const status = $("auth-status");
+  if (status) status.textContent = message;
 }
 
 function renderProviders(providers) {
@@ -2254,7 +2281,11 @@ document.querySelectorAll(".tab").forEach((tab) => {
 });
 
 initAuthControls();
-$("save-admin-token").addEventListener("click", saveAuthToken);
+$("save-admin-token").addEventListener("click", () => {
+  saveAuthToken().catch((error) => {
+    setAuthStatus(error.message);
+  });
+});
 $("clear-admin-token").addEventListener("click", clearAuthToken);
 $("lead-filter").addEventListener("input", leadQueueControlsChanged);
 $("tier-filter").addEventListener("change", leadQueueControlsChanged);

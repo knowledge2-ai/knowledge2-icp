@@ -431,6 +431,12 @@ class WebApiTest(unittest.TestCase):
                 state = _json_get(f"{base_url}/api/state", headers={"Authorization": "Bearer test-token"})
                 self.assertIn("criteria", state)
 
+                session = _json_post(f"{base_url}/api/auth/session", {"token": "test-token"})
+                self.assertIn("session_token", session)
+                session_headers = {"Authorization": f"Bearer {session['session_token']}"}
+                session_state = _json_get(f"{base_url}/api/state", headers=session_headers)
+                self.assertIn("criteria", session_state)
+
                 readiness = _json_get(f"{base_url}/api/health", headers={"Authorization": "Bearer test-token"})
                 self.assertEqual(readiness["status"], "ok")
                 self.assertTrue(readiness["auth_required"])

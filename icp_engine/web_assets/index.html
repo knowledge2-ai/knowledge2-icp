@@ -68,16 +68,16 @@
         </section>
 
         <section class="panel auth-panel">
-          <h2>K2 Apply Token</h2>
+          <h2>API Access</h2>
           <label>
-            Optional token
+            Admin token
             <input id="admin-token" type="password" autocomplete="off" />
           </label>
           <div class="button-row">
-            <button id="save-admin-token" type="button">Save</button>
+            <button id="save-admin-token" type="button">Save session</button>
             <button id="clear-admin-token" type="button" class="secondary">Clear</button>
           </div>
-          <p class="muted">Only needed for K2 Apply sync. The dashboard data is public read-only.</p>
+          <p class="muted">Creates a short-lived browser session. The raw admin token is not stored.</p>
           <p id="auth-status" class="muted"></p>
         </section>
       </aside>
