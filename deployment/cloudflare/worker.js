@@ -3307,6 +3307,7 @@ async function k2ResearchAnswer(env, run, question) {
       filters: runMetadataFilter(String(run.id || "")),
     });
     return {
+      status: "ok",
       answer: String(payload.answer || ""),
       citations: k2Citations(Array.isArray(payload.results) ? payload.results : []),
       matched_leads: [],
