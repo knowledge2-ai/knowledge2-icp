@@ -67,6 +67,10 @@ def main() -> int:
                 expect(page.locator("#prospect-rows .prospect-company-node").first).to_contain_text("Mojio", timeout=timeout)
                 expect(page.locator("#prospect-rows .prospect-role-group").first).to_contain_text("primary", timeout=timeout)
                 expect(page.locator("#prospect-rows .prospect-row").first).to_contain_text("Mojio", timeout=timeout)
+                expect(page.locator("#account-drilldown .account-title")).to_contain_text("Mojio", timeout=timeout)
+                expect(page.locator("#account-drilldown .account-role-tree")).to_contain_text("VP Engineering", timeout=timeout)
+                expect(page.locator("#account-drilldown .evidence-timeline")).to_contain_text("Platform", timeout=timeout)
+                expect(page.locator("#account-workflow-form")).to_be_visible(timeout=timeout)
 
                 page.locator("button.tab[data-view='research']").click()
                 page.locator("#research-question").fill("Which lead has workflow API evidence and who should we contact?")
@@ -108,6 +112,7 @@ def main() -> int:
                 f"{base_url}/api/research",
                 {"run_id": run["id"], "question": "Which lead has workflow API evidence and who should we contact?"},
             )
+            account = _json_get(f"{base_url}/api/runs/{run['id']}/accounts/moj.io")
             state = _json_get(f"{base_url}/api/state")
             _assert(state.get("prompts"), "Expected seeded prompts in API state.")
             _assert(state.get("settings", {}).get("deployment_mode") == "cloudflare-seeded-worker", "Expected seeded deployment mode.")
@@ -115,6 +120,8 @@ def main() -> int:
             _assert(research.get("provider") == "local", "Expected local research provider for isolated E2E smoke.")
             _assert(research.get("metadata_used", {}).get("persona_titles"), "Expected metadata_used persona titles.")
             _assert(research.get("citations"), "Expected research citations.")
+            _assert(account.get("role_groups"), "Expected account detail role groups.")
+            _assert(account.get("evidence_timeline"), "Expected account detail evidence timeline.")
             _assert(not console_errors, f"Browser console errors: {console_errors}")
 
             report = {

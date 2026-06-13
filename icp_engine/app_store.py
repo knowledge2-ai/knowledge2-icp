@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .criteria_editor import format_criteria_markdown, lint_criteria_markdown
+from .prospects import build_lead_prospects
 from .seed_defaults import SEEDED_CRITERIA_MARKDOWN, SEEDED_LISTS, SEEDED_PROMPTS, SEEDED_SETTINGS, SEED_RUN_ID, seeded_run
 
 
@@ -275,6 +276,45 @@ class AppStore:
                 counts[_normalize_status(str(state.get("status") or "New"))] += 1
         return counts
 
+    def account_detail(self, run_id: str, account_key: str) -> dict[str, Any] | None:
+        run = self.load_run(run_id)
+        if not run:
+            return None
+        lead = _find_lead(run, account_key)
+        if not lead:
+            return None
+        score = lead.get("score", {}) if isinstance(lead.get("score"), dict) else {}
+        company = score.get("company", {}) if isinstance(score.get("company"), dict) else {}
+        domain = _lead_domain(lead)
+        strategy = lead.get("strategy", {}) if isinstance(lead.get("strategy"), dict) else {}
+        metadata = lead.get("metadata", {}) if isinstance(lead.get("metadata"), dict) else {}
+        evidence = [item for item in lead.get("evidence", []) if isinstance(item, dict)]
+        prospects = build_lead_prospects(run, lead)
+        workflow = lead.get("workflow") if isinstance(lead.get("workflow"), dict) else _default_lead_state(run_id, domain, _lead_company(lead))
+        criteria = run.get("criteria", {}) if isinstance(run.get("criteria"), dict) else {}
+        criteria_profile = criteria.get("profile") if isinstance(criteria.get("profile"), dict) else metadata.get("criteria_profile", {})
+        return {
+            "run_id": run_id,
+            "lead_id": lead.get("id"),
+            "company": company,
+            "score": score,
+            "strategy": strategy,
+            "workflow": workflow,
+            "lead_statuses": list(LEAD_STATUSES),
+            "prospects": prospects,
+            "role_groups": _prospect_role_groups(prospects),
+            "evidence_timeline": _evidence_timeline(evidence),
+            "source_refs": metadata.get("source_refs", {}) if isinstance(metadata.get("source_refs"), dict) else {},
+            "source_counts": metadata.get("source_counts", {}) if isinstance(metadata.get("source_counts"), dict) else {},
+            "coverage": metadata.get("intelligence_coverage", {}) if isinstance(metadata.get("intelligence_coverage"), dict) else {},
+            "criteria_snapshot": {
+                "hash": criteria.get("hash") or criteria_profile.get("hash") or "",
+                "source": criteria.get("source") or criteria_profile.get("source") or "",
+                "profile": criteria_profile if isinstance(criteria_profile, dict) else {},
+            },
+            "audit_events": _audit_events_for_account(self.list_audit_events(limit=500), run_id, domain),
+        }
+
     def list_lead_views(self) -> list[dict[str, Any]]:
         self.ensure()
         value = _load_json_file(self.lead_views_path, list)
@@ -496,6 +536,84 @@ def _lead_company(lead: dict[str, Any]) -> str:
     score = lead.get("score", {}) if isinstance(lead.get("score"), dict) else {}
     company = score.get("company", {}) if isinstance(score.get("company"), dict) else {}
     return str(company.get("company") or lead.get("company") or "")
+
+
+def _find_lead(run: dict[str, Any], account_key: str) -> dict[str, Any] | None:
+    key = _normalize_lookup_key(account_key)
+    for lead in run.get("leads", []):
+        if isinstance(lead, dict) and _lead_matches_key(lead, key):
+            return lead
+    return None
+
+
+def _lead_matches_key(lead: dict[str, Any], key: str) -> bool:
+    score = lead.get("score", {}) if isinstance(lead.get("score"), dict) else {}
+    company = score.get("company", {}) if isinstance(score.get("company"), dict) else {}
+    candidates = [
+        lead.get("id"),
+        lead.get("domain"),
+        lead.get("company"),
+        company.get("domain"),
+        company.get("company"),
+    ]
+    return key in {_normalize_lookup_key(str(item)) for item in candidates if item}
+
+
+def _normalize_lookup_key(value: str) -> str:
+    return _normalize_domain(value).removesuffix("/")
+
+
+def _prospect_role_groups(prospects: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for prospect in sorted(prospects, key=_prospect_sort_key):
+        role = str(prospect.get("persona") or prospect.get("title") or "Other role")
+        groups.setdefault(role, []).append(prospect)
+    return [
+        {
+            "role": role,
+            "priority": str(items[0].get("persona_priority") or items[0].get("source") or ""),
+            "prospects": items,
+        }
+        for role, items in groups.items()
+    ]
+
+
+def _prospect_sort_key(prospect: dict[str, Any]) -> tuple[int, int, int, str]:
+    priority_rank = {"primary": 0, "secondary": 1, "tertiary": 2}.get(str(prospect.get("persona_priority") or "").lower(), 3)
+    source_rank = 0 if str(prospect.get("source") or "").lower() == "apollo" else 1
+    score_rank = -int(prospect.get("priority_score") or 0)
+    return (priority_rank, source_rank, score_rank, str(prospect.get("name") or prospect.get("title") or ""))
+
+
+def _evidence_timeline(evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    timeline = []
+    for index, item in enumerate(evidence, start=1):
+        metadata = item.get("metadata", {}) if isinstance(item.get("metadata"), dict) else {}
+        timeline.append(
+            {
+                "id": item.get("evidence_id") or f"evidence-{index}",
+                "title": item.get("title") or item.get("url") or "Evidence",
+                "url": item.get("url") or "",
+                "text": item.get("text") or "",
+                "source_type": item.get("source_type") or metadata.get("source_type") or metadata.get("page_category") or "website",
+                "page_category": metadata.get("page_category") or "",
+                "captured_at": item.get("captured_at") or metadata.get("captured_at") or "",
+            }
+        )
+    return timeline
+
+
+def _audit_events_for_account(events: list[dict[str, Any]], run_id: str, domain: str) -> list[dict[str, Any]]:
+    subject_id = f"{run_id}:{domain}"
+    matches = []
+    for event in events:
+        if event.get("subject_id") == subject_id:
+            matches.append(event)
+            continue
+        details = event.get("details", {}) if isinstance(event.get("details"), dict) else {}
+        if details.get("run_id") == run_id and _normalize_domain(str(details.get("domain") or "")) == domain:
+            matches.append(event)
+    return matches[-25:]
 
 
 def _default_lead_state(run_id: str, domain: str, company: str) -> dict[str, Any]:

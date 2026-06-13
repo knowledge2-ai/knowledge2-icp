@@ -5,6 +5,10 @@ const state = {
   currentManifest: null,
   currentProspects: null,
   prospectsRunId: null,
+  currentAccountDetail: null,
+  accountDetailRunId: null,
+  accountDetailKey: null,
+  accountDetailError: "",
   previewCandidates: [],
   prompts: [],
   settings: {},
@@ -20,6 +24,16 @@ const AUTH_TOKEN_KEY = "knowledge2.icp.adminToken";
 const ALL_PROSPECTS = "__all__";
 
 const $ = (id) => document.getElementById(id);
+
+function resetRunDerivedState() {
+  state.currentManifest = null;
+  state.currentProspects = null;
+  state.prospectsRunId = null;
+  state.currentAccountDetail = null;
+  state.accountDetailRunId = null;
+  state.accountDetailKey = null;
+  state.accountDetailError = "";
+}
 
 async function authFetch(path, options = {}) {
   const headers = { ...(options.headers || {}) };
@@ -512,9 +526,7 @@ function renderRuns(runs) {
       state.currentRun = await api(`/api/runs/${item.dataset.runId}`);
       state.selectedLeadId = null;
       state.prospectFocusLeadId = null;
-      state.currentManifest = null;
-      state.currentProspects = null;
-      state.prospectsRunId = null;
+      resetRunDerivedState();
       renderRun(state.currentRun);
       activateView("leads");
     });
@@ -810,6 +822,7 @@ function renderProspectsPanel(payload = state.currentProspects) {
   const visibleProspects = focusLead ? prospectsForLead(prospects, focusLead) : prospects;
   const counts = prospectSourceCounts(visibleProspects);
   const focusCompany = focusLead ? leadCompany(focusLead) : null;
+  renderAccountDrilldown(focusLead);
   summary.innerHTML = `<div class="prospect-focus">
     <div class="prospect-summary">
       ${metric(focusLead ? "Company prospects" : "All prospects", visibleProspects.length)}
@@ -832,6 +845,234 @@ function renderProspectsPanel(payload = state.currentProspects) {
     return;
   }
   rows.innerHTML = renderProspectTree(visibleProspects, focusLead);
+}
+
+function renderAccountDrilldown(focusLead) {
+  const root = $("account-drilldown");
+  if (!root) return;
+  if (!state.currentRun) {
+    root.className = "detail-panel account-drilldown empty";
+    root.textContent = "Run research before inspecting account context.";
+    return;
+  }
+  if (!focusLead) {
+    root.className = "detail-panel account-drilldown empty";
+    root.textContent = "Select a company to inspect account context.";
+    clearAccountDetailState();
+    return;
+  }
+  const key = accountKey(focusLead);
+  if (!key) {
+    root.className = "detail-panel account-drilldown empty";
+    root.textContent = "This account is missing a domain or lead identifier.";
+    clearAccountDetailState();
+    return;
+  }
+  ensureAccountDetail(key).catch((error) => {
+    if (state.accountDetailKey !== key) return;
+    state.accountDetailError = error.message;
+    root.className = "detail-panel account-drilldown empty";
+    root.textContent = error.message;
+  });
+  if (state.accountDetailError && state.accountDetailKey === key) {
+    root.className = "detail-panel account-drilldown empty";
+    root.textContent = state.accountDetailError;
+    return;
+  }
+  if (!state.currentAccountDetail || state.accountDetailKey !== key || state.accountDetailRunId !== state.currentRun.id) {
+    const company = leadCompany(focusLead);
+    root.className = "detail-panel account-drilldown loading";
+    root.innerHTML = `<div>
+      <p class="eyebrow">${escapeHtml(company.domain || "")}</p>
+      <h2>${escapeHtml(company.company || "Loading account")}</h2>
+      <p class="muted">Loading account context, workflow state, evidence, and prospect roles...</p>
+    </div>`;
+    return;
+  }
+  root.className = "detail-panel account-drilldown";
+  root.innerHTML = accountDetailMarkup(state.currentAccountDetail);
+  $("account-workflow-form")?.addEventListener("submit", saveAccountWorkflow);
+}
+
+async function ensureAccountDetail(key) {
+  if (
+    state.currentAccountDetail &&
+    state.accountDetailKey === key &&
+    state.accountDetailRunId === state.currentRun?.id
+  ) {
+    return;
+  }
+  if (state.accountDetailKey !== key || state.accountDetailRunId !== state.currentRun?.id) {
+    state.currentAccountDetail = null;
+    state.accountDetailError = "";
+    state.accountDetailKey = key;
+    state.accountDetailRunId = state.currentRun?.id || null;
+  }
+  const payload = await api(`/api/runs/${encodeURIComponent(state.currentRun.id)}/accounts/${encodeURIComponent(key)}`);
+  if (state.accountDetailKey === key && state.accountDetailRunId === state.currentRun?.id) {
+    state.currentAccountDetail = payload;
+    state.accountDetailError = "";
+    renderAccountDrilldown(currentProspectFocusLead());
+  }
+}
+
+function clearAccountDetailState() {
+  state.currentAccountDetail = null;
+  state.accountDetailRunId = null;
+  state.accountDetailKey = null;
+  state.accountDetailError = "";
+}
+
+function accountDetailMarkup(detail) {
+  const company = detail.company || {};
+  const score = detail.score || {};
+  const workflow = detail.workflow || {};
+  const criteria = detail.criteria_snapshot || {};
+  const criteriaProfile = criteria.profile || {};
+  const roleGroups = detail.role_groups || [];
+  const evidence = detail.evidence_timeline || [];
+  const auditEvents = detail.audit_events || [];
+  return `<div class="account-detail-stack">
+    <section class="account-hero">
+      <div>
+        <p class="eyebrow">${escapeHtml(company.domain || workflow.domain || "")}</p>
+        <h2 class="account-title">${escapeHtml(company.company || workflow.company || "Account")}</h2>
+        <div class="tag-list">
+          <span class="${tierClass(score.tier)}">${escapeHtml(score.tier || "Unknown tier")}</span>
+          <span class="status-pill">${escapeHtml(workflow.status || "New")}</span>
+          ${workflow.owner ? `<span class="tag">Owner: ${escapeHtml(workflow.owner)}</span>` : ""}
+        </div>
+      </div>
+      <div class="account-metrics">
+        ${metric("Score", `${score.total_score || 0}/100`)}
+        ${metric("Prospects", detail.prospects?.length || 0)}
+        ${metric("Evidence", evidence.length)}
+        ${metric("Criteria", shortHash(criteria.hash || ""))}
+      </div>
+    </section>
+    <section class="account-workflow">
+      <form id="account-workflow-form" class="workflow-form" data-domain="${escapeAttribute(workflow.domain || company.domain || "")}" data-company="${escapeAttribute(company.company || workflow.company || "")}">
+        <label>
+          Status
+          <select id="account-status">${(detail.lead_statuses || []).map((status) => `<option value="${escapeAttribute(status)}"${status === workflow.status ? " selected" : ""}>${escapeHtml(status)}</option>`).join("")}</select>
+        </label>
+        <label>
+          Owner
+          <input id="account-owner" value="${escapeAttribute(workflow.owner || "")}" placeholder="Owner" />
+        </label>
+        <label>
+          Tags
+          <input id="account-tags" value="${escapeAttribute((workflow.tags || []).join(", "))}" placeholder="tier-a, fleet, apollo" />
+        </label>
+        <label class="workflow-note">
+          Notes
+          <textarea id="account-note" rows="3" placeholder="Qualification notes and next action">${escapeHtml(workflow.note || "")}</textarea>
+        </label>
+        <button type="submit">Save account</button>
+      </form>
+    </section>
+    <section class="account-columns">
+      <div class="account-card">
+        <h3>Strategy</h3>
+        <p>${escapeHtml(detail.strategy?.outreach_angle || "")}</p>
+        <p><strong>Offer:</strong> ${escapeHtml(detail.strategy?.offer || "")}</p>
+        <p><strong>First step:</strong> ${escapeHtml(detail.strategy?.first_step || "")}</p>
+      </div>
+      <div class="account-card">
+        <h3>Criteria Snapshot</h3>
+        <div class="kv-grid compact">
+          ${kv("Hash", criteria.hash || "")}
+          ${kv("Tier A", `>= ${criteriaProfile.tier_a_threshold ?? 75}`)}
+          ${kv("Tier B", `>= ${criteriaProfile.tier_b_threshold ?? 60}`)}
+          ${kv("Budget", `${criteriaProfile.min_employee_count ?? 25}-${criteriaProfile.max_employee_count ?? 2000}`)}
+        </div>
+      </div>
+    </section>
+    <section class="account-card account-role-tree">
+      <h3>Prospect Role Tree</h3>
+      ${roleGroups.length ? roleGroups.map(accountRoleGroupMarkup).join("") : "<p>No prospects or personas available for this account.</p>"}
+    </section>
+    <section class="account-card evidence-timeline">
+      <h3>Evidence Timeline</h3>
+      ${evidence.length ? evidence.slice(0, 10).map(accountEvidenceMarkup).join("") : "<p>No evidence captured for this account.</p>"}
+    </section>
+    <section class="account-card">
+      <h3>Source Coverage</h3>
+      <div class="metadata-grid">
+        ${Object.entries(detail.source_counts || {}).map(([key, value]) => `<span><strong>${escapeHtml(value)}</strong>${escapeHtml(key)}</span>`).join("") || "<p>No source metadata captured.</p>"}
+      </div>
+      <div class="tag-list">${coverageTags(detail.coverage || {})}</div>
+      <div class="ref-list">${Object.entries(detail.source_refs || {}).map(([label, values]) => sourceRefBlock(label.replaceAll("_", " "), values)).join("")}</div>
+    </section>
+    <section class="account-card">
+      <h3>Account History</h3>
+      ${auditEvents.length ? auditEvents.map(accountAuditMarkup).join("") : "<p>No workflow history yet.</p>"}
+    </section>
+  </div>`;
+}
+
+function accountRoleGroupMarkup(group) {
+  return `<details class="account-role-group" open>
+    <summary><strong>${escapeHtml(group.role || "Role")}</strong><small>${escapeHtml(group.priority || "")} · ${(group.prospects || []).length} target(s)</small></summary>
+    <div class="account-role-rows">${(group.prospects || []).map(accountProspectMarkup).join("")}</div>
+  </details>`;
+}
+
+function accountProspectMarkup(prospect) {
+  return `<div class="account-prospect-row">
+    <span><strong>${escapeHtml(prospect.name || prospect.persona || prospect.title || "")}</strong><small>${escapeHtml(prospect.title || prospect.persona || "")}</small></span>
+    <span>${escapeHtml(prospect.source || "")}</span>
+    <span>${prospectContactLink(prospect)}</span>
+  </div>`;
+}
+
+function accountEvidenceMarkup(item) {
+  const tags = [item.source_type, item.page_category].filter(Boolean);
+  return `<article class="timeline-item">
+    <div>
+      <a href="${escapeAttribute(item.url || "#")}" target="_blank" rel="noreferrer">${escapeHtml(item.title || "Evidence")}</a>
+      <div class="tag-list">${tags.map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</div>
+    </div>
+    <p>${escapeHtml((item.text || "").slice(0, 280))}</p>
+  </article>`;
+}
+
+function accountAuditMarkup(event) {
+  const details = event.details || {};
+  return `<p class="audit-item"><strong>${escapeHtml(event.action || "event")}</strong> ${escapeHtml(event.created_at || "")}${details.status ? ` · ${escapeHtml(details.previous_status || "")} to ${escapeHtml(details.status)}` : ""}</p>`;
+}
+
+async function saveAccountWorkflow(event) {
+  event.preventDefault();
+  if (!state.currentRun || !state.currentAccountDetail) return;
+  const form = event.currentTarget;
+  const domain = form.dataset.domain || state.currentAccountDetail.workflow?.domain || state.currentAccountDetail.company?.domain || "";
+  const company = form.dataset.company || state.currentAccountDetail.company?.company || "";
+  const tags = $("account-tags").value.split(",").map((tag) => tag.trim()).filter(Boolean);
+  const payload = await api(`/api/runs/${state.currentRun.id}/lead-state`, {
+    method: "POST",
+    body: JSON.stringify({
+      domain,
+      company,
+      status: $("account-status").value,
+      owner: $("account-owner").value,
+      tags,
+      note: $("account-note").value,
+    }),
+  });
+  state.currentAccountDetail.workflow = payload.lead_state;
+  if (state.currentRun.workflow) state.currentRun.workflow.status_counts = payload.status_counts || state.currentRun.workflow.status_counts;
+  const lead = (state.currentRun.leads || []).find((item) => normalizeText(leadCompany(item).domain) === normalizeText(domain));
+  if (lead) lead.workflow = payload.lead_state;
+  renderLeadRows(state.currentRun.leads || []);
+  renderLeadDetail((state.currentRun.leads || []).find((item) => item.id === state.selectedLeadId) || null);
+  clearAccountDetailState();
+  renderAccountDrilldown(currentProspectFocusLead());
+}
+
+function accountKey(lead) {
+  const company = leadCompany(lead);
+  return company.domain || lead?.domain || lead?.id || company.company || "";
 }
 
 function currentProspectFocusLead() {
@@ -1102,9 +1343,7 @@ $("run-form").addEventListener("submit", async (event) => {
     state.currentRun = run;
     state.selectedLeadId = null;
     state.prospectFocusLeadId = null;
-    state.currentManifest = null;
-    state.currentProspects = null;
-    state.prospectsRunId = null;
+    resetRunDerivedState();
     state.previewCandidates = [];
     renderCandidatePreview();
     renderRun(run);

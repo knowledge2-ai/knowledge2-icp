@@ -121,6 +121,13 @@ class WebApiTest(unittest.TestCase):
                 self.assertGreaterEqual(prospects["prospect_count"], 1)
                 self.assertIn("prospects", prospects)
 
+                account = _json_get(f"{base_url}/api/runs/{run['id']}/accounts/acme.example")
+                self.assertEqual(account["company"]["company"], "Acme Fleet")
+                self.assertEqual(account["workflow"]["status"], "Qualified")
+                self.assertGreaterEqual(len(account["role_groups"]), 1)
+                self.assertEqual(account["evidence_timeline"][0]["title"], "About")
+                self.assertIn("lead_state.updated", {item["action"] for item in account["audit_events"]})
+
                 prospects_csv = _text_get(f"{base_url}/api/runs/{run['id']}/prospects.csv")
                 self.assertIn("company,domain", prospects_csv)
                 self.assertIn("Acme Fleet", prospects_csv)

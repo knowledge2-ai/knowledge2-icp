@@ -10,7 +10,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from .app_store import AppStore
 from .prospects import build_run_prospects, prospects_to_csv
@@ -124,6 +124,17 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                     filename=f"{run_id}-prospects.csv",
                 )
                 return
+            if parsed.path.startswith("/api/runs/") and "/accounts/" in parsed.path:
+                parts = parsed.path.split("/")
+                if len(parts) >= 6:
+                    run_id = parts[3]
+                    account_key = unquote(parts[5])
+                    detail = app.store.account_detail(run_id, account_key)
+                    if not detail:
+                        self._send_json({"error": "Account not found."}, status=HTTPStatus.NOT_FOUND)
+                        return
+                    self._send_json(detail)
+                    return
             if parsed.path.startswith("/api/runs/"):
                 run_id = parsed.path.rsplit("/", 1)[-1]
                 run = app.store.load_run(run_id)

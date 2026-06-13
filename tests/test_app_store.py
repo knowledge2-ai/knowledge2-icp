@@ -148,6 +148,73 @@ class AppStoreTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 reloaded.save_lead_state("run-workflow", "moj.io", status="not-a-status")
 
+    def test_account_detail_combines_workflow_prospects_evidence_and_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            run = {
+                "id": "run-account",
+                "query": "fleet software",
+                "created_at": "2026-06-11T00:00:00+00:00",
+                "status": "completed",
+                "criteria": {
+                    "hash": "criteria123",
+                    "profile": {
+                        "tier_a_threshold": 75,
+                        "tier_b_threshold": 60,
+                        "priority_terms": ["workflow", "fleet"],
+                    },
+                },
+                "leads": [
+                    {
+                        "id": "lead-mojio",
+                        "score": {
+                            "company": {"company": "Mojio", "domain": "moj.io"},
+                            "tier": "A",
+                            "total_score": 82,
+                            "gates": [],
+                        },
+                        "strategy": {
+                            "outreach_angle": "Workflow AI opportunity map.",
+                            "first_step": "Send VP Engineering brief.",
+                            "personas": [
+                                {"title": "VP Engineering", "priority": "primary"},
+                                {"title": "VP Product", "priority": "secondary"},
+                            ],
+                        },
+                        "metadata": {
+                            "source_counts": {"website": 1},
+                            "source_refs": {"linkedin_urls": ["https://www.linkedin.com/company/mojio"]},
+                            "intelligence_coverage": {"linkedin": True},
+                        },
+                        "evidence": [
+                            {
+                                "evidence_id": "e1",
+                                "url": "https://moj.io/platform",
+                                "title": "Platform",
+                                "text": "Fleet workflow API evidence.",
+                                "metadata": {"page_category": "product"},
+                            }
+                        ],
+                    }
+                ],
+            }
+            store.save_run(run)
+            store.save_lead_state("run-account", "https://www.moj.io/platform", company="Mojio", status="Qualified", note="Ready.")
+
+            detail = store.account_detail("run-account", "moj.io")
+
+            self.assertIsNotNone(detail)
+            assert detail is not None
+            self.assertEqual(detail["company"]["company"], "Mojio")
+            self.assertEqual(detail["workflow"]["status"], "Qualified")
+            self.assertEqual(detail["criteria_snapshot"]["hash"], "criteria123")
+            self.assertEqual(detail["role_groups"][0]["role"], "VP Engineering")
+            self.assertEqual(detail["prospects"][0]["status"], "persona_target")
+            self.assertEqual(detail["evidence_timeline"][0]["title"], "Platform")
+            self.assertEqual(detail["source_counts"]["website"], 1)
+            self.assertIn("lead_state.updated", {item["action"] for item in detail["audit_events"]})
+            self.assertIsNone(store.account_detail("run-account", "missing.example"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -692,6 +692,142 @@ h1 {
   padding: 14px 18px;
 }
 
+.account-drilldown {
+  min-height: 0;
+  margin-top: 14px;
+}
+
+.account-detail-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.account-hero {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.9fr) minmax(340px, 1.1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.account-title {
+  margin-top: 2px;
+}
+
+.account-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.account-workflow {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.workflow-form {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.7fr) minmax(140px, 0.8fr) minmax(180px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.workflow-form label {
+  display: grid;
+  gap: 5px;
+}
+
+.workflow-note {
+  grid-column: 1 / -1;
+}
+
+.account-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.account-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #fbfcfd;
+}
+
+.account-card h3 {
+  margin-bottom: 8px;
+}
+
+.kv-grid.compact {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.account-role-tree,
+.evidence-timeline {
+  display: grid;
+  gap: 10px;
+}
+
+.account-role-group {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.account-role-group summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #eef6f1;
+}
+
+.account-role-group summary strong,
+.account-role-group summary small,
+.account-prospect-row strong,
+.account-prospect-row small {
+  display: block;
+}
+
+.account-role-group summary small,
+.account-prospect-row small {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.account-role-rows {
+  display: grid;
+}
+
+.account-prospect-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) 90px minmax(140px, 1fr);
+  gap: 10px;
+  align-items: center;
+  border-top: 1px solid var(--line);
+  padding: 10px 12px;
+}
+
+.account-prospect-row a,
+.timeline-item a {
+  color: var(--blue);
+  font-weight: 800;
+}
+
+.timeline-item {
+  display: grid;
+  gap: 8px;
+  border-left: 3px solid #7bb98c;
+  padding: 0 0 12px 12px;
+}
+
+.timeline-item p,
+.audit-item {
+  color: var(--muted);
+}
+
 .prospect-list {
   overflow: hidden;
   margin-top: 14px;
@@ -964,6 +1100,8 @@ h1 {
 @media (max-width: 980px) {
   .app-shell,
   .content-grid,
+  .account-hero,
+  .account-columns,
   .setup-grid {
     grid-template-columns: 1fr;
   }
@@ -999,6 +1137,10 @@ h1 {
   }
 
   .toolbar,
+  .account-metrics,
+  .workflow-form,
+  .kv-grid.compact,
+  .account-prospect-row,
   .table-head,
   .lead-row,
   .prospect-head,
