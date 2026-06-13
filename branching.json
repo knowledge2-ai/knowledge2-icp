@@ -1,0 +1,14 @@
+{
+  "model": "github-flow",
+  "author": "@gemini2026",
+  "integration_branch": "main",
+  "environment_branches": [],
+  "promotion_chain": ["main"],
+  "hotfix_targets": ["main"],
+  "protected_branches": ["main"],
+  "feature_branch_prefixes": ["feat/", "fix/", "chore/", "refactor/"],
+  "merge_strategy": {
+    "feature_to_integration": "any",
+    "promotion": "merge"
+  }
+}
