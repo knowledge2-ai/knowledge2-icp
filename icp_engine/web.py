@@ -245,6 +245,15 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                 payload = self._read_json()
                 self._send_json(app.store.lint_criteria(str(payload.get("markdown", ""))))
                 return
+            if parsed.path == "/api/criteria/impact":
+                payload = self._read_json()
+                try:
+                    impact = app.store.criteria_impact(str(payload.get("run_id") or ""), str(payload.get("markdown") or ""))
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_json(impact)
+                return
             if parsed.path == "/api/criteria/restore":
                 payload = self._read_json()
                 criteria = app.store.restore_criteria_version(str(payload.get("id") or payload.get("hash") or ""))

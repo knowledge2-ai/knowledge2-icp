@@ -137,6 +137,8 @@ def main() -> int:
                 expect(page.locator("#criteria-version-select")).to_be_visible(timeout=timeout)
                 page.locator("#criteria-lint").click()
                 expect(page.locator("#criteria-lint-panel")).to_contain_text("warnings", timeout=timeout)
+                page.locator("#criteria-impact").click()
+                expect(page.locator("#criteria-impact-panel")).to_contain_text("Changed", timeout=timeout)
                 page.locator("#criteria-markdown").fill("# Smoke ICP  \n* Gate")
                 page.locator("#criteria-format").click()
                 expect(page.locator("#criteria-markdown")).to_have_value("# Smoke ICP\n- Gate\n", timeout=timeout)

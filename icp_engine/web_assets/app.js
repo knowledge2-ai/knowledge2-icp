@@ -543,6 +543,7 @@ function renderCriteria(criteria, versions = state.criteriaVersions, lint = null
   setCriteriaMarkdown(criteria.markdown || "", { capture: false, renderLint: false });
   renderCriteriaVersions(criteria.hash || "");
   renderCriteriaLint(lint || lintCriteriaMarkdown(criteria.markdown || ""));
+  renderCriteriaImpact(null);
   $("criteria-status").textContent = criteria.source
     ? `Loaded from ${criteria.source}; active hash ${criteria.hash || "unknown"}`
     : "";
@@ -735,6 +736,68 @@ function renderCriteriaLint(lint) {
         : "<div class=\"criteria-lint-item ok\"><span>ok</span><p><strong>No lint issues</strong>The criteria markdown passes the current checks.</p></div>"}
     </div>`;
   updateCriteriaMeta(lint);
+}
+
+function renderCriteriaImpact(impact) {
+  const panel = $("criteria-impact-panel");
+  if (!panel) return;
+  if (!impact) {
+    panel.innerHTML = "";
+    return;
+  }
+  const tiers = ["A", "B", "C", "Reject"];
+  const countCards = tiers.map((tier) => {
+    const current = impact.current_counts?.[tier] || 0;
+    const proposed = impact.proposed_counts?.[tier] || 0;
+    const delta = impact.deltas?.[tier] || 0;
+    const deltaText = delta > 0 ? `+${delta}` : String(delta);
+    return `<div class="impact-card">
+      <span>Tier ${escapeHtml(tier)}</span>
+      <strong>${escapeHtml(current)} -> ${escapeHtml(proposed)}</strong>
+      <small class="${delta === 0 ? "" : delta > 0 ? "positive" : "negative"}">${escapeHtml(deltaText)}</small>
+    </div>`;
+  }).join("");
+  const changes = (impact.changes || []).slice(0, 12);
+  panel.innerHTML = `<div class="criteria-impact-summary">
+      ${countCards}
+      <div class="impact-card">
+        <span>Changed</span>
+        <strong>${escapeHtml(impact.changed_count || 0)}</strong>
+        <small>${escapeHtml(impact.lead_count || 0)} leads</small>
+      </div>
+    </div>
+    ${(impact.warnings || []).length ? `<div class="criteria-impact-warnings">${impact.warnings.map((item) => `<span class="tag warn">${escapeHtml(item)}</span>`).join("")}</div>` : ""}
+    <div class="criteria-impact-list">
+      ${changes.length
+        ? changes.map((item) => `<div class="criteria-impact-row">
+            <strong>${escapeHtml(item.company || item.domain || "Lead")}</strong>
+            <span>${escapeHtml(item.current_tier)} -> ${escapeHtml(item.proposed_tier)}</span>
+            <span>${escapeHtml(item.current_score)} -> ${escapeHtml(item.proposed_score)} (${escapeHtml(item.score_delta > 0 ? `+${item.score_delta}` : item.score_delta)})</span>
+            <p>${escapeHtml(item.reason || "")}</p>
+          </div>`).join("")
+        : "<p class=\"muted\">No tier or score changes for the active run.</p>"}
+    </div>`;
+}
+
+async function previewCriteriaImpact() {
+  if (!state.currentRun?.id) {
+    $("criteria-status").textContent = "Run research before previewing criteria impact.";
+    return;
+  }
+  $("criteria-status").textContent = "Calculating criteria impact...";
+  try {
+    const payload = await api("/api/criteria/impact", {
+      method: "POST",
+      body: JSON.stringify({
+        run_id: state.currentRun.id,
+        markdown: $("criteria-markdown").value,
+      }),
+    });
+    renderCriteriaImpact(payload);
+    $("criteria-status").textContent = `Impact preview: ${payload.changed_count || 0} changed leads across ${payload.lead_count || 0}.`;
+  } catch (error) {
+    $("criteria-status").textContent = error.message;
+  }
 }
 
 function updateCriteriaMeta(lint = lintCriteriaMarkdown(criteriaInput()?.value || "")) {
@@ -2233,6 +2296,7 @@ $("criteria-lint").addEventListener("click", async () => {
     $("criteria-status").textContent = error.message;
   }
 });
+$("criteria-impact").addEventListener("click", previewCriteriaImpact);
 
 $("criteria-version-select").addEventListener("change", () => loadSelectedCriteriaVersion());
 $("criteria-version-back").addEventListener("click", () => loadSelectedCriteriaVersion(-1));

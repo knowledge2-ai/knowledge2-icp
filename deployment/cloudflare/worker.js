@@ -353,6 +353,17 @@ async function handleApiRequest(request, env, url) {
     return json(lintCriteriaMarkdown(String(payload.markdown || "")));
   }
 
+  if (method === "POST" && url.pathname === "/api/criteria/impact") {
+    const payload = await readJson(request);
+    const run = await loadRun(env, String(payload.run_id || ""), lists);
+    if (!run) return json({ error: "Run not found." }, 400);
+    try {
+      return json(criteriaImpact(run, String(payload.markdown || ""), lists));
+    } catch (error) {
+      return json({ error: error.message || String(error) }, 400);
+    }
+  }
+
   if (method === "POST" && url.pathname === "/api/criteria/restore") {
     const payload = await readJson(request);
     const id = String(payload.id || payload.hash || "");
@@ -1298,6 +1309,160 @@ function lintCriteriaMarkdown(markdown) {
 
 function criteriaDiagnostic(severity, line, rule, message) {
   return { severity, line, rule, message };
+}
+
+function criteriaImpact(run, markdown, lists) {
+  if (!String(markdown || "").trim()) throw new Error("Criteria markdown is required.");
+  const proposedProfile = criteriaProfileFromMarkdown(markdown, lists, "criteria-impact-preview", criteriaHash(markdown));
+  const currentProfile = run.criteria?.profile && typeof run.criteria.profile === "object"
+    ? run.criteria.profile
+    : seededCriteriaProfile(lists);
+  const leads = (run.leads || []).filter((lead) => lead && typeof lead === "object");
+  const currentCounts = tierLabelCounts(leads.map((lead) => String(lead.score?.tier || "Unknown")));
+  const proposedTiers = [];
+  const changes = [];
+  for (const lead of leads) {
+    const score = lead.score || {};
+    const company = score.company || {};
+    const currentTier = String(score.tier || "Unknown");
+    const totalScore = Number(score.total_score || 0);
+    const currentBudget = Number(score.budget_access_score || 0);
+    const proposedBudget = estimatedBudgetScore(company, proposedProfile, currentBudget);
+    const proposedTotal = Math.max(0, Math.min(100, totalScore - currentBudget + proposedBudget));
+    const proposedTier = tierForTotal(proposedTotal, Boolean(score.hard_gate_failed), proposedProfile);
+    proposedTiers.push(proposedTier);
+    if (proposedTier !== currentTier || proposedTotal !== totalScore) {
+      changes.push({
+        company: String(company.company || ""),
+        domain: String(company.domain || ""),
+        current_tier: currentTier,
+        proposed_tier: proposedTier,
+        current_score: totalScore,
+        proposed_score: proposedTotal,
+        score_delta: proposedTotal - totalScore,
+        reason: criteriaImpactReason(score, company, currentProfile, proposedProfile, currentBudget, proposedBudget),
+      });
+    }
+  }
+  const proposedCounts = tierLabelCounts(proposedTiers);
+  const warnings = [...(proposedProfile.warnings || [])];
+  if (JSON.stringify([...(proposedProfile.priority_terms || [])].sort()) !== JSON.stringify([...(currentProfile.priority_terms || [])].sort())) {
+    warnings.push("Priority-term changes require a new run to fully re-score data/workflow boosts from evidence.");
+  }
+  return {
+    run_id: run.id,
+    lead_count: leads.length,
+    current_profile: currentProfile,
+    proposed_profile: proposedProfile,
+    lint: lintCriteriaMarkdown(markdown),
+    current_counts: currentCounts,
+    proposed_counts: proposedCounts,
+    deltas: Object.fromEntries(["A", "B", "C", "Reject", "Unknown"].map((tier) => [tier, (proposedCounts[tier] || 0) - (currentCounts[tier] || 0)])),
+    changed_count: changes.length,
+    changes: changes.sort((left, right) => Math.abs(right.score_delta) - Math.abs(left.score_delta) || String(left.company).localeCompare(String(right.company))).slice(0, 100),
+    warnings,
+  };
+}
+
+function criteriaProfileFromMarkdown(markdown, lists, source, hash) {
+  const warnings = [];
+  let tierA = criteriaThreshold(markdown, "a", 75, warnings);
+  let tierB = criteriaThreshold(markdown, "b", 60, warnings);
+  if (tierB >= tierA) {
+    warnings.push("Tier B threshold must be lower than Tier A; using default thresholds.");
+    tierA = 75;
+    tierB = 60;
+  }
+  const [minEmployees, maxEmployees] = criteriaEmployeeRange(markdown, warnings);
+  return {
+    source,
+    hash,
+    tier_a_threshold: tierA,
+    tier_b_threshold: tierB,
+    min_employee_count: minEmployees,
+    max_employee_count: maxEmployees,
+    priority_terms: criteriaPriorityTerms(markdown, lists),
+    warnings,
+  };
+}
+
+function criteriaThreshold(markdown, tier, fallback, warnings) {
+  const normalized = String(markdown || "").toLowerCase().replace(/[–—]/g, "-");
+  const patterns = [
+    new RegExp(`tier\\s*${tier}\\s*(?:threshold|score)?\\D{0,30}(\\d{2,3})`, "i"),
+    new RegExp(`\\b${tier.toUpperCase()}\\s*tier\\s*(?:threshold|score)?\\D{0,30}(\\d{2,3})`, "i"),
+  ];
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    if (!match) continue;
+    const value = Number(match[1]);
+    if (value >= 0 && value <= 100) return value;
+    warnings.push(`Ignored out-of-range Tier ${tier.toUpperCase()} threshold ${value}.`);
+    return fallback;
+  }
+  return fallback;
+}
+
+function criteriaEmployeeRange(markdown, warnings) {
+  const normalized = String(markdown || "").toLowerCase().replace(/[–—]/g, "-").replaceAll(",", "");
+  const match = normalized.match(/(\d{1,5})\s*-\s*(\d{1,5})\s+employees/);
+  if (!match) return [25, 2000];
+  const minimum = Number(match[1]);
+  const maximum = Number(match[2]);
+  if (minimum <= 0 || maximum < minimum) {
+    warnings.push("Ignored invalid employee range in criteria markdown.");
+    return [25, 2000];
+  }
+  return [minimum, maximum];
+}
+
+function criteriaPriorityTerms(markdown, lists) {
+  const known = new Set([...(lists.priority_verticals || []), ...(SEED_LISTS.priority_verticals || []), "govtech", "healthcare admin", "legaltech", "permitting", "cmms", "tms", "wms"]);
+  const normalized = String(markdown || "").toLowerCase();
+  const terms = new Set([...known].filter((term) => normalized.includes(String(term).toLowerCase())));
+  for (const line of normalized.split(/\n/)) {
+    if (!["priority vertical", "target vertical", "priority category", "target category"].some((label) => line.includes(label))) continue;
+    const payload = line.includes(":") ? line.split(":").slice(1).join(":") : line;
+    for (const item of payload.split(/[,;|/]/)) {
+      const cleaned = item.replace(/[^a-z0-9 +&-]+/g, " ").replace(/\s+/g, " ").trim().replace(/^-+|-+$/g, "");
+      if (cleaned.length >= 2 && cleaned.length <= 40 && !cleaned.startsWith("priority") && !cleaned.startsWith("target")) terms.add(cleaned);
+    }
+  }
+  return terms.size ? [...terms].sort() : [...(SEED_LISTS.priority_verticals || [])];
+}
+
+function tierLabelCounts(tiers) {
+  const counts = { A: 0, B: 0, C: 0, Reject: 0, Unknown: 0 };
+  for (const tier of tiers) counts[tier in counts ? tier : "Unknown"] += 1;
+  return counts;
+}
+
+function tierForTotal(totalScore, hardGateFailed, profile) {
+  if (hardGateFailed) return "Reject";
+  if (totalScore >= Number(profile.tier_a_threshold || 75)) return "A";
+  if (totalScore >= Number(profile.tier_b_threshold || 60)) return "B";
+  return "C";
+}
+
+function estimatedBudgetScore(company, profile, fallback) {
+  const employeeCount = Number(company.employee_count);
+  if (!Number.isFinite(employeeCount)) return fallback;
+  const minimum = Number(profile.min_employee_count || 25);
+  const maximum = Number(profile.max_employee_count || 2000);
+  if (employeeCount >= minimum && employeeCount <= maximum) return 5;
+  if (employeeCount > maximum) return 4;
+  return 2;
+}
+
+function criteriaImpactReason(score, company, currentProfile, proposedProfile, currentBudget, proposedBudget) {
+  const reasons = [];
+  if (currentProfile.tier_a_threshold !== proposedProfile.tier_a_threshold) reasons.push(`Tier A threshold ${currentProfile.tier_a_threshold} -> ${proposedProfile.tier_a_threshold}.`);
+  if (currentProfile.tier_b_threshold !== proposedProfile.tier_b_threshold) reasons.push(`Tier B threshold ${currentProfile.tier_b_threshold} -> ${proposedProfile.tier_b_threshold}.`);
+  if (currentBudget !== proposedBudget) {
+    reasons.push(`Budget score ${currentBudget} -> ${proposedBudget} from employee range ${proposedProfile.min_employee_count}-${proposedProfile.max_employee_count} and ${company.employee_count || "unknown"} employees.`);
+  }
+  if (score.hard_gate_failed) reasons.push("Hard gate failure still forces Reject.");
+  return reasons.join(" ") || "Tier changed from updated thresholds.";
 }
 
 function criteriaHash(markdown) {

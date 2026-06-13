@@ -106,6 +106,19 @@ class WebApiTest(unittest.TestCase):
                 self.assertEqual(run["status"], "completed")
                 self.assertEqual(len(run["leads"]), 1)
 
+                impact = _json_post(
+                    f"{base_url}/api/criteria/impact",
+                    {
+                        "run_id": run["id"],
+                        "markdown": "# Impact ICP\n\n- Tier A threshold: 90\n- Tier B threshold: 70\n- 50-2000 employees\n",
+                    },
+                )
+                self.assertEqual(impact["run_id"], run["id"])
+                self.assertEqual(impact["lead_count"], 1)
+                self.assertEqual(impact["proposed_profile"]["tier_a_threshold"], 90)
+                self.assertIn("current_counts", impact)
+                self.assertIn("proposed_counts", impact)
+
                 lead_state = _json_post(
                     f"{base_url}/api/runs/{run['id']}/lead-state",
                     {

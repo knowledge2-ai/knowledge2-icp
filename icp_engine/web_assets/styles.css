@@ -695,6 +695,64 @@ h1 {
   color: #12613e;
 }
 
+.criteria-impact-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.criteria-impact-summary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.impact-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 12px;
+}
+
+.impact-card span,
+.impact-card small,
+.criteria-impact-row span {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.impact-card strong {
+  display: block;
+  margin: 4px 0;
+}
+
+.impact-card small.positive {
+  color: var(--green);
+}
+
+.impact-card small.negative {
+  color: var(--red);
+}
+
+.criteria-impact-warnings,
+.criteria-impact-list {
+  display: grid;
+  gap: 10px;
+}
+
+.criteria-impact-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) 90px 130px minmax(0, 2fr);
+  gap: 10px;
+  align-items: start;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.criteria-impact-row p {
+  margin: 0;
+  color: var(--muted);
+}
+
 .section-heading {
   display: flex;
   align-items: center;
@@ -1450,6 +1508,8 @@ h1 {
   .lead-pagination,
   .settings-toggle-grid,
   .settings-limit-grid,
+  .criteria-impact-summary,
+  .criteria-impact-row,
   .account-metrics,
   .workflow-form,
   .feedback-form,

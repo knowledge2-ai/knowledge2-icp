@@ -192,6 +192,17 @@ curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
   http://127.0.0.1:8765/api/evals/runs.csv
 ```
 
+Before saving ICP criteria changes, the Criteria tab can preview threshold and
+budget-range impact on the active run. The same analysis is available through
+the API:
+
+```bash
+curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"run_id":"<run-id>","markdown":"# ICP\n\n- Tier A threshold: 80\n- Tier B threshold: 65\n"}' \
+  http://127.0.0.1:8765/api/criteria/impact
+```
+
 Health checks:
 
 ```bash

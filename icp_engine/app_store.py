@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .criteria import build_criteria_profile
 from .criteria_editor import format_criteria_markdown, lint_criteria_markdown
 from .evals import (
     default_eval_cases,
@@ -108,6 +109,71 @@ class AppStore:
             return None
         self.criteria_path.write_text(str(selected.get("markdown", "")), encoding="utf-8")
         return self.load_criteria()
+
+    def criteria_impact(self, run_id: str, markdown: str) -> dict[str, Any]:
+        run = self.load_run(run_id)
+        if not run:
+            raise ValueError("Run not found.")
+        proposed_markdown = str(markdown or "")
+        if not proposed_markdown.strip():
+            raise ValueError("Criteria markdown is required.")
+        proposed_profile = build_criteria_profile(
+            proposed_markdown,
+            source="criteria-impact-preview",
+            criteria_hash=stable_hash(proposed_markdown),
+        ).to_dict()
+        current_profile = run.get("criteria", {}).get("profile")
+        if not isinstance(current_profile, dict):
+            criteria = self.load_criteria()
+            current_profile = build_criteria_profile(
+                str(criteria.get("markdown", "")),
+                source=str(criteria.get("source", "")),
+                criteria_hash=str(criteria.get("hash", "")),
+            ).to_dict()
+        leads = [lead for lead in run.get("leads", []) if isinstance(lead, dict)]
+        changes: list[dict[str, Any]] = []
+        current_counts = _tier_label_counts([str(lead.get("score", {}).get("tier") or "Unknown") for lead in leads])
+        proposed_tiers: list[str] = []
+        for lead in leads:
+            score = lead.get("score", {}) if isinstance(lead.get("score"), dict) else {}
+            company = score.get("company", {}) if isinstance(score.get("company"), dict) else {}
+            current_tier = str(score.get("tier") or "Unknown")
+            total_score = int(score.get("total_score") or 0)
+            current_budget = int(score.get("budget_access_score") or 0)
+            proposed_budget = _estimated_budget_score(company, proposed_profile, current_budget)
+            proposed_total = max(0, min(100, total_score - current_budget + proposed_budget))
+            proposed_tier = _tier_for_total(proposed_total, bool(score.get("hard_gate_failed")), proposed_profile)
+            proposed_tiers.append(proposed_tier)
+            if proposed_tier != current_tier or proposed_total != total_score:
+                changes.append(
+                    {
+                        "company": str(company.get("company") or ""),
+                        "domain": str(company.get("domain") or ""),
+                        "current_tier": current_tier,
+                        "proposed_tier": proposed_tier,
+                        "current_score": total_score,
+                        "proposed_score": proposed_total,
+                        "score_delta": proposed_total - total_score,
+                        "reason": _criteria_impact_reason(score, company, current_profile, proposed_profile, current_budget, proposed_budget),
+                    }
+                )
+        proposed_counts = _tier_label_counts(proposed_tiers)
+        warnings = list(proposed_profile.get("warnings") or [])
+        if set(proposed_profile.get("priority_terms") or []) != set(current_profile.get("priority_terms") or []):
+            warnings.append("Priority-term changes require a new run to fully re-score data/workflow boosts from evidence.")
+        return {
+            "run_id": run_id,
+            "lead_count": len(leads),
+            "current_profile": current_profile,
+            "proposed_profile": proposed_profile,
+            "lint": self.lint_criteria(proposed_markdown),
+            "current_counts": current_counts,
+            "proposed_counts": proposed_counts,
+            "deltas": {tier: proposed_counts.get(tier, 0) - current_counts.get(tier, 0) for tier in ["A", "B", "C", "Reject", "Unknown"]},
+            "changed_count": len(changes),
+            "changes": sorted(changes, key=lambda item: (abs(int(item["score_delta"])), item["company"]), reverse=True)[:100],
+            "warnings": warnings,
+        }
 
     def load_prompts(self) -> list[dict[str, Any]]:
         self.ensure()
@@ -1238,6 +1304,64 @@ def _coerce_bool(value: Any, default: bool) -> bool:
     if value is None:
         return default
     return bool(value)
+
+
+def _tier_label_counts(tiers: list[str]) -> dict[str, int]:
+    counts = {tier: 0 for tier in ["A", "B", "C", "Reject", "Unknown"]}
+    for tier in tiers:
+        counts[tier if tier in counts else "Unknown"] += 1
+    return counts
+
+
+def _tier_for_total(total_score: int, hard_gate_failed: bool, profile: dict[str, Any]) -> str:
+    if hard_gate_failed:
+        return "Reject"
+    if total_score >= int(profile.get("tier_a_threshold") or 75):
+        return "A"
+    if total_score >= int(profile.get("tier_b_threshold") or 60):
+        return "B"
+    return "C"
+
+
+def _estimated_budget_score(company: dict[str, Any], profile: dict[str, Any], fallback: int) -> int:
+    employee_count = company.get("employee_count")
+    if employee_count is None:
+        return fallback
+    try:
+        employees = int(employee_count)
+    except (TypeError, ValueError):
+        return fallback
+    minimum = int(profile.get("min_employee_count") or 25)
+    maximum = int(profile.get("max_employee_count") or 2000)
+    if minimum <= employees <= maximum:
+        return 5
+    if employees > maximum:
+        return 4
+    return 2
+
+
+def _criteria_impact_reason(
+    score: dict[str, Any],
+    company: dict[str, Any],
+    current_profile: dict[str, Any],
+    proposed_profile: dict[str, Any],
+    current_budget: int,
+    proposed_budget: int,
+) -> str:
+    reasons: list[str] = []
+    if current_profile.get("tier_a_threshold") != proposed_profile.get("tier_a_threshold"):
+        reasons.append(f"Tier A threshold {current_profile.get('tier_a_threshold')} -> {proposed_profile.get('tier_a_threshold')}.")
+    if current_profile.get("tier_b_threshold") != proposed_profile.get("tier_b_threshold"):
+        reasons.append(f"Tier B threshold {current_profile.get('tier_b_threshold')} -> {proposed_profile.get('tier_b_threshold')}.")
+    if current_budget != proposed_budget:
+        reasons.append(
+            f"Budget score {current_budget} -> {proposed_budget} from employee range "
+            f"{proposed_profile.get('min_employee_count')}-{proposed_profile.get('max_employee_count')} and "
+            f"{company.get('employee_count') or 'unknown'} employees."
+        )
+    if score.get("hard_gate_failed"):
+        reasons.append("Hard gate failure still forces Reject.")
+    return " ".join(reasons) or "Tier changed from updated thresholds."
 
 
 def _normalize_provider_action(action: str) -> str:
