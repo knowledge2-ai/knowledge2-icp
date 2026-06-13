@@ -1136,12 +1136,6 @@ function qualityFeedbackOutcome(rating) {
   return { positive: "accepted", neutral: "needs_review", negative: "rejected" }[rating] || "needs_review";
 }
 
-function csvCell(value) {
-  const text = String(value ?? "");
-  const escaped = text.replaceAll('"', '""');
-  return /[",\n]/.test(escaped) ? `"${escaped}"` : escaped;
-}
-
 function defaultLeadState(runId, domain, company) {
   return { run_id: runId, domain, company, status: "New", note: "", owner: "", tags: [], created_at: "", updated_at: "" };
 }
