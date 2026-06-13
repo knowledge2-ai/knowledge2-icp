@@ -78,6 +78,14 @@ button.secondary:hover,
   border-color: #b9c7d7;
 }
 
+.admin-only {
+  display: none;
+}
+
+body.admin-session .admin-only {
+  display: inline-flex;
+}
+
 button.small {
   min-height: 32px;
   padding: 0 10px;

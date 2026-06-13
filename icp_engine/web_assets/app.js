@@ -107,12 +107,13 @@ function initAuthControls() {
   const savedSession = localStorage.getItem(AUTH_SESSION_KEY) || "";
   const legacyToken = localStorage.getItem(LEGACY_AUTH_TOKEN_KEY) || "";
   tokenInput.value = savedSession ? "" : legacyToken;
+  syncAdminSessionUi();
   if (savedSession) {
     setAuthStatus("Admin session saved in this browser.");
   } else if (legacyToken) {
     setAuthStatus("Legacy token found. Save session to convert it.");
   } else {
-    setAuthStatus("No admin session saved.");
+    setAuthStatus("Read-only demo data is visible. Save an admin session to edit, run providers, or open diagnostics.");
   }
 }
 
@@ -130,6 +131,7 @@ async function saveAuthToken() {
     localStorage.setItem(AUTH_SESSION_KEY, payload.session_token);
     localStorage.removeItem(LEGACY_AUTH_TOKEN_KEY);
     $("admin-token").value = "";
+    syncAdminSessionUi();
     setAuthStatus(`Admin session active until ${formatVersionDate(payload.expires_at)}.`);
     await loadState();
   } else {
@@ -141,12 +143,20 @@ function clearAuthToken() {
   localStorage.removeItem(AUTH_SESSION_KEY);
   localStorage.removeItem(LEGACY_AUTH_TOKEN_KEY);
   $("admin-token").value = "";
-  setAuthStatus("No admin session saved.");
+  syncAdminSessionUi();
+  if (["k2", "evals"].includes(document.querySelector(".tab.active")?.dataset.view || "")) {
+    activateView("leads");
+  }
+  setAuthStatus("Read-only demo data is visible. Save an admin session to edit, run providers, or open diagnostics.");
 }
 
 function setAuthStatus(message) {
   const status = $("auth-status");
   if (status) status.textContent = message;
+}
+
+function syncAdminSessionUi() {
+  document.body.classList.toggle("admin-session", Boolean(localStorage.getItem(AUTH_SESSION_KEY)));
 }
 
 function renderProviders(providers) {

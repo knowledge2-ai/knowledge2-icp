@@ -9,14 +9,17 @@ dashboard.
 - `/healthz` returns public edge liveness metadata.
 - `/api/*` requests are served by the Worker from committed seed defaults plus
   the `ICP_STATE` KV namespace for mutable dashboard state.
-- `/api/health` and `/api/auth/session` are public bootstrap endpoints. All
-  other `/api/*` routes require `ICP_ADMIN_TOKEN` or a short-lived session token
-  minted by `/api/auth/session`.
+- `/api/health`, `/api/auth/session`, and read-only demo data endpoints are
+  public. Mutating actions, provider runs, exports, K2 sync, and admin
+  diagnostics require `ICP_ADMIN_TOKEN` or a short-lived session token minted by
+  `/api/auth/session`.
 - Search expands from the committed seed pack through `SERPER_API_KEY` /
   `SERP_API_KEY` when configured, or Apollo company search when only
   `APOLLO_API_KEY` is configured.
-- The dashboard exchanges `ICP_ADMIN_TOKEN` for an eight-hour browser session;
-  the raw admin token is not stored in browser localStorage.
+- The dashboard shows seeded/read-only leads without a session. It exchanges
+  `ICP_ADMIN_TOKEN` for an eight-hour browser session before edits, provider
+  runs, exports, K2 sync, or admin diagnostics; the raw admin token is not stored
+  in browser localStorage.
 - Secrets are declared by name only in `wrangler.toml`.
 - Criteria edits, saved sources/scans, provider usage, runtime runs, lead
   workflow states, and quality feedback are persisted in KV.

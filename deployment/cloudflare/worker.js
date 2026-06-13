@@ -296,17 +296,19 @@ async function handleApiRequest(request, env, url) {
       version: "0.1.0-worker",
       auth_required: auth.configured,
       authenticated: auth.authorized,
-      protected_actions: ["all_api_routes"],
+      public_read_only: true,
+      protected_actions: ["mutations", "provider_runs", "exports", "admin_diagnostics", "k2_apply_sync"],
       mode: "seeded-worker",
       run_count: (await listRuns(env, lists)).length,
       provider_status: providerStatus(env),
       provider_controls: await providerControls(env),
     });
   }
-  if (!auth.configured) {
+  const publicRead = isPublicReadRequest(method, url);
+  if (!auth.configured && !publicRead) {
     return json({ error: "ICP_ADMIN_TOKEN is required for API access." }, 503);
   }
-  if (!auth.authorized) {
+  if (!auth.authorized && !publicRead) {
     return unauthorized("API token required.");
   }
 
@@ -4006,6 +4008,20 @@ async function authorizeApiRequest(request, env) {
   if (constantTimeEqual(token, expected)) return { configured: true, authorized: true, mode: "admin_token" };
   if (await verifySessionToken(expected, token)) return { configured: true, authorized: true, mode: "session" };
   return { configured: true, authorized: false, mode: "invalid" };
+}
+
+function isPublicReadRequest(method, url) {
+  if (method !== "GET") return false;
+  const path = url.pathname;
+  if (path === "/api/state") return true;
+  if (path === "/api/sources") return true;
+  if (path === "/api/expansion/runs") return true;
+  if (path === "/api/criteria/versions") return true;
+  if (/^\/api\/runs\/[^/]+$/.test(path)) return true;
+  if (/^\/api\/runs\/[^/]+\/workflow$/.test(path)) return true;
+  if (/^\/api\/runs\/[^/]+\/prospects$/.test(path)) return true;
+  if (/^\/api\/runs\/[^/]+\/accounts\/[^/]+$/.test(path)) return true;
+  return false;
 }
 
 function bearerToken(request) {
