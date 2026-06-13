@@ -176,6 +176,7 @@ class WebApiTest(unittest.TestCase):
                 self.assertEqual(source_scan["scan"]["candidate_count"], 2)
                 self.assertEqual(source_scan["candidates"][0]["domain"], "moj.io")
                 self.assertGreaterEqual(_json_get(f"{base_url}/api/sources")["coverage"]["unique_candidate_domains"], 2)
+                self.assertIn("expansion_runs", _json_get(f"{base_url}/api/sources"))
 
                 audit = _json_get(f"{base_url}/api/audit-log")
                 self.assertIn("lead_state.updated", {item["action"] for item in audit["events"]})
@@ -290,6 +291,55 @@ class WebApiTest(unittest.TestCase):
                 selected_lead = selected_run["leads"][0]
                 self.assertEqual(selected_lead["candidate"]["source_title"], "Selected preview candidate")
                 self.assertIn("https://github.com/selected", selected_lead["metadata"]["source_refs"]["github_urls"])
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+    def test_scheduled_expansion_run_scans_due_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            store.ensure()
+            source = store.save_source(
+                "Expansion manual source",
+                source_type="manual_seed",
+                value="Mojio, moj.io\nAutomate, automate.co.za",
+                source_group="test-expansion",
+                schedule="daily",
+            )
+            store.sources_path.write_text(json.dumps([source], indent=2, sort_keys=True), encoding="utf-8")
+            pipeline = ResearchPipeline(store, evidence_fetcher=fake_evidence)
+            app = GTMApp(store=store, pipeline=pipeline)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_port}"
+            try:
+                state = _json_get(f"{base_url}/api/state")
+                self.assertEqual(state["source_coverage"]["due_source_count"], 1)
+
+                expansion = _json_post(
+                    f"{base_url}/api/expansion/run",
+                    {"due_only": True, "max_companies": 5},
+                )
+                self.assertEqual(expansion["run"]["status"], "completed")
+                self.assertEqual(expansion["run"]["source_count"], 1)
+                self.assertEqual(expansion["run"]["scanned_source_count"], 1)
+                self.assertEqual(expansion["run"]["candidate_count"], 2)
+                self.assertEqual(expansion["run"]["source_results"][0]["source_name"], "Expansion manual source")
+                self.assertEqual(expansion["coverage"]["due_source_count"], 0)
+                self.assertEqual(expansion["coverage"]["latest_expansion_run"]["id"], expansion["run"]["id"])
+                self.assertEqual(expansion["scans"][-1]["candidate_count"], 2)
+
+                runs = _json_get(f"{base_url}/api/expansion/runs")
+                self.assertEqual(runs["runs"][-1]["id"], expansion["run"]["id"])
+
+                repeat = _json_post(f"{base_url}/api/expansion/run", {"due_only": True, "max_companies": 5})
+                self.assertEqual(repeat["run"]["status"], "empty")
+                self.assertEqual(repeat["run"]["source_count"], 0)
+
+                audit = _json_get(f"{base_url}/api/audit-log")
+                self.assertIn("expansion.run", {item["action"] for item in audit["events"]})
             finally:
                 server.shutdown()
                 server.server_close()

@@ -10,6 +10,9 @@ routes = [
   { pattern = "gtm-dev.knowledge2.ai", custom_domain = true }
 ]
 
+[triggers]
+crons = ["0 9 * * *"]
+
 [[kv_namespaces]]
 binding = "ICP_STATE"
 id = "cd071b0deaa54a72906e7dd13f0343d7"

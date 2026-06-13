@@ -191,6 +191,7 @@ const runtime = {
   leadViews: [],
   sources: null,
   sourceScans: [],
+  expansionRuns: [],
   providerUsage: [],
   qualityFeedback: [],
   outreachStatuses: {},
@@ -230,6 +231,14 @@ export default {
     const indexUrl = new URL(request.url);
     indexUrl.pathname = "/";
     return withSecurityHeaders(await env.ASSETS.fetch(new Request(indexUrl, request)));
+  },
+  async scheduled(event, env) {
+    const lists = await seedLists(env);
+    await runExpansion(env, lists, {
+      trigger: event?.cron ? `cron:${event.cron}` : "scheduled",
+      dueOnly: true,
+      maxCompanies: 25,
+    });
   },
 };
 
@@ -328,8 +337,13 @@ async function handleApiRequest(request, env, url) {
     return json({
       sources: await loadSources(env, lists),
       scans: (await loadSourceScans(env)).slice(-50),
+      expansion_runs: (await loadExpansionRuns(env)).slice(-25),
       coverage: await sourceCoverage(env, lists),
     });
+  }
+
+  if (method === "GET" && url.pathname === "/api/expansion/runs") {
+    return json({ runs: await loadExpansionRuns(env), coverage: await sourceCoverage(env, lists) });
   }
 
   if (method === "GET" && url.pathname === "/api/criteria/versions") {
@@ -383,6 +397,22 @@ async function handleApiRequest(request, env, url) {
     } catch (error) {
       return json({ error: error.message || String(error) }, 400);
     }
+  }
+
+  if (method === "POST" && url.pathname === "/api/expansion/run") {
+    const payload = await readJson(request);
+    const result = await runExpansion(env, lists, {
+      trigger: Boolean(payload.due_only ?? true) ? "manual_due" : "manual_all_scheduled",
+      dueOnly: Boolean(payload.due_only ?? true),
+      maxCompanies: Number(payload.max_companies || 25),
+    });
+    return json({
+      run: result,
+      sources: await loadSources(env, lists),
+      scans: (await loadSourceScans(env)).slice(-50),
+      expansion_runs: (await loadExpansionRuns(env)).slice(-25),
+      coverage: await sourceCoverage(env, lists),
+    });
   }
 
   const sourceScanMatch = url.pathname.match(/^\/api\/sources\/([^/]+)\/scan$/);
@@ -683,6 +713,7 @@ async function currentState(env, lists) {
     lead_views: await loadLeadViews(env),
     sources: await loadSources(env, lists),
     source_scans: (await loadSourceScans(env)).slice(-25),
+    expansion_runs: (await loadExpansionRuns(env)).slice(-25),
     source_coverage: await sourceCoverage(env, lists),
     provider_controls: await providerControls(env),
     quality_feedback_summary: await qualityFeedbackSummary(env),
@@ -834,9 +865,117 @@ async function loadSourceScans(env) {
   return runtime.sourceScans;
 }
 
+async function loadExpansionRuns(env) {
+  if (env?.ICP_STATE?.get) {
+    const stored = await getStateJson(env, "expansion_runs", null);
+    if (Array.isArray(stored)) {
+      runtime.expansionRuns = stored.filter((item) => item && typeof item === "object");
+      return runtime.expansionRuns;
+    }
+  }
+  return runtime.expansionRuns;
+}
+
+async function runExpansion(env, lists, { trigger = "manual_due", dueOnly = true, maxCompanies = 25 } = {}) {
+  const boundedMaxCompanies = Math.max(1, Math.min(Number(maxCompanies) || 25, 100));
+  const sources = dueOnly
+    ? await expansionSourcesDue(env, lists)
+    : (await loadSources(env, lists)).filter((source) => source.enabled && source.schedule !== "manual");
+  const sourceResults = [];
+  for (const source of sources) {
+    const guard = await authorizeProviderAction(env, "source_scan", {
+      details: {
+        source_id: source.id,
+        source_type: source.type,
+        max_companies: boundedMaxCompanies,
+        trigger: "expansion",
+      },
+    });
+    if (!guard.allowed) {
+      sourceResults.push({
+        source_id: source.id,
+        source_name: source.name,
+        status: "skipped",
+        candidate_count: 0,
+        warning_count: 1,
+        reason: guard.reason || "Provider budget denied.",
+      });
+      continue;
+    }
+    try {
+      const result = await scanSource(source, boundedMaxCompanies, lists, env);
+      const scan = await recordSourceScan(env, source, result.candidates || [], result.warnings || [], result.status, lists);
+      sourceResults.push({
+        source_id: source.id,
+        source_name: source.name,
+        status: scan.status,
+        scan_id: scan.id,
+        candidate_count: scan.candidate_count,
+        warning_count: scan.warning_count,
+      });
+    } catch (error) {
+      sourceResults.push({
+        source_id: source.id,
+        source_name: source.name,
+        status: "failed",
+        candidate_count: 0,
+        warning_count: 1,
+        reason: error.message || String(error),
+      });
+    }
+  }
+  const status = sourceResults.length
+    ? sourceResults.some((item) => item.status === "failed") ? "failed" : "completed"
+    : "empty";
+  return recordExpansionRun(env, { trigger, status, sourceResults });
+}
+
+async function expansionSourcesDue(env, lists) {
+  const sources = await loadSources(env, lists);
+  const now = Date.now();
+  return sources.filter((source) => source.enabled && source.schedule !== "manual" && sourceScheduleDue(source, now));
+}
+
+function sourceScheduleDue(source, nowMs) {
+  const schedule = String(source.schedule || "manual");
+  if (schedule === "manual") return false;
+  const lastScan = Date.parse(String(source.last_scan_at || ""));
+  if (Number.isNaN(lastScan)) return true;
+  const intervals = {
+    daily: 24 * 60 * 60 * 1000,
+    weekly: 7 * 24 * 60 * 60 * 1000,
+    monthly: 30 * 24 * 60 * 60 * 1000,
+  };
+  if (schedule.startsWith("cron:")) return false;
+  const interval = intervals[schedule] || 0;
+  return Boolean(interval && nowMs - lastScan >= interval);
+}
+
+async function recordExpansionRun(env, { trigger, status, sourceResults, warnings = [] }) {
+  const now = nowIso();
+  const run = {
+    id: criteriaHash(`${now}:${trigger}:${sourceResults.length}:${status}`).slice(0, 16),
+    created_at: now,
+    trigger,
+    status,
+    source_count: sourceResults.length,
+    scanned_source_count: sourceResults.filter((item) => item.status !== "skipped").length,
+    candidate_count: sourceResults.reduce((sum, item) => sum + Number(item.candidate_count || 0), 0),
+    warning_count: sourceResults.reduce((sum, item) => sum + Number(item.warning_count || 0), 0) + warnings.length,
+    source_results: sourceResults.slice(0, 100),
+    warnings: warnings.slice(0, 50),
+  };
+  runtime.expansionRuns = await loadExpansionRuns(env);
+  runtime.expansionRuns.push(run);
+  runtime.expansionRuns = runtime.expansionRuns.slice(-500);
+  await putStateJson(env, "expansion_runs", runtime.expansionRuns);
+  return run;
+}
+
 async function sourceCoverage(env, lists) {
   const sources = await loadSources(env, lists);
   const scans = await loadSourceScans(env);
+  const expansionRuns = await loadExpansionRuns(env);
   const domains = new Set();
   for (const scan of scans) {
     for (const candidate of scan.candidates || []) {
@@ -852,6 +991,8 @@ async function sourceCoverage(env, lists) {
     candidate_count: scans.reduce((sum, scan) => sum + Number(scan.candidate_count || 0), 0),
     unique_candidate_domains: domains.size,
     latest_scan: scans[scans.length - 1] || null,
+    latest_expansion_run: expansionRuns[expansionRuns.length - 1] || null,
+    due_source_count: (await expansionSourcesDue(env, lists)).length,
   };
 }
 

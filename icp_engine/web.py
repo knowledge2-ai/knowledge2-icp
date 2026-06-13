@@ -86,9 +86,13 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                     {
                         "sources": app.store.load_sources(),
                         "scans": app.store.list_source_scans(limit=50),
+                        "expansion_runs": app.store.list_expansion_runs(limit=25),
                         "coverage": app.store.source_coverage(),
                     }
                 )
+                return
+            if parsed.path == "/api/expansion/runs":
+                self._send_json({"runs": app.store.list_expansion_runs(limit=100), "coverage": app.store.source_coverage()})
                 return
             if parsed.path == "/api/audit-log":
                 self._send_json({"events": app.store.list_audit_events(limit=100)})
@@ -301,6 +305,84 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                     self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
                     return
                 self._send_json({"source": source, "sources": app.store.load_sources(), "coverage": app.store.source_coverage()})
+                return
+            if parsed.path == "/api/expansion/run":
+                payload = self._read_json()
+                due_only = bool(payload.get("due_only", True))
+                max_companies = max(1, min(int(payload.get("max_companies") or 25), 100))
+                sources = app.store.expansion_sources_due() if due_only else [
+                    item for item in app.store.load_sources() if item.get("enabled", True) and item.get("schedule") != "manual"
+                ]
+                results: list[dict[str, Any]] = []
+                warnings: list[str] = []
+                for source in sources:
+                    guard = app.store.authorize_provider_action(
+                        "source_scan",
+                        details={
+                            "source_id": source.get("id"),
+                            "source_type": source.get("type"),
+                            "max_companies": max_companies,
+                            "trigger": "expansion",
+                        },
+                    )
+                    if not guard["allowed"]:
+                        results.append(
+                            {
+                                "source_id": source.get("id"),
+                                "source_name": source.get("name"),
+                                "status": "skipped",
+                                "candidate_count": 0,
+                                "warning_count": 1,
+                                "reason": guard.get("reason") or "Provider budget denied.",
+                            }
+                        )
+                        continue
+                    try:
+                        candidates, source_warnings = app.pipeline.scan_source(source, max_companies=max_companies)
+                        candidate_payloads = _candidate_payloads(candidates)
+                        scan = app.store.record_source_scan(
+                            str(source.get("id") or ""),
+                            status="completed" if candidate_payloads else "empty",
+                            candidates=candidate_payloads,
+                            warnings=source_warnings,
+                        )
+                        results.append(
+                            {
+                                "source_id": source.get("id"),
+                                "source_name": source.get("name"),
+                                "status": scan["status"],
+                                "scan_id": scan["id"],
+                                "candidate_count": scan["candidate_count"],
+                                "warning_count": scan["warning_count"],
+                            }
+                        )
+                    except Exception as exc:
+                        results.append(
+                            {
+                                "source_id": source.get("id"),
+                                "source_name": source.get("name"),
+                                "status": "failed",
+                                "candidate_count": 0,
+                                "warning_count": 1,
+                                "reason": str(exc),
+                            }
+                        )
+                status = "completed" if results and not any(item.get("status") == "failed" for item in results) else "failed" if results else "empty"
+                run = app.store.record_expansion_run(
+                    trigger="manual_due" if due_only else "manual_all_scheduled",
+                    status=status,
+                    source_results=results,
+                    warnings=warnings,
+                )
+                self._send_json(
+                    {
+                        "run": run,
+                        "sources": app.store.load_sources(),
+                        "scans": app.store.list_source_scans(limit=50),
+                        "expansion_runs": app.store.list_expansion_runs(limit=25),
+                        "coverage": app.store.source_coverage(),
+                    }
+                )
                 return
             if parsed.path.startswith("/api/sources/") and parsed.path.endswith("/scan"):
                 source_id = parsed.path.split("/")[3]

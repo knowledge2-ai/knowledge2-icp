@@ -77,6 +77,8 @@ def main() -> int:
 
                 page.locator("button.tab[data-view='sources']").click()
                 expect(page.locator("#source-list")).to_contain_text("Portfolio expansion SERP", timeout=timeout)
+                expect(page.locator("#expansion-panel")).to_contain_text("Scheduled Source Sweeps", timeout=timeout)
+                expect(page.locator("#run-expansion")).to_be_visible(timeout=timeout)
                 page.locator("#source-name").fill("Smoke manual source")
                 page.locator("#source-type").select_option("manual_seed")
                 page.locator("#source-schedule").select_option("weekly")

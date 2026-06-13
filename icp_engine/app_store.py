@@ -52,6 +52,7 @@ class AppStore:
         self.audit_log_path = self.state_dir / "audit_log.json"
         self.sources_path = self.state_dir / "sources.json"
         self.source_scans_path = self.state_dir / "source_scans.json"
+        self.expansion_runs_path = self.state_dir / "expansion_runs.json"
         self.provider_usage_path = self.state_dir / "provider_usage.json"
         self.quality_feedback_path = self.state_dir / "quality_feedback.json"
         self.outreach_status_path = self.state_dir / "outreach_statuses.json"
@@ -349,9 +350,59 @@ class AppStore:
             scans = [item for item in scans if item.get("source_id") == source_id]
         return scans[-max(1, min(limit, 500)) :]
 
+    def list_expansion_runs(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        self.ensure()
+        value = _load_json_file(self.expansion_runs_path, list)
+        runs = [item for item in value or [] if isinstance(item, dict)]
+        return runs[-max(1, min(limit, 500)) :]
+
+    def expansion_sources_due(self, *, now: datetime | None = None) -> list[dict[str, Any]]:
+        now_value = now or datetime.now(timezone.utc)
+        return [
+            source
+            for source in self.load_sources()
+            if source.get("enabled", True)
+            and str(source.get("schedule") or "manual") != "manual"
+            and _source_schedule_due(source, now_value)
+        ]
+
+    def record_expansion_run(
+        self,
+        *,
+        trigger: str,
+        status: str,
+        source_results: list[dict[str, Any]],
+        warnings: list[str] | None = None,
+    ) -> dict[str, Any]:
+        self.ensure()
+        now = now_iso()
+        run = {
+            "id": stable_hash(f"{now}:{trigger}:{len(source_results)}:{status}"),
+            "created_at": now,
+            "trigger": trigger,
+            "status": status,
+            "source_count": len(source_results),
+            "scanned_source_count": sum(1 for item in source_results if item.get("status") != "skipped"),
+            "candidate_count": sum(int(item.get("candidate_count") or 0) for item in source_results),
+            "warning_count": sum(int(item.get("warning_count") or 0) for item in source_results) + len(warnings or []),
+            "source_results": source_results[:100],
+            "warnings": [str(item) for item in warnings or [] if str(item).strip()][:50],
+        }
+        runs = self.list_expansion_runs(limit=500)
+        runs.append(run)
+        self.expansion_runs_path.write_text(json.dumps(runs[-500:], indent=2, sort_keys=True), encoding="utf-8")
+        self.append_audit_event(
+            "expansion.run",
+            subject_type="expansion",
+            subject_id=run["id"],
+            details={"trigger": trigger, "status": status, "candidate_count": run["candidate_count"]},
+        )
+        return run
+
     def source_coverage(self) -> dict[str, Any]:
         sources = self.load_sources()
         scans = self.list_source_scans(limit=500)
+        expansion_runs = self.list_expansion_runs(limit=25)
         domains = {
             str(candidate.get("domain") or "")
             for scan in scans
@@ -367,6 +418,8 @@ class AppStore:
             "candidate_count": sum(int(item.get("candidate_count") or 0) for item in scans),
             "unique_candidate_domains": len(domains),
             "latest_scan": scans[-1] if scans else None,
+            "latest_expansion_run": expansion_runs[-1] if expansion_runs else None,
+            "due_source_count": len(self.expansion_sources_due()),
         }
 
     def list_runs(self) -> list[dict[str, Any]]:
@@ -1055,6 +1108,7 @@ class AppStore:
             "lead_views": self.list_lead_views(),
             "sources": self.load_sources(),
             "source_scans": self.list_source_scans(limit=25),
+            "expansion_runs": self.list_expansion_runs(limit=25),
             "source_coverage": self.source_coverage(),
             "provider_controls": self.provider_usage_summary(),
             "quality_feedback_summary": self.quality_feedback_summary(),
@@ -1503,6 +1557,24 @@ def _normalize_source_schedule(schedule: str) -> str:
     if normalized not in {"manual", "daily", "weekly", "monthly"} and not normalized.startswith("cron:"):
         raise ValueError("Source schedule must be manual, daily, weekly, monthly, or cron:<utc expression>.")
     return normalized
+
+
+def _source_schedule_due(source: dict[str, Any], now: datetime) -> bool:
+    schedule = str(source.get("schedule") or "manual")
+    if schedule == "manual":
+        return False
+    last_scan = _parse_event_datetime(str(source.get("last_scan_at") or ""))
+    if last_scan is None:
+        return True
+    intervals = {
+        "daily": 24 * 60 * 60,
+        "weekly": 7 * 24 * 60 * 60,
+        "monthly": 30 * 24 * 60 * 60,
+    }
+    if schedule.startswith("cron:"):
+        return False
+    interval = intervals.get(schedule)
+    return bool(interval and (now - last_scan).total_seconds() >= interval)
 
 
 def _candidate_preview_record(item: dict[str, Any]) -> dict[str, Any]:

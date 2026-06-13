@@ -1308,9 +1308,43 @@ h1 {
 
 .sources-workspace,
 .source-list,
-.source-candidate-list {
+.source-candidate-list,
+.expansion-panel,
+.expansion-history {
   display: grid;
   gap: 12px;
+}
+
+.expansion-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: 14px;
+}
+
+.expansion-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.expansion-header h3 {
+  margin: 0;
+}
+
+.expansion-run {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.5fr) minmax(0, 1fr);
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.expansion-run span {
+  color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 .source-summary {
@@ -1510,6 +1544,8 @@ h1 {
   .settings-limit-grid,
   .criteria-impact-summary,
   .criteria-impact-row,
+  .expansion-header,
+  .expansion-run,
   .account-metrics,
   .workflow-form,
   .feedback-form,

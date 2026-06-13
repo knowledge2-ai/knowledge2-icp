@@ -121,6 +121,20 @@ curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
   http://127.0.0.1:8765/api/sources
 ```
 
+The Sources tab also exposes a scheduled expansion loop. Cloudflare runs the
+Worker `scheduled()` handler daily at `09:00 UTC`, scans enabled due sources,
+persists source scans and expansion run history in KV, and keeps due-source
+coverage visible in `/api/state`:
+
+```bash
+curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"due_only":true,"max_companies":25}' \
+  http://127.0.0.1:8765/api/expansion/run
+curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
+  http://127.0.0.1:8765/api/expansion/runs
+```
+
 Provider budget and rate-limit controls are seeded in app settings and are
 reported from `/api/state` and detailed `/api/health`. Search, source scans,
 runs, Apollo enrichment, research, and K2 sync actions are audited under

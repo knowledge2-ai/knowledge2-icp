@@ -128,6 +128,14 @@ def _to_toml(config: dict[str, object]) -> str:
         lines.append("]")
         lines.append("")
 
+    triggers = config.get("triggers", {})
+    if isinstance(triggers, dict):
+        crons = triggers.get("crons", [])
+        if isinstance(crons, list) and crons:
+            lines.append("[triggers]")
+            lines.append("crons = [" + ", ".join(_quote(str(item)) for item in crons) + "]")
+            lines.append("")
+
     kv_namespaces = config.get("kv_namespaces", [])
     if isinstance(kv_namespaces, list):
         for namespace in kv_namespaces:

@@ -15,6 +15,7 @@ const state = {
   lists: {},
   sources: [],
   sourceScans: [],
+  expansionRuns: [],
   sourceCoverage: {},
   qualityFeedbackSummary: {},
   evalSummary: {},
@@ -80,6 +81,7 @@ async function loadState() {
   state.lists = payload.lists || {};
   state.sources = payload.sources || [];
   state.sourceScans = payload.source_scans || [];
+  state.expansionRuns = payload.expansion_runs || [];
   state.sourceCoverage = payload.source_coverage || {};
   state.qualityFeedbackSummary = payload.quality_feedback_summary || {};
   state.evalSummary = payload.eval_summary || {};
@@ -345,6 +347,7 @@ function applySettingsToDiscovery() {
 
 function renderSources() {
   renderSourceCoverage();
+  renderExpansionPanel();
   renderSourceList();
   renderSourceScanDetail(state.activeSourceScan);
 }
@@ -359,6 +362,34 @@ function renderSourceCoverage() {
     ${metric("Scans", coverage.scan_count || 0)}
     ${metric("Unique domains", coverage.unique_candidate_domains || 0)}
   </div>`;
+}
+
+function renderExpansionPanel() {
+  const root = $("expansion-panel");
+  if (!root) return;
+  const coverage = state.sourceCoverage || {};
+  const latest = coverage.latest_expansion_run || state.expansionRuns?.[state.expansionRuns.length - 1] || null;
+  root.innerHTML = `<div class="expansion-header">
+      <div>
+        <p class="eyebrow">Expansion Loop</p>
+        <h3>Scheduled Source Sweeps</h3>
+      </div>
+      <button id="run-expansion" type="button" class="secondary">Run due sources</button>
+    </div>
+    <div class="summary-strip source-summary">
+      ${metric("Due sources", coverage.due_source_count || 0)}
+      ${metric("Last candidates", latest?.candidate_count || 0)}
+      ${metric("Last status", latest?.status || "not_run")}
+    </div>
+    <div class="expansion-history">
+      ${(state.expansionRuns || []).slice(-5).reverse().map((run) => `<div class="expansion-run">
+        <strong>${escapeHtml(run.trigger || "expansion")}</strong>
+        <span>${escapeHtml(run.status || "")} · ${escapeHtml(run.candidate_count || 0)} candidates · ${escapeHtml(run.created_at || "")}</span>
+      </div>`).join("") || "<p class=\"muted\">No expansion runs yet.</p>"}
+    </div>`;
+  $("run-expansion")?.addEventListener("click", () => runExpansion().catch((error) => {
+    $("source-status").textContent = error.message;
+  }));
 }
 
 function renderSourceList() {
@@ -462,6 +493,24 @@ async function scanSource(sourceId) {
   } finally {
     if (button) button.textContent = "Scan";
   }
+}
+
+async function runExpansion() {
+  $("source-status").textContent = "Running due scheduled sources...";
+  const payload = await api("/api/expansion/run", {
+    method: "POST",
+    body: JSON.stringify({
+      due_only: true,
+      max_companies: Number($("max-companies").value || 25),
+    }),
+  });
+  state.sources = payload.sources || state.sources;
+  state.sourceScans = payload.scans || state.sourceScans;
+  state.expansionRuns = payload.expansion_runs || state.expansionRuns;
+  state.sourceCoverage = payload.coverage || state.sourceCoverage;
+  state.activeSourceScan = (payload.scans || []).slice(-1)[0] || state.activeSourceScan;
+  renderSources();
+  $("source-status").textContent = `Expansion ${payload.run?.status || "completed"}: ${payload.run?.candidate_count || 0} candidates from ${payload.run?.scanned_source_count || 0} sources.`;
 }
 
 function runOptionsPayload() {
