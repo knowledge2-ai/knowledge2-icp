@@ -139,6 +139,16 @@ curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
   http://127.0.0.1:8765/api/runs/<run-id>/lead-state
 
 curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"domains":["moj.io","automate.co.za"],"status":"Review","note":"BDR queue"}' \
+  http://127.0.0.1:8765/api/runs/<run-id>/lead-state/bulk
+
+curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Tier A review","filters":{"tier":"A","status":"Review"},"sort":{"field":"score","direction":"desc"},"page_size":50}' \
+  http://127.0.0.1:8765/api/lead-views
+
+curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
   http://127.0.0.1:8765/api/runs/<run-id>/workflow
 ```
 
@@ -189,8 +199,8 @@ wrangler deploy --dry-run --config deployment/cloudflare/wrangler.toml
 
 The Worker serves the dashboard assets and seeded dashboard API directly. It
 uses the `ICP_STATE` KV binding to persist criteria edits, saved sources/scans,
-provider usage, runtime runs, lead workflow states, and quality feedback across
-Worker isolates. It does not require a local tunnel or a separate
+provider usage, runtime runs, lead workflow states, saved lead views, and
+quality feedback across Worker isolates. It does not require a local tunnel or a separate
 `ICP_API_ORIGIN`.
 
 For a live environment, render an ignored Wrangler config from environment

@@ -104,7 +104,7 @@
         </nav>
 
         <section id="view-leads" class="view active">
-          <div class="toolbar">
+          <div class="toolbar lead-toolbar">
             <input id="lead-filter" type="search" placeholder="Filter leads, domains, tiers, warnings" />
             <select id="tier-filter" aria-label="Tier filter">
               <option value="">All tiers</option>
@@ -113,10 +113,51 @@
               <option value="C">Tier C</option>
               <option value="Reject">Reject</option>
             </select>
+            <select id="status-filter" aria-label="Status filter">
+              <option value="">All statuses</option>
+            </select>
+            <select id="source-filter" aria-label="Source filter">
+              <option value="">All sources</option>
+            </select>
+            <select id="lead-sort-field" aria-label="Sort leads">
+              <option value="score">Score</option>
+              <option value="company">Company</option>
+              <option value="tier">Tier</option>
+              <option value="status">Status</option>
+              <option value="source">Source</option>
+            </select>
+            <button id="lead-sort-direction" type="button" class="secondary" title="Toggle sort direction">Desc</button>
+            <select id="lead-page-size" aria-label="Rows per page">
+              <option value="25">25/page</option>
+              <option value="50" selected>50/page</option>
+              <option value="100">100/page</option>
+              <option value="200">200/page</option>
+            </select>
+          </div>
+          <div class="bulk-toolbar">
+            <label class="check-row select-page-row">
+              <input id="select-page-leads" type="checkbox" />
+              Select page
+            </label>
+            <select id="bulk-status" aria-label="Bulk status">
+              <option value="Review">Review</option>
+              <option value="Qualified">Qualified</option>
+              <option value="Rejected">Rejected</option>
+              <option value="Exported">Exported</option>
+            </select>
+            <input id="bulk-note" placeholder="Bulk note" />
+            <button id="bulk-update-leads" type="button" class="secondary">Apply to selected</button>
+            <input id="lead-view-name" placeholder="View name" />
+            <button id="save-lead-view" type="button" class="secondary">Save view</button>
+            <select id="lead-view-select" aria-label="Saved lead views">
+              <option value="">Saved views</option>
+            </select>
+            <div id="lead-pagination" class="lead-pagination"></div>
           </div>
           <div class="content-grid">
             <section class="lead-list">
               <div class="table-head">
+                <span>Select</span>
                 <span>Company</span>
                 <span>Tier</span>
                 <span>Score</span>

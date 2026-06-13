@@ -18,6 +18,12 @@ const state = {
   sourceCoverage: {},
   qualityFeedbackSummary: {},
   evalSummary: {},
+  leadViews: [],
+  selectedLeadIds: new Set(),
+  leadPage: 1,
+  leadPageSize: 50,
+  leadSortField: "score",
+  leadSortDirection: "desc",
   activeSourceScan: null,
   criteriaVersions: [],
   criteriaUndoStack: [],
@@ -39,6 +45,8 @@ function resetRunDerivedState() {
   state.accountDetailRunId = null;
   state.accountDetailKey = null;
   state.accountDetailError = "";
+  state.selectedLeadIds.clear();
+  state.leadPage = 1;
 }
 
 async function authFetch(path, options = {}) {
@@ -75,6 +83,7 @@ async function loadState() {
   state.sourceCoverage = payload.source_coverage || {};
   state.qualityFeedbackSummary = payload.quality_feedback_summary || {};
   state.evalSummary = payload.eval_summary || {};
+  state.leadViews = payload.lead_views || [];
   applySeededDefaults();
   renderSeedSummary();
   renderSetup();
@@ -670,6 +679,9 @@ function renderRun(run) {
   const leads = run?.leads || [];
   const selected = leads.find((lead) => lead.id === state.selectedLeadId) || leads[0] || null;
   state.selectedLeadId = selected?.id || null;
+  state.selectedLeadIds.forEach((leadId) => {
+    if (!leads.some((lead) => lead.id === leadId)) state.selectedLeadIds.delete(leadId);
+  });
   if (
     state.prospectFocusLeadId &&
     state.prospectFocusLeadId !== ALL_PROSPECTS &&
@@ -678,6 +690,7 @@ function renderRun(run) {
     state.prospectFocusLeadId = null;
   }
   renderSummary(run, leads);
+  renderLeadControls(leads);
   renderLeadRows(leads);
   renderK2Panel();
   renderEvalPanel();
@@ -705,6 +718,7 @@ function renderSummary(run, leads) {
     metric("Tier A", tierCounts.A || 0),
     metric("Feedback", state.qualityFeedbackSummary.total || 0),
     metric("Eval", state.evalSummary.latest_status || "not_run"),
+    metric("Selected", state.selectedLeadIds.size),
   ].join("");
 }
 
@@ -712,43 +726,190 @@ function metric(label, value) {
   return `<div class="metric"><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></div>`;
 }
 
-function renderLeadRows(leads) {
+function renderLeadControls(leads) {
+  renderLeadStatusOptions();
+  renderLeadSourceOptions(leads);
+  renderLeadViews();
+  if ($("lead-sort-field")) $("lead-sort-field").value = state.leadSortField;
+  if ($("lead-sort-direction")) $("lead-sort-direction").textContent = state.leadSortDirection === "desc" ? "Desc" : "Asc";
+  if ($("lead-page-size")) $("lead-page-size").value = String(state.leadPageSize);
+  updateBulkControls();
+}
+
+function renderLeadStatusOptions() {
+  const select = $("status-filter");
+  if (!select) return;
+  const current = select.value;
+  const statuses = state.currentRun?.workflow?.lead_statuses || ["New", "Review", "Qualified", "Rejected", "Exported"];
+  select.innerHTML = `<option value="">All statuses</option>${statuses.map((status) => `<option value="${escapeAttribute(status)}">${escapeHtml(status)}</option>`).join("")}`;
+  select.value = statuses.includes(current) ? current : "";
+}
+
+function renderLeadSourceOptions(leads) {
+  const select = $("source-filter");
+  if (!select) return;
+  const current = select.value;
+  const sources = [...new Set(leads.map((lead) => leadSourceLabel(lead)).filter(Boolean))].sort((left, right) => left.localeCompare(right));
+  select.innerHTML = `<option value="">All sources</option>${sources.map((source) => `<option value="${escapeAttribute(source)}">${escapeHtml(source)}</option>`).join("")}`;
+  select.value = sources.includes(current) ? current : "";
+}
+
+function renderLeadViews() {
+  const select = $("lead-view-select");
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML = `<option value="">Saved views</option>${(state.leadViews || []).map((view) => `<option value="${escapeAttribute(view.id)}">${escapeHtml(view.name || view.id)}</option>`).join("")}`;
+  select.value = (state.leadViews || []).some((view) => view.id === current) ? current : "";
+}
+
+function filteredSortedLeads(leads) {
   const filter = $("lead-filter").value.toLowerCase();
   const tier = $("tier-filter").value;
-  const root = $("lead-rows");
+  const status = $("status-filter")?.value || "";
+  const source = $("source-filter")?.value || "";
   const filtered = leads.filter((lead) => {
+    const workflow = lead.workflow || {};
     const haystack = JSON.stringify({
       company: lead.score?.company,
       tier: lead.score?.tier,
+      status: workflow.status || "New",
       warnings: lead.score?.warnings,
       strategy: lead.strategy,
+      source: leadSourceLabel(lead),
     }).toLowerCase();
-    return (!tier || lead.score?.tier === tier) && (!filter || haystack.includes(filter));
+    return (
+      (!tier || lead.score?.tier === tier) &&
+      (!status || (workflow.status || "New") === status) &&
+      (!source || leadSourceLabel(lead) === source) &&
+      (!filter || haystack.includes(filter))
+    );
   });
+  return filtered.sort(compareLeadsForQueue);
+}
+
+function compareLeadsForQueue(left, right) {
+  const direction = state.leadSortDirection === "asc" ? 1 : -1;
+  const field = state.leadSortField || "score";
+  if (field === "score") {
+    return direction * (Number(left.score?.total_score || 0) - Number(right.score?.total_score || 0)) || leadCompanyName(left).localeCompare(leadCompanyName(right));
+  }
+  if (field === "tier") {
+    return direction * (tierRank(left.score?.tier) - tierRank(right.score?.tier)) || leadCompanyName(left).localeCompare(leadCompanyName(right));
+  }
+  if (field === "status") {
+    return direction * workflowStatusRank(left).localeCompare(workflowStatusRank(right)) || leadCompanyName(left).localeCompare(leadCompanyName(right));
+  }
+  if (field === "source") {
+    return direction * leadSourceLabel(left).localeCompare(leadSourceLabel(right)) || leadCompanyName(left).localeCompare(leadCompanyName(right));
+  }
+  return direction * leadCompanyName(left).localeCompare(leadCompanyName(right));
+}
+
+function currentLeadPageSize() {
+  const value = Number($("lead-page-size")?.value || state.leadPageSize || 50);
+  state.leadPageSize = Number.isFinite(value) ? Math.max(10, Math.min(value, 500)) : 50;
+  return state.leadPageSize;
+}
+
+function renderLeadPagination(total, pageCount) {
+  const root = $("lead-pagination");
+  if (!root) return;
+  const pageSize = currentLeadPageSize();
+  const start = total ? (state.leadPage - 1) * pageSize + 1 : 0;
+  const end = Math.min(total, state.leadPage * pageSize);
+  root.innerHTML = `<button id="lead-page-prev" type="button" class="secondary small"${state.leadPage <= 1 ? " disabled" : ""}>Prev</button>
+    <span>${escapeHtml(start)}-${escapeHtml(end)} of ${escapeHtml(total)}</span>
+    <button id="lead-page-next" type="button" class="secondary small"${state.leadPage >= pageCount ? " disabled" : ""}>Next</button>`;
+  $("lead-page-prev")?.addEventListener("click", () => {
+    state.leadPage = Math.max(1, state.leadPage - 1);
+    renderRun(state.currentRun);
+  });
+  $("lead-page-next")?.addEventListener("click", () => {
+    state.leadPage = Math.min(pageCount, state.leadPage + 1);
+    renderRun(state.currentRun);
+  });
+}
+
+function syncSelectPageCheckbox(pageLeads) {
+  const box = $("select-page-leads");
+  if (!box) return;
+  const selectable = pageLeads.filter((lead) => lead.id);
+  const selectedCount = selectable.filter((lead) => state.selectedLeadIds.has(lead.id)).length;
+  box.checked = Boolean(selectable.length && selectedCount === selectable.length);
+  box.indeterminate = Boolean(selectedCount && selectedCount < selectable.length);
+  updateBulkControls();
+}
+
+function updateBulkControls() {
+  if ($("bulk-update-leads")) $("bulk-update-leads").disabled = !state.selectedLeadIds.size;
+}
+
+function leadCompanyName(lead) {
+  return String(lead.score?.company?.company || lead.company || "");
+}
+
+function leadSourceLabel(lead) {
+  const company = lead.score?.company || {};
+  return String(company.source_group || lead.candidate?.source_title || company.source || "unknown");
+}
+
+function tierRank(tier) {
+  return { A: 4, B: 3, C: 2, Reject: 1 }[String(tier || "")] ?? 0;
+}
+
+function workflowStatusRank(lead) {
+  const status = String(lead.workflow?.status || "New");
+  const rank = ["New", "Review", "Qualified", "Rejected", "Exported"].indexOf(status);
+  return `${rank >= 0 ? rank : 99}`.padStart(2, "0");
+}
+
+function renderLeadRows(leads) {
+  const root = $("lead-rows");
+  const filtered = filteredSortedLeads(leads);
+  const pageSize = currentLeadPageSize();
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  state.leadPage = Math.max(1, Math.min(state.leadPage, pageCount));
+  const start = (state.leadPage - 1) * pageSize;
+  const pageLeads = filtered.slice(start, start + pageSize);
+  renderLeadPagination(filtered.length, pageCount);
   if (!filtered.length) {
     root.innerHTML = `<div class="lead-row"><span>No matching leads.</span></div>`;
+    syncSelectPageCheckbox([]);
     return;
   }
-  root.innerHTML = filtered
+  root.innerHTML = pageLeads
     .map((lead) => {
       const company = lead.score.company || {};
+      const workflow = lead.workflow || {};
       const selected = lead.id === state.selectedLeadId ? " selected" : "";
       return `<div class="lead-row${selected}" data-lead-id="${escapeHtml(lead.id)}">
+        <span><input class="lead-select" type="checkbox" data-select-lead-id="${escapeAttribute(lead.id)}"${state.selectedLeadIds.has(lead.id) ? " checked" : ""} aria-label="Select ${escapeAttribute(company.company || lead.id)}" /></span>
         <span><strong>${escapeHtml(company.company || "")}</strong><small>${escapeHtml(company.domain || "")}</small></span>
         <span class="${tierClass(lead.score.tier)}">${escapeHtml(lead.score.tier || "")}</span>
-        <span class="score">${lead.score.total_score || 0}</span>
+        <span class="score">${lead.score.total_score || 0}<small>${escapeHtml(workflow.status || "New")}</small></span>
         <span>${escapeHtml(lead.strategy?.wedge || lead.score.next_action || "")}</span>
       </div>`;
     })
     .join("");
+  root.querySelectorAll("[data-select-lead-id]").forEach((box) => {
+    box.addEventListener("change", (event) => {
+      const leadId = event.currentTarget.dataset.selectLeadId;
+      if (event.currentTarget.checked) state.selectedLeadIds.add(leadId);
+      else state.selectedLeadIds.delete(leadId);
+      syncSelectPageCheckbox(pageLeads);
+      renderSummary(state.currentRun, state.currentRun?.leads || []);
+    });
+  });
   root.querySelectorAll("[data-lead-id]").forEach((row) => {
-    row.addEventListener("click", () => {
+    row.addEventListener("click", (event) => {
+      if (event.target.closest("input")) return;
       state.selectedLeadId = row.dataset.leadId;
       state.prospectFocusLeadId = row.dataset.leadId;
       renderRun(state.currentRun);
       activateView("prospects");
     });
   });
+  syncSelectPageCheckbox(pageLeads);
 }
 
 function renderLeadDetail(lead) {
@@ -1378,10 +1539,8 @@ async function saveAccountWorkflow(event) {
   if (state.currentRun.workflow) state.currentRun.workflow.status_counts = payload.status_counts || state.currentRun.workflow.status_counts;
   const lead = (state.currentRun.leads || []).find((item) => normalizeText(leadCompany(item).domain) === normalizeText(domain));
   if (lead) lead.workflow = payload.lead_state;
-  renderLeadRows(state.currentRun.leads || []);
-  renderLeadDetail((state.currentRun.leads || []).find((item) => item.id === state.selectedLeadId) || null);
   clearAccountDetailState();
-  renderAccountDrilldown(currentProspectFocusLead());
+  renderRun(state.currentRun);
 }
 
 async function saveAccountQualityFeedback(event) {
@@ -1462,6 +1621,85 @@ async function downloadOutreachDrafts() {
     `${state.currentRun.id}-outreach-drafts.csv`,
     "text/csv",
   );
+}
+
+async function bulkUpdateSelectedLeads() {
+  if (!state.currentRun || !state.selectedLeadIds.size) return;
+  const selected = (state.currentRun.leads || []).filter((lead) => state.selectedLeadIds.has(lead.id));
+  const domains = selected.map((lead) => leadCompany(lead).domain).filter(Boolean);
+  if (!domains.length) return;
+  const payload = await api(`/api/runs/${state.currentRun.id}/lead-state/bulk`, {
+    method: "POST",
+    body: JSON.stringify({
+      domains,
+      status: $("bulk-status").value,
+      note: $("bulk-note").value,
+    }),
+  });
+  const statesByDomain = new Map((payload.lead_states || []).map((item) => [normalizeText(item.domain), item]));
+  for (const lead of state.currentRun.leads || []) {
+    const record = statesByDomain.get(normalizeText(leadCompany(lead).domain));
+    if (record) lead.workflow = record;
+  }
+  if (state.currentRun.workflow) state.currentRun.workflow.status_counts = payload.status_counts || state.currentRun.workflow.status_counts;
+  state.selectedLeadIds.clear();
+  $("bulk-note").value = "";
+  clearAccountDetailState();
+  renderRun(state.currentRun);
+}
+
+async function saveCurrentLeadView() {
+  const name = $("lead-view-name").value.trim();
+  if (!name) return;
+  const payload = await api("/api/lead-views", {
+    method: "POST",
+    body: JSON.stringify({
+      name,
+      filters: currentLeadFilters(),
+      sort: { field: state.leadSortField, direction: state.leadSortDirection },
+      page_size: currentLeadPageSize(),
+    }),
+  });
+  state.leadViews = payload.views || state.leadViews;
+  $("lead-view-name").value = "";
+  renderLeadViews();
+}
+
+function currentLeadFilters() {
+  return {
+    text: $("lead-filter").value,
+    tier: $("tier-filter").value,
+    status: $("status-filter")?.value || "",
+    source: $("source-filter")?.value || "",
+  };
+}
+
+function applyLeadView(viewId) {
+  const view = (state.leadViews || []).find((item) => item.id === viewId);
+  if (!view) return;
+  const filters = view.filters || {};
+  $("lead-filter").value = filters.text || "";
+  $("tier-filter").value = filters.tier || "";
+  $("status-filter").value = filters.status || "";
+  $("source-filter").value = filters.source || "";
+  state.leadSortField = view.sort?.field || "score";
+  state.leadSortDirection = view.sort?.direction === "asc" ? "asc" : "desc";
+  state.leadPageSize = Number(view.page_size || state.leadPageSize || 50);
+  state.leadPage = 1;
+  renderRun(state.currentRun);
+}
+
+function visibleLeadPage() {
+  const leads = filteredSortedLeads(state.currentRun?.leads || []);
+  const pageSize = currentLeadPageSize();
+  const pageCount = Math.max(1, Math.ceil(leads.length / pageSize));
+  state.leadPage = Math.max(1, Math.min(state.leadPage, pageCount));
+  return leads.slice((state.leadPage - 1) * pageSize, state.leadPage * pageSize);
+}
+
+function leadQueueControlsChanged() {
+  state.leadPage = 1;
+  renderRun(state.currentRun);
 }
 
 function accountKey(lead) {
@@ -1686,8 +1924,39 @@ document.querySelectorAll(".tab").forEach((tab) => {
 initAuthControls();
 $("save-admin-token").addEventListener("click", saveAuthToken);
 $("clear-admin-token").addEventListener("click", clearAuthToken);
-$("lead-filter").addEventListener("input", () => renderRun(state.currentRun));
-$("tier-filter").addEventListener("change", () => renderRun(state.currentRun));
+$("lead-filter").addEventListener("input", leadQueueControlsChanged);
+$("tier-filter").addEventListener("change", leadQueueControlsChanged);
+$("status-filter").addEventListener("change", leadQueueControlsChanged);
+$("source-filter").addEventListener("change", leadQueueControlsChanged);
+$("lead-page-size").addEventListener("change", leadQueueControlsChanged);
+$("lead-sort-field").addEventListener("change", (event) => {
+  state.leadSortField = event.currentTarget.value || "score";
+  leadQueueControlsChanged();
+});
+$("lead-sort-direction").addEventListener("click", () => {
+  state.leadSortDirection = state.leadSortDirection === "desc" ? "asc" : "desc";
+  leadQueueControlsChanged();
+});
+$("select-page-leads").addEventListener("change", (event) => {
+  const pageLeads = visibleLeadPage();
+  for (const lead of pageLeads) {
+    if (!lead.id) continue;
+    if (event.currentTarget.checked) state.selectedLeadIds.add(lead.id);
+    else state.selectedLeadIds.delete(lead.id);
+  }
+  renderRun(state.currentRun);
+});
+$("bulk-update-leads").addEventListener("click", () => {
+  bulkUpdateSelectedLeads().catch((error) => {
+    $("run-status").textContent = error.message;
+  });
+});
+$("save-lead-view").addEventListener("click", () => {
+  saveCurrentLeadView().catch((error) => {
+    $("run-status").textContent = error.message;
+  });
+});
+$("lead-view-select").addEventListener("change", (event) => applyLeadView(event.currentTarget.value));
 ["query", "seed-text", "max-companies"].forEach((id) => {
   $(id).addEventListener("input", clearCandidatePreview);
 });

@@ -187,6 +187,7 @@ const runtime = {
   runs: new Map(),
   seedLists: null,
   leadStates: new Map(),
+  leadViews: [],
   sources: null,
   sourceScans: [],
   providerUsage: [],
@@ -250,6 +251,20 @@ async function handleApiRequest(request, env, url) {
 
   if (method === "GET" && url.pathname === "/api/state") {
     return json(await currentState(env, lists));
+  }
+
+  if (method === "GET" && url.pathname === "/api/lead-views") {
+    return json({ views: await loadLeadViews(env) });
+  }
+
+  if (method === "POST" && url.pathname === "/api/lead-views") {
+    const payload = await readJson(request);
+    try {
+      const view = await saveLeadView(env, payload);
+      return json({ view, views: await loadLeadViews(env) });
+    } catch (error) {
+      return json({ error: error.message || String(error) }, 400);
+    }
   }
 
   if (method === "GET" && url.pathname === "/api/evals/cases") {
@@ -443,12 +458,33 @@ async function handleApiRequest(request, env, url) {
     });
   }
 
+  const bulkLeadStateMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/lead-state\/bulk$/);
+  if (method === "POST" && bulkLeadStateMatch) {
+    const run = await loadRun(env, bulkLeadStateMatch[1], lists);
+    if (!run) return json({ error: "Run not found." }, 404);
+    const payload = await readJson(request);
+    try {
+      return json(await bulkUpdateLeadStates(env, run, payload));
+    } catch (error) {
+      return json({ error: error.message || String(error) }, 400);
+    }
+  }
+
   const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)(?:\/([^/]+))?$/);
   if (runMatch) {
     const run = await loadRun(env, runMatch[1], lists);
     if (!run) return json({ error: "Run not found." }, 404);
     const action = runMatch[2] || "";
     if (method === "GET" && !action) return json(run);
+    if (method === "GET" && action === "workflow") {
+      return json({
+        run_id: run.id,
+        lead_statuses: run.workflow?.lead_statuses || [],
+        status_counts: run.workflow?.status_counts || {},
+        lead_states: Array.from((await loadLeadStates(env, run.id)).values()),
+        saved_views: await loadLeadViews(env),
+      });
+    }
     if (method === "POST" && action === "lead-state") {
       const payload = await readJson(request);
       let record;
@@ -618,6 +654,7 @@ async function currentState(env, lists) {
     settings: clone(SEED_SETTINGS),
     lists: clone(lists),
     runs,
+    lead_views: await loadLeadViews(env),
     sources: await loadSources(env, lists),
     source_scans: (await loadSourceScans(env)).slice(-25),
     source_coverage: await sourceCoverage(env, lists),
@@ -1201,7 +1238,7 @@ async function attachWorkflow(env, run) {
   run.workflow = {
     lead_statuses: ["New", "Review", "Qualified", "Rejected", "Exported"],
     status_counts: leadStatusCounts(run),
-    saved_views: [],
+    saved_views: await loadLeadViews(env),
   };
   return run;
 }
@@ -1250,6 +1287,81 @@ async function saveLeadState(env, runId, payload) {
   runtime.leadStates.set(runId, runStates);
   await persistLeadStates(env);
   return record;
+}
+
+async function bulkUpdateLeadStates(env, run, payload) {
+  const domains = Array.isArray(payload.domains) ? payload.domains.map((item) => normalizeDomain(item)).filter(Boolean) : [];
+  if (!domains.length) throw new Error("domains must be a non-empty list.");
+  const uniqueDomains = [...new Set(domains)];
+  const leadsByDomain = new Map(
+    (run.leads || []).map((lead) => [normalizeDomain(lead.score?.company?.domain || ""), lead]),
+  );
+  const updated = [];
+  for (const domain of uniqueDomains) {
+    const lead = leadsByDomain.get(domain) || {};
+    updated.push(await saveLeadState(env, run.id, {
+      domain,
+      company: lead.score?.company?.company || "",
+      status: payload.status || "Review",
+      note: payload.note || "",
+      owner: payload.owner || "",
+      tags: Array.isArray(payload.tags) ? payload.tags : undefined,
+    }));
+  }
+  const hydrated = await attachWorkflow(env, run);
+  return {
+    run_id: run.id,
+    updated_count: updated.length,
+    lead_states: updated,
+    status_counts: leadStatusCounts(hydrated),
+  };
+}
+
+async function loadLeadViews(env) {
+  if (env?.ICP_STATE?.get) {
+    const stored = await getStateJson(env, "lead_views", null);
+    if (Array.isArray(stored)) {
+      runtime.leadViews = stored.filter((item) => item && typeof item === "object" && item.name);
+      return runtime.leadViews;
+    }
+  }
+  return runtime.leadViews;
+}
+
+async function saveLeadView(env, payload) {
+  const cleanName = String(payload.name || "").trim().replace(/\s+/g, " ");
+  if (!cleanName) throw new Error("View name is required.");
+  const views = await loadLeadViews(env);
+  const viewId = `lead-view-${criteriaHash(cleanName.toLowerCase()).replace("criteria-", "")}`;
+  const previous = views.find((item) => item.id === viewId) || {};
+  const now = nowIso();
+  const view = {
+    id: viewId,
+    name: cleanName,
+    filters: payload.filters && typeof payload.filters === "object" && !Array.isArray(payload.filters) ? clone(payload.filters) : {},
+    sort: normalizeLeadViewSort(payload.sort),
+    page_size: normalizeLeadViewPageSize(payload.page_size || previous.page_size || 50),
+    created_at: previous.created_at || now,
+    updated_at: now,
+  };
+  runtime.leadViews = [...views.filter((item) => item.id !== viewId), view]
+    .sort((left, right) => String(left.name || "").localeCompare(String(right.name || "")));
+  await putStateJson(env, "lead_views", runtime.leadViews);
+  return view;
+}
+
+function normalizeLeadViewSort(input) {
+  const sort = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  const field = String(sort.field || "score").trim().toLowerCase();
+  return {
+    field: ["score", "company", "tier", "status", "source"].includes(field) ? field : "score",
+    direction: String(sort.direction || "desc").toLowerCase() === "asc" ? "asc" : "desc",
+  };
+}
+
+function normalizeLeadViewPageSize(value) {
+  const pageSize = Number(value || 50);
+  return Number.isFinite(pageSize) ? Math.max(10, Math.min(Math.trunc(pageSize), 500)) : 50;
 }
 
 async function saveQualityFeedback(env, runId, payload) {

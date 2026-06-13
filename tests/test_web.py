@@ -104,11 +104,23 @@ class WebApiTest(unittest.TestCase):
                 self.assertEqual(workflow["status_counts"]["Qualified"], 1)
                 self.assertEqual(workflow["lead_states"][0]["domain"], "acme.example")
 
+                bulk = _json_post(
+                    f"{base_url}/api/runs/{run['id']}/lead-state/bulk",
+                    {
+                        "domains": ["acme.example"],
+                        "status": "Exported",
+                        "note": "Bulk ready for CRM.",
+                    },
+                )
+                self.assertEqual(bulk["updated_count"], 1)
+                self.assertEqual(bulk["lead_states"][0]["status"], "Exported")
+                self.assertEqual(bulk["status_counts"]["Exported"], 1)
+
                 view = _json_post(
                     f"{base_url}/api/lead-views",
                     {
                         "name": "Qualified A Accounts",
-                        "filters": {"status": ["Qualified"], "tier": ["A"]},
+                        "filters": {"status": "Exported", "tier": "A", "source": "manual-seed"},
                         "sort": {"field": "score", "direction": "desc"},
                         "page_size": 25,
                     },
@@ -141,7 +153,7 @@ class WebApiTest(unittest.TestCase):
 
                 account = _json_get(f"{base_url}/api/runs/{run['id']}/accounts/acme.example")
                 self.assertEqual(account["company"]["company"], "Acme Fleet")
-                self.assertEqual(account["workflow"]["status"], "Qualified")
+                self.assertEqual(account["workflow"]["status"], "Exported")
                 self.assertGreaterEqual(len(account["role_groups"]), 1)
                 self.assertGreaterEqual(len(account["outreach_drafts"]), 1)
                 self.assertEqual(account["evidence_timeline"][0]["title"], "About")
