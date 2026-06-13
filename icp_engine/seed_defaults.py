@@ -93,6 +93,31 @@ SEEDED_SETTINGS: dict[str, Any] = {
     "tier_b_threshold": 60,
     "employee_range": "25-2000 employees",
     "deployment_mode": "cloudflare-seeded-worker",
+    "provider_limits": {
+        "enabled": True,
+        "daily": {
+            "search": 200,
+            "source_scan": 100,
+            "run": 80,
+            "apollo_enrichment": 100,
+            "research": 300,
+            "k2_apply": 10,
+            "k2_dry_run": 100,
+        },
+        "rate_per_minute": {
+            "search": 30,
+            "source_scan": 20,
+            "run": 10,
+            "apollo_enrichment": 20,
+            "research": 60,
+            "k2_apply": 5,
+            "k2_dry_run": 20,
+        },
+        "per_run": {
+            "max_companies": 100,
+            "max_pages": 20,
+        },
+    },
 }
 
 

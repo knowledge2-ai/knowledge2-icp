@@ -219,6 +219,17 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                     return
                 payload = self._read_json()
                 max_companies = int(payload.get("max_companies") or 25)
+                guard = app.store.authorize_provider_action(
+                    "source_scan",
+                    details={
+                        "source_id": source_id,
+                        "source_type": source.get("type"),
+                        "max_companies": max_companies,
+                    },
+                )
+                if not guard["allowed"]:
+                    self._send_provider_denied(guard)
+                    return
                 candidates, warnings = app.pipeline.scan_source(source, max_companies=max_companies)
                 candidate_payloads = _candidate_payloads(candidates)
                 try:
@@ -244,10 +255,18 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                 return
             if parsed.path == "/api/search":
                 payload = self._read_json()
+                max_companies = int(payload.get("max_companies") or 10)
+                guard = app.store.authorize_provider_action(
+                    "search",
+                    details={"max_companies": max_companies},
+                )
+                if not guard["allowed"]:
+                    self._send_provider_denied(guard)
+                    return
                 candidates, warnings = app.pipeline.discover(
                     str(payload.get("query", "")),
                     seed_text=str(payload.get("seed_text", "")),
-                    max_companies=int(payload.get("max_companies") or 10),
+                    max_companies=max_companies,
                 )
                 self._send_json(
                     {
@@ -259,14 +278,44 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
             if parsed.path == "/api/runs":
                 payload = self._read_json()
                 candidate_payloads = payload.get("candidates")
+                max_companies = int(payload.get("max_companies") or 8)
+                max_pages = int(payload.get("max_pages") or 8)
+                guard = app.store.authorize_provider_action(
+                    "run",
+                    details={
+                        "max_companies": max_companies,
+                        "max_pages": max_pages,
+                        "use_apollo": bool(payload.get("use_apollo", False)),
+                    },
+                )
+                if not guard["allowed"]:
+                    self._send_provider_denied(guard)
+                    return
+                if not isinstance(candidate_payloads, list) and str(payload.get("query", "")).strip():
+                    search_guard = app.store.authorize_provider_action(
+                        "search",
+                        details={"max_companies": max_companies, "source": "run"},
+                    )
+                    if not search_guard["allowed"]:
+                        self._send_provider_denied(search_guard)
+                        return
+                if bool(payload.get("use_apollo", False)):
+                    apollo_guard = app.store.authorize_provider_action(
+                        "apollo_enrichment",
+                        amount=max_companies,
+                        details={"max_companies": max_companies},
+                    )
+                    if not apollo_guard["allowed"]:
+                        self._send_provider_denied(apollo_guard)
+                        return
                 try:
                     run = app.pipeline.create_run(
                         query=str(payload.get("query", "")),
                         seed_text=str(payload.get("seed_text", "")),
                         candidate_payloads=candidate_payloads if isinstance(candidate_payloads, list) else None,
-                        max_companies=int(payload.get("max_companies") or 8),
+                        max_companies=max_companies,
                         fetch=bool(payload.get("fetch", True)),
-                        max_pages=int(payload.get("max_pages") or 8),
+                        max_pages=max_pages,
                         include_github=bool(payload.get("include_github", True)),
                         use_apollo=bool(payload.get("use_apollo", False)),
                     )
@@ -277,6 +326,13 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                 return
             if parsed.path == "/api/research":
                 payload = self._read_json()
+                guard = app.store.authorize_provider_action(
+                    "research",
+                    details={"run_id": str(payload.get("run_id", ""))},
+                )
+                if not guard["allowed"]:
+                    self._send_provider_denied(guard)
+                    return
                 answer = app.pipeline.answer_question(
                     run_id=str(payload.get("run_id", "")),
                     question=str(payload.get("question", "")),
@@ -351,6 +407,14 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                     self._send_json({"error": "Run not found."}, status=HTTPStatus.NOT_FOUND)
                     return
                 payload = self._read_json()
+                action_name = "k2_apply" if bool(payload.get("apply", False)) else "k2_dry_run"
+                guard = app.store.authorize_provider_action(
+                    action_name,
+                    details={"run_id": run_id, "apply": bool(payload.get("apply", False))},
+                )
+                if not guard["allowed"]:
+                    self._send_provider_denied(guard)
+                    return
                 result = app.pipeline.k2.sync_manifest(
                     run,
                     project_name=str(payload.get("project_name") or "Knowledge2 ICP GTM"),
@@ -430,6 +494,15 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             self.wfile.write(body)
 
+        def _send_provider_denied(self, guard: dict[str, Any]) -> None:
+            self._send_json(
+                {
+                    "error": guard.get("reason") or "Provider action denied by budget policy.",
+                    "provider_control": guard,
+                },
+                status=HTTPStatus.TOO_MANY_REQUESTS,
+            )
+
         def _send_text(
             self,
             payload: str,
@@ -477,6 +550,7 @@ def _health_payload(app: GTMApp, *, detailed: bool) -> dict[str, Any]:
                 "state_dir_writable": os.access(app.store.state_dir, os.W_OK),
                 "run_count": len(app.store.list_runs()),
                 "provider_status": app.store.state().get("provider_status", {}),
+                "provider_controls": app.store.provider_usage_summary(),
             }
         )
     return payload

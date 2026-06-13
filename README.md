@@ -109,6 +109,12 @@ curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
   http://127.0.0.1:8765/api/sources
 ```
 
+Provider budget and rate-limit controls are seeded in app settings and are
+reported from `/api/state` and detailed `/api/health`. Search, source scans,
+runs, Apollo enrichment, research, and K2 sync actions are audited under
+`provider_action.allowed` or `provider_action.denied`; denied actions return
+HTTP `429` with a `provider_control` payload describing the limit.
+
 Lead workflow state is stored under `out/app_state` and survives server
 restarts. API clients can mark leads as `New`, `Review`, `Qualified`,
 `Rejected`, or `Exported`, bulk update lead status, save filtered lead views,
@@ -208,3 +214,5 @@ make cloudflare-preflight
 - `docs/GEMINI.md`: Vertex AI / Gemini service-account setup
 - `docs/OPERATIONS.md`: common local runbooks
 - `docs/CLOUDFLARE_K2_DEPLOYMENT.md`: Cloudflare, K2, Apollo deployment path
+- `docs/designs/2026-06-13-icp-eval-pipeline.md`: K2-first eval pipeline
+  design for loaded data and produced GTM results

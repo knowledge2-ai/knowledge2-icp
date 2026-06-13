@@ -55,6 +55,7 @@ class WebApiTest(unittest.TestCase):
                 readiness = _json_get(f"{base_url}/api/health")
                 self.assertEqual(readiness["status"], "ok")
                 self.assertIn("provider_status", readiness)
+                self.assertIn("provider_controls", readiness)
 
                 updated = _json_post(f"{base_url}/api/criteria", {"markdown": "# ICP  \n\n* Test"})
                 self.assertEqual(updated["criteria"]["markdown"], "# ICP\n\n- Test\n")
@@ -191,6 +192,53 @@ class WebApiTest(unittest.TestCase):
                 selected_lead = selected_run["leads"][0]
                 self.assertEqual(selected_lead["candidate"]["source_title"], "Selected preview candidate")
                 self.assertIn("https://github.com/selected", selected_lead["metadata"]["source_refs"]["github_urls"])
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+    def test_provider_budget_denial_is_visible(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            store.ensure()
+            store.settings_path.write_text(
+                json.dumps(
+                    {
+                        "provider_limits": {
+                            "enabled": True,
+                            "daily": {"search": 100},
+                            "rate_per_minute": {"search": 100},
+                            "per_run": {"max_companies": 1},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            pipeline = ResearchPipeline(store, evidence_fetcher=fake_evidence)
+            app = GTMApp(store=store, pipeline=pipeline)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_port}"
+            try:
+                with self.assertRaises(HTTPError) as denied:
+                    _json_post(
+                        f"{base_url}/api/search",
+                        {
+                            "query": "",
+                            "seed_text": "Acme Fleet, acme.example",
+                            "max_companies": 2,
+                        },
+                    )
+                self.assertEqual(denied.exception.code, 429)
+                body = json.loads(denied.exception.read().decode("utf-8"))
+                self.assertIn("provider_control", body)
+                self.assertEqual(body["provider_control"]["action"], "search")
+                self.assertEqual(body["provider_control"]["limit_type"], "per_run")
+                self.assertIn("max_companies", body["error"])
+
+                health = _json_get(f"{base_url}/api/health")
+                self.assertEqual(health["provider_controls"]["denied_counts"]["search"], 1)
             finally:
                 server.shutdown()
                 server.server_close()

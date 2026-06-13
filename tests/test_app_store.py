@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -24,6 +25,8 @@ class AppStoreTest(unittest.TestCase):
             self.assertIn("Advanced Utility Systems", companies)
             self.assertIn("Symplicity", companies)
             self.assertIn("ServiceTitan", companies)
+            self.assertIn("provider_controls", state)
+            self.assertTrue(state["provider_controls"]["policy"]["enabled"])
             self.assertEqual(state["latest_run"]["id"], "run-seeded-icp")
             self.assertGreaterEqual(len(state["latest_run"]["leads"]), 428)
             self.assertEqual(state["latest_run"]["leads"][0]["score"]["company"]["company"], "ServiceTitan")
@@ -255,6 +258,52 @@ class AppStoreTest(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 reloaded.save_source("Bad", source_type="bad", value="x")
+
+    def test_provider_controls_enforce_limits_and_audit_usage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            store.ensure()
+            store.settings_path.write_text(
+                json.dumps(
+                    {
+                        "provider_limits": {
+                            "enabled": True,
+                            "daily": {"search": 1},
+                            "rate_per_minute": {"search": 99},
+                            "per_run": {"max_companies": 2, "max_pages": 3},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            first = store.authorize_provider_action(
+                "search",
+                details={"max_companies": 1},
+            )
+            second = store.authorize_provider_action(
+                "search",
+                details={"max_companies": 1},
+            )
+            run_denied = store.authorize_provider_action(
+                "run",
+                details={"max_companies": 3, "max_pages": 1},
+            )
+
+            self.assertTrue(first["allowed"])
+            self.assertFalse(second["allowed"])
+            self.assertEqual(second["limit_type"], "daily")
+            self.assertIn("Daily provider budget", second["reason"])
+            self.assertFalse(run_denied["allowed"])
+            self.assertEqual(run_denied["limit_type"], "per_run")
+
+            summary = store.provider_usage_summary()
+            self.assertEqual(summary["allowed_counts"]["search"], 1)
+            self.assertGreaterEqual(summary["denied_counts"]["search"], 1)
+            self.assertGreaterEqual(summary["denied_counts"]["run"], 1)
+            audit_actions = {event["action"] for event in store.list_audit_events(limit=20)}
+            self.assertIn("provider_action.allowed", audit_actions)
+            self.assertIn("provider_action.denied", audit_actions)
 
 
 if __name__ == "__main__":

@@ -108,6 +108,31 @@ const SEED_SETTINGS = {
   tier_b_threshold: 60,
   employee_range: "25-2000 employees",
   deployment_mode: "cloudflare-seeded-worker",
+  provider_limits: {
+    enabled: true,
+    daily: {
+      search: 200,
+      source_scan: 100,
+      run: 80,
+      apollo_enrichment: 100,
+      research: 300,
+      k2_apply: 10,
+      k2_dry_run: 100,
+    },
+    rate_per_minute: {
+      search: 30,
+      source_scan: 20,
+      run: 10,
+      apollo_enrichment: 20,
+      research: 60,
+      k2_apply: 5,
+      k2_dry_run: 20,
+    },
+    per_run: {
+      max_companies: 100,
+      max_pages: 20,
+    },
+  },
 };
 
 const SEED_LISTS = {
@@ -164,6 +189,7 @@ const runtime = {
   leadStates: new Map(),
   sources: null,
   sourceScans: [],
+  providerUsage: [],
 };
 
 export default {
@@ -214,6 +240,7 @@ async function handleApiRequest(request, env, url) {
       mode: "seeded-worker",
       run_count: listRuns(lists).length,
       provider_status: providerStatus(env),
+      provider_controls: providerControls(),
     });
   }
 
@@ -269,19 +296,55 @@ async function handleApiRequest(request, env, url) {
     const sourceId = decodeURIComponent(sourceScanMatch[1]);
     const source = loadSources(lists).find((item) => item.id === sourceId);
     if (!source) return json({ error: "Source not found." }, 404);
-    const result = await scanSource(source, Number(payload.max_companies || 25), lists, env);
+    const maxCompanies = Number(payload.max_companies || 25);
+    const guard = authorizeProviderAction("source_scan", {
+      details: {
+        source_id: sourceId,
+        source_type: source.type,
+        max_companies: maxCompanies,
+      },
+    });
+    if (!guard.allowed) return providerDenied(guard);
+    const result = await scanSource(source, maxCompanies, lists, env);
     const scan = recordSourceScan(source, result.candidates, result.warnings, result.status);
     return json({ source: loadSources(lists).find((item) => item.id === sourceId) || source, scan, candidates: result.candidates, warnings: result.warnings, coverage: sourceCoverage(lists) });
   }
 
   if (method === "POST" && url.pathname === "/api/search") {
     const payload = await readJson(request);
+    const guard = authorizeProviderAction("search", {
+      details: { max_companies: Number(payload.max_companies || 10) },
+    });
+    if (!guard.allowed) return providerDenied(guard);
     const result = await discoverCandidates(payload, lists, env);
     return json(result);
   }
 
   if (method === "POST" && url.pathname === "/api/runs") {
     const payload = await readJson(request);
+    const maxCompanies = Number(payload.max_companies || 8);
+    const maxPages = Number(payload.max_pages || 8);
+    let guard = authorizeProviderAction("run", {
+      details: {
+        max_companies: maxCompanies,
+        max_pages: maxPages,
+        use_apollo: Boolean(payload.use_apollo),
+      },
+    });
+    if (!guard.allowed) return providerDenied(guard);
+    if (!Array.isArray(payload.candidates) && String(payload.query || "").trim()) {
+      guard = authorizeProviderAction("search", {
+        details: { max_companies: maxCompanies, source: "run" },
+      });
+      if (!guard.allowed) return providerDenied(guard);
+    }
+    if (Boolean(payload.use_apollo)) {
+      guard = authorizeProviderAction("apollo_enrichment", {
+        amount: maxCompanies,
+        details: { max_companies: maxCompanies },
+      });
+      if (!guard.allowed) return providerDenied(guard);
+    }
     const run = await createRuntimeRun(payload, lists, env);
     runtime.runs.set(run.id, run);
     return json(run);
@@ -289,6 +352,10 @@ async function handleApiRequest(request, env, url) {
 
   if (method === "POST" && url.pathname === "/api/research") {
     const payload = await readJson(request);
+    const guard = authorizeProviderAction("research", {
+      details: { run_id: String(payload.run_id || "") },
+    });
+    if (!guard.allowed) return providerDenied(guard);
     const run = loadRun(String(payload.run_id || ""), lists);
     if (!run) return json({ answer: "Run not found.", citations: [], matched_leads: [] }, 404);
     return json(localResearchAnswer(run, String(payload.question || "")));
@@ -339,6 +406,10 @@ async function handleApiRequest(request, env, url) {
       const payload = await readJson(request);
       const apply = Boolean(payload.apply);
       if (!apply) {
+        const guard = authorizeProviderAction("k2_dry_run", {
+          details: { run_id: run.id, apply },
+        });
+        if (!guard.allowed) return providerDenied(guard);
         return json({
           status: "dry_run",
           project_name: String(payload.project_name || "Knowledge2 ICP GTM"),
@@ -355,6 +426,10 @@ async function handleApiRequest(request, env, url) {
       if (!auth.authorized) {
         return unauthorized("K2 apply token required.");
       }
+      const guard = authorizeProviderAction("k2_apply", {
+        details: { run_id: run.id, apply },
+      });
+      if (!guard.allowed) return providerDenied(guard);
       const result = await uploadToK2(env, run, {
         projectName: String(payload.project_name || "Knowledge2 ICP GTM"),
         corpusName: String(payload.corpus_name || `ICP Run ${run.id}`),
@@ -423,6 +498,7 @@ function currentState(env, lists) {
     sources: loadSources(lists),
     source_scans: runtime.sourceScans.slice(-25),
     source_coverage: sourceCoverage(lists),
+    provider_controls: providerControls(),
     provider_status: providerStatus(env),
     latest_run: loadRun(runs[0]?.id || SEED_RUN_ID, lists),
   };
@@ -594,6 +670,157 @@ function countByKey(items, key) {
     acc[value] = (acc[value] || 0) + 1;
     return acc;
   }, {});
+}
+
+function providerControls() {
+  const today = nowIso().slice(0, 10);
+  const allowed = runtime.providerUsage.filter(
+    (event) => event.created_at.startsWith(today) && event.status === "allowed",
+  );
+  const denied = runtime.providerUsage.filter(
+    (event) => event.created_at.startsWith(today) && event.status === "denied",
+  );
+  return {
+    policy: clone(SEED_SETTINGS.provider_limits),
+    today,
+    allowed_counts: providerAmountsByAction(allowed),
+    denied_counts: providerAmountsByAction(denied),
+    recent_events: runtime.providerUsage.slice(-25),
+  };
+}
+
+function authorizeProviderAction(action, options = {}) {
+  const cleanAction = normalizeProviderAction(action);
+  const requestedAmount = Number(options.amount || 1);
+  const amount = Number.isFinite(requestedAmount) ? Math.max(1, requestedAmount) : 1;
+  const details = options.details && typeof options.details === "object" ? options.details : {};
+  const policy = SEED_SETTINGS.provider_limits || {};
+  if (!policy.enabled) {
+    const event = recordProviderUsage(
+      cleanAction,
+      "allowed",
+      amount,
+      "",
+      { ...details, policy_disabled: true },
+    );
+    return { allowed: true, action: cleanAction, event, policy };
+  }
+  const denial = providerActionDenial(cleanAction, amount, details, policy);
+  if (denial) {
+    const event = recordProviderUsage(cleanAction, "denied", amount, denial.reason, details);
+    return { allowed: false, action: cleanAction, event, policy, ...denial };
+  }
+  const event = recordProviderUsage(cleanAction, "allowed", amount, "", details);
+  return { allowed: true, action: cleanAction, event, policy };
+}
+
+function providerActionDenial(action, amount, details, policy) {
+  const perRun = policy.per_run || {};
+  const maxCompanies = Number(details.max_companies || 0);
+  const maxPages = Number(details.max_pages || 0);
+  if (maxCompanies && perRun.max_companies && maxCompanies > Number(perRun.max_companies)) {
+    return {
+      reason: `Requested max_companies=${maxCompanies} exceeds provider policy max_companies=${perRun.max_companies}.`,
+      limit_type: "per_run",
+      limit: Number(perRun.max_companies),
+      usage: maxCompanies,
+    };
+  }
+  if (maxPages && perRun.max_pages && maxPages > Number(perRun.max_pages)) {
+    return {
+      reason: `Requested max_pages=${maxPages} exceeds provider policy max_pages=${perRun.max_pages}.`,
+      limit_type: "per_run",
+      limit: Number(perRun.max_pages),
+      usage: maxPages,
+    };
+  }
+  const dailyLimit = Number((policy.daily || {})[action] || 0);
+  if (dailyLimit) {
+    const usage = providerActionAmount(
+      runtime.providerUsage.filter(
+        (event) =>
+          event.status === "allowed" &&
+          event.action === action &&
+          event.created_at.startsWith(nowIso().slice(0, 10)),
+      ),
+    );
+    if (usage + amount > dailyLimit) {
+      return {
+        reason: `Daily provider budget for ${action} is exhausted (${usage}/${dailyLimit}, requested ${amount}).`,
+        limit_type: "daily",
+        limit: dailyLimit,
+        usage,
+      };
+    }
+  }
+  const rateLimit = Number((policy.rate_per_minute || {})[action] || 0);
+  if (rateLimit) {
+    const usage = providerActionAmount(
+      runtime.providerUsage.filter(
+        (event) =>
+          event.status === "allowed" &&
+          event.action === action &&
+          eventWithinSeconds(event, 60),
+      ),
+    );
+    if (usage + amount > rateLimit) {
+      return {
+        reason: `Rate limit for ${action} is exceeded (${usage}/${rateLimit} in the last minute, requested ${amount}).`,
+        limit_type: "rate_per_minute",
+        limit: rateLimit,
+        usage,
+      };
+    }
+  }
+  return null;
+}
+
+function recordProviderUsage(action, status, amount, reason, details) {
+  const now = nowIso();
+  const event = {
+    id: criteriaHash(`${now}:${action}:${status}:${runtime.providerUsage.length}`).slice(0, 16),
+    created_at: now,
+    action,
+    status,
+    amount,
+    reason,
+    details: details || {},
+  };
+  runtime.providerUsage.push(event);
+  runtime.providerUsage = runtime.providerUsage.slice(-1000);
+  return event;
+}
+
+function providerDenied(guard) {
+  return json(
+    {
+      error: guard.reason || "Provider action denied by budget policy.",
+      provider_control: guard,
+    },
+    429,
+  );
+}
+
+function normalizeProviderAction(action) {
+  return String(action || "unknown").trim().toLowerCase().replaceAll("-", "_").replaceAll(" ", "_") || "unknown";
+}
+
+function providerAmountsByAction(events) {
+  return events.reduce((acc, event) => {
+    const action = normalizeProviderAction(event.action);
+    acc[action] = (acc[action] || 0) + Number(event.amount || 1);
+    return acc;
+  }, {});
+}
+
+function providerActionAmount(events) {
+  return events.reduce((sum, event) => sum + Number(event.amount || 1), 0);
+}
+
+function eventWithinSeconds(event, seconds) {
+  const createdAt = Date.parse(String(event.created_at || ""));
+  if (Number.isNaN(createdAt)) return false;
+  return Date.now() - createdAt <= seconds * 1000;
 }
 
 function providerStatus(env) {
