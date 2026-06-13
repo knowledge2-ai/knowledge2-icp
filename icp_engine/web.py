@@ -77,6 +77,15 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
             if parsed.path == "/api/lead-views":
                 self._send_json({"views": app.store.list_lead_views()})
                 return
+            if parsed.path == "/api/sources":
+                self._send_json(
+                    {
+                        "sources": app.store.load_sources(),
+                        "scans": app.store.list_source_scans(limit=50),
+                        "coverage": app.store.source_coverage(),
+                    }
+                )
+                return
             if parsed.path == "/api/audit-log":
                 self._send_json({"events": app.store.list_audit_events(limit=100)})
                 return
@@ -185,6 +194,54 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                     return
                 self._send_json({"view": view, "views": app.store.list_lead_views()})
                 return
+            if parsed.path == "/api/sources":
+                payload = self._read_json()
+                try:
+                    source = app.store.save_source(
+                        str(payload.get("name") or ""),
+                        source_type=str(payload.get("type") or "serp_query"),
+                        value=str(payload.get("value") or ""),
+                        source_group=str(payload.get("source_group") or ""),
+                        schedule=str(payload.get("schedule") or "manual"),
+                        enabled=bool(payload.get("enabled", True)),
+                        source_id=str(payload.get("id") or "") or None,
+                    )
+                except (TypeError, ValueError) as exc:
+                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_json({"source": source, "sources": app.store.load_sources(), "coverage": app.store.source_coverage()})
+                return
+            if parsed.path.startswith("/api/sources/") and parsed.path.endswith("/scan"):
+                source_id = parsed.path.split("/")[3]
+                source = next((item for item in app.store.load_sources() if item.get("id") == source_id), None)
+                if not source:
+                    self._send_json({"error": "Source not found."}, status=HTTPStatus.NOT_FOUND)
+                    return
+                payload = self._read_json()
+                max_companies = int(payload.get("max_companies") or 25)
+                candidates, warnings = app.pipeline.scan_source(source, max_companies=max_companies)
+                candidate_payloads = _candidate_payloads(candidates)
+                try:
+                    scan = app.store.record_source_scan(
+                        source_id,
+                        status="completed" if candidate_payloads else "empty",
+                        candidates=candidate_payloads,
+                        warnings=warnings,
+                    )
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                updated_source = next((item for item in app.store.load_sources() if item.get("id") == source_id), source)
+                self._send_json(
+                    {
+                        "source": updated_source,
+                        "scan": scan,
+                        "candidates": candidate_payloads,
+                        "warnings": warnings,
+                        "coverage": app.store.source_coverage(),
+                    }
+                )
+                return
             if parsed.path == "/api/search":
                 payload = self._read_json()
                 candidates, warnings = app.pipeline.discover(
@@ -194,19 +251,7 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                 )
                 self._send_json(
                     {
-                        "candidates": [
-                            {
-                                "company": item.company,
-                                "domain": item.domain,
-                                "source_url": item.source_url,
-                                "source_title": item.source_title,
-                                "notes": item.notes,
-                                "github_urls": item.github_urls,
-                                "linkedin_urls": item.linkedin_urls,
-                                "other_urls": item.other_urls,
-                            }
-                            for item in candidates
-                        ],
+                        "candidates": _candidate_payloads(candidates),
                         "warnings": warnings,
                     }
                 )
@@ -435,6 +480,22 @@ def _health_payload(app: GTMApp, *, detailed: bool) -> dict[str, Any]:
             }
         )
     return payload
+
+
+def _candidate_payloads(candidates: list[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "company": item.company,
+            "domain": item.domain,
+            "source_url": item.source_url,
+            "source_title": item.source_title,
+            "notes": item.notes,
+            "github_urls": item.github_urls,
+            "linkedin_urls": item.linkedin_urls,
+            "other_urls": item.other_urls,
+        }
+        for item in candidates
+    ]
 
 
 def run_server(

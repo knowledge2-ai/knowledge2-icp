@@ -8,7 +8,7 @@ from typing import Callable
 from .apollo import ApolloClient
 from .app_store import AppStore, now_iso
 from .criteria import build_criteria_profile
-from .discovery import DiscoveryCandidate, discover_companies, parse_seed_companies
+from .discovery import DiscoveryCandidate, discover_companies, discover_companies_from_url, parse_seed_companies
 from .enrichment import fetch_company_evidence, normalize_domain
 from .github import search_github_metadata
 from .k2_backend import K2Backend
@@ -46,6 +46,20 @@ class ResearchPipeline:
             discovered, search_warnings = discover_companies(query, max_results=max_companies, fetcher=self.search_fetcher)
             candidates.extend(discovered)
             warnings.extend(_search_warnings_for_candidates(search_warnings, bool(candidates)))
+        return _dedupe_candidates(candidates)[:max_companies], warnings
+
+    def scan_source(self, source: dict[str, object], *, max_companies: int = 25) -> tuple[list[DiscoveryCandidate], list[str]]:
+        source_type = str(source.get("type") or "serp_query")
+        value = str(source.get("value") or "")
+        if source_type == "portfolio_url":
+            candidates, warnings = discover_companies_from_url(value, max_results=max_companies, fetcher=self.search_fetcher)
+        elif source_type == "manual_seed":
+            candidates = parse_seed_companies(value)
+            warnings = [] if candidates else ["No company domains were discovered from manual seed text."]
+        else:
+            candidates, warnings = self.discover(value, max_companies=max_companies)
+            if source_type == "apollo_query" and not self.apollo.configured:
+                warnings = ["APOLLO_API_KEY is not configured; used search-provider discovery instead.", *warnings]
         return _dedupe_candidates(candidates)[:max_companies], warnings
 
     def create_run(

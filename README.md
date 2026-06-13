@@ -40,6 +40,8 @@ The dashboard can:
   the qualified 100-company data run under `data/`
 - edit the active ICP criteria markdown in local app state
 - ask natural language questions over stored run evidence and metadata
+- manage saved discovery sources for SERP queries, portfolio URLs, and manual
+  seed lists, then scan them into candidate previews
 - optionally call Apollo and GitHub providers when environment variables are configured
 
 Set `SERPER_API_KEY` or `SERP_API_KEY` to use Google SERP discovery through
@@ -90,6 +92,21 @@ curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
   http://127.0.0.1:8765/api/runs/<run-id>/prospects
 curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
   http://127.0.0.1:8765/api/runs/<run-id>/prospects.csv
+curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
+  http://127.0.0.1:8765/api/runs/<run-id>/accounts/<domain>
+```
+
+Saved discovery sources are available from the Sources tab or API. Source scans
+reuse the configured search provider for SERP-style sources and parse manual
+seed lists without calling external providers:
+
+```bash
+curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
+  http://127.0.0.1:8765/api/sources
+curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Portfolio sweep","type":"serp_query","value":"vertical market software portfolio companies workflow data","schedule":"weekly"}' \
+  http://127.0.0.1:8765/api/sources
 ```
 
 Lead workflow state is stored under `out/app_state` and survives server

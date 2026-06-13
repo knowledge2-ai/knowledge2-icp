@@ -114,6 +114,22 @@ class WebApiTest(unittest.TestCase):
                 self.assertEqual(view["view"]["name"], "Qualified A Accounts")
                 self.assertEqual(_json_get(f"{base_url}/api/lead-views")["views"][0]["page_size"], 25)
 
+                source = _json_post(
+                    f"{base_url}/api/sources",
+                    {
+                        "name": "Manual portfolio source",
+                        "type": "manual_seed",
+                        "value": "Mojio, moj.io\nAutomate, automate.co.za",
+                        "source_group": "portfolio-expansion",
+                        "schedule": "weekly",
+                    },
+                )
+                self.assertEqual(source["source"]["type"], "manual_seed")
+                source_scan = _json_post(f"{base_url}/api/sources/{source['source']['id']}/scan", {"max_companies": 5})
+                self.assertEqual(source_scan["scan"]["candidate_count"], 2)
+                self.assertEqual(source_scan["candidates"][0]["domain"], "moj.io")
+                self.assertGreaterEqual(_json_get(f"{base_url}/api/sources")["coverage"]["unique_candidate_domains"], 2)
+
                 audit = _json_get(f"{base_url}/api/audit-log")
                 self.assertIn("lead_state.updated", {item["action"] for item in audit["events"]})
 

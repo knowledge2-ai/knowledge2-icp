@@ -29,6 +29,8 @@ class AppStoreTest(unittest.TestCase):
             self.assertEqual(state["latest_run"]["leads"][0]["score"]["company"]["company"], "ServiceTitan")
             self.assertEqual(state["latest_run"]["leads"][0]["score"]["total_score"], 86)
             self.assertEqual(state["latest_run"]["leads"][0]["metadata"]["qualification"]["classification_source"], "rules")
+            self.assertGreaterEqual(len(state["sources"]), 3)
+            self.assertGreaterEqual(state["source_coverage"]["source_count"], 3)
 
     def test_criteria_defaults_to_icp_path_and_can_be_overridden(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -214,6 +216,45 @@ class AppStoreTest(unittest.TestCase):
             self.assertEqual(detail["source_counts"]["website"], 1)
             self.assertIn("lead_state.updated", {item["action"] for item in detail["audit_events"]})
             self.assertIsNone(store.account_detail("run-account", "missing.example"))
+
+    def test_sources_and_scan_history_are_durable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+
+            source = store.save_source(
+                "Constellation search",
+                source_type="serp_query",
+                value="constellation software portfolio workflow companies",
+                source_group="portfolio-expansion",
+                schedule="weekly",
+            )
+            scan = store.record_source_scan(
+                source["id"],
+                status="completed",
+                candidates=[
+                    {
+                        "company": "Mojio",
+                        "domain": "moj.io",
+                        "source_url": "https://moj.io",
+                        "source_title": "Mojio",
+                        "notes": "Fleet workflow software.",
+                    }
+                ],
+                warnings=["one warning"],
+            )
+
+            reloaded = AppStore(Path(tmp))
+            sources = reloaded.load_sources()
+            coverage = reloaded.source_coverage()
+
+            self.assertEqual(scan["candidate_count"], 1)
+            self.assertTrue(any(item["id"] == source["id"] and item["last_candidate_count"] == 1 for item in sources))
+            self.assertEqual(reloaded.list_source_scans(source_id=source["id"])[0]["candidates"][0]["domain"], "moj.io")
+            self.assertGreaterEqual(coverage["source_count"], 3)
+            self.assertEqual(coverage["unique_candidate_domains"], 1)
+
+            with self.assertRaises(ValueError):
+                reloaded.save_source("Bad", source_type="bad", value="x")
 
 
 if __name__ == "__main__":

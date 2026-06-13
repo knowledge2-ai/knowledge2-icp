@@ -13,6 +13,10 @@ const state = {
   prompts: [],
   settings: {},
   lists: {},
+  sources: [],
+  sourceScans: [],
+  sourceCoverage: {},
+  activeSourceScan: null,
   criteriaVersions: [],
   criteriaUndoStack: [],
   criteriaRedoStack: [],
@@ -64,9 +68,13 @@ async function loadState() {
   state.prompts = payload.prompts || [];
   state.settings = payload.settings || {};
   state.lists = payload.lists || {};
+  state.sources = payload.sources || [];
+  state.sourceScans = payload.source_scans || [];
+  state.sourceCoverage = payload.source_coverage || {};
   applySeededDefaults();
   renderSeedSummary();
   renderSetup();
+  renderSources();
   renderRuns(payload.runs || []);
   renderRun(state.currentRun);
 }
@@ -180,6 +188,127 @@ function renderSetup() {
       <h3>Priority Verticals</h3>
       <div class="tag-list">${verticals.map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join("")}</div>
     </section>`;
+}
+
+function renderSources() {
+  renderSourceCoverage();
+  renderSourceList();
+  renderSourceScanDetail(state.activeSourceScan);
+}
+
+function renderSourceCoverage() {
+  const root = $("source-coverage");
+  if (!root) return;
+  const coverage = state.sourceCoverage || {};
+  root.innerHTML = `<div class="summary-strip source-summary">
+    ${metric("Sources", coverage.source_count || state.sources.length || 0)}
+    ${metric("Enabled", coverage.enabled_count || 0)}
+    ${metric("Scans", coverage.scan_count || 0)}
+    ${metric("Unique domains", coverage.unique_candidate_domains || 0)}
+  </div>`;
+}
+
+function renderSourceList() {
+  const root = $("source-list");
+  if (!root) return;
+  if (!state.sources.length) {
+    root.innerHTML = `<div class="detail-panel empty">No saved discovery sources.</div>`;
+    return;
+  }
+  root.innerHTML = state.sources
+    .map((source) => `<article class="source-item" data-source-id="${escapeAttribute(source.id)}">
+      <div>
+        <span class="status-pill">${escapeHtml(source.type || "source")}</span>
+        <strong>${escapeHtml(source.name || "")}</strong>
+        <p>${escapeHtml(source.value || "")}</p>
+        <small>${escapeHtml(source.source_group || "")} · ${escapeHtml(source.schedule || "manual")} · ${escapeHtml(source.last_status || "never_scanned")}</small>
+      </div>
+      <div class="source-item-actions">
+        <span><strong>${escapeHtml(source.last_candidate_count || 0)}</strong><small>last candidates</small></span>
+        <button type="button" class="secondary" data-scan-source="${escapeAttribute(source.id)}">Scan</button>
+      </div>
+    </article>`)
+    .join("");
+  root.querySelectorAll("[data-scan-source]").forEach((button) => {
+    button.addEventListener("click", () => scanSource(button.dataset.scanSource || ""));
+  });
+}
+
+function renderSourceScanDetail(scan) {
+  const root = $("source-scan-detail");
+  if (!root) return;
+  if (!scan) {
+    root.className = "detail-panel source-scan-detail empty";
+    root.textContent = "Scan a source to review candidate companies.";
+    return;
+  }
+  const candidates = scan.candidates || [];
+  root.className = "detail-panel source-scan-detail";
+  root.innerHTML = `<div class="detail-stack">
+    <div class="detail-section">
+      <p class="eyebrow">${escapeHtml(scan.source_type || "source scan")}</p>
+      <h2>${escapeHtml(scan.source_name || "Source scan")}</h2>
+      <div class="kv-grid">
+        ${kv("Status", scan.status || "")}
+        ${kv("Candidates", candidates.length)}
+        ${kv("Warnings", (scan.warnings || []).length)}
+        ${kv("Scanned", scan.scanned_at || "")}
+      </div>
+      <div class="button-row">
+        <button id="use-source-candidates" type="button">Use candidates in run</button>
+        <button id="copy-source-query" type="button" class="secondary">Copy source to Discover</button>
+      </div>
+    </div>
+    <div class="detail-section">
+      <h2>Candidate Preview</h2>
+      <div class="source-candidate-list">
+        ${candidates.slice(0, 25).map((item) => `<article class="source-candidate">
+          <strong>${escapeHtml(item.company || "")}</strong>
+          <span>${escapeHtml(item.domain || "")}</span>
+          <p>${escapeHtml(item.notes || item.source_title || "")}</p>
+        </article>`).join("") || "<p>No candidates returned.</p>"}
+      </div>
+    </div>
+    ${(scan.warnings || []).length ? `<div class="detail-section"><h2>Warnings</h2>${scan.warnings.map((item) => `<p>${escapeHtml(item)}</p>`).join("")}</div>` : ""}
+  </div>`;
+  $("use-source-candidates")?.addEventListener("click", () => {
+    state.previewCandidates = candidates;
+    renderCandidatePreview();
+    $("run-status").textContent = `Loaded ${candidates.length} source candidates into preview.`;
+    activateView("leads");
+  });
+  $("copy-source-query")?.addEventListener("click", () => {
+    const source = state.sources.find((item) => item.id === scan.source_id) || {};
+    if (source.type === "manual_seed") {
+      $("seed-text").value = source.value || "";
+    } else {
+      $("query").value = source.value || "";
+    }
+    activateView("leads");
+  });
+}
+
+async function scanSource(sourceId) {
+  if (!sourceId) return;
+  const button = document.querySelector(`[data-scan-source="${CSS.escape(sourceId)}"]`);
+  if (button) button.textContent = "Scanning...";
+  $("source-status").textContent = "Scanning source with the configured discovery provider...";
+  try {
+    const payload = await api(`/api/sources/${encodeURIComponent(sourceId)}/scan`, {
+      method: "POST",
+      body: JSON.stringify({ max_companies: Number($("max-companies").value || 25) }),
+    });
+    state.sources = state.sources.map((source) => (source.id === sourceId ? payload.source : source));
+    state.sourceCoverage = payload.coverage || state.sourceCoverage;
+    state.activeSourceScan = payload.scan || null;
+    state.sourceScans = [...state.sourceScans.filter((scan) => scan.id !== payload.scan?.id), payload.scan].filter(Boolean);
+    renderSources();
+    $("source-status").textContent = `Scan returned ${(payload.candidates || []).length} candidates.`;
+  } catch (error) {
+    $("source-status").textContent = error.message;
+  } finally {
+    if (button) button.textContent = "Scan";
+  }
 }
 
 function formatSettingValue(value) {
@@ -1353,6 +1482,32 @@ $("run-form").addEventListener("submit", async (event) => {
     status.textContent = error.message;
   } finally {
     button.disabled = false;
+  }
+});
+
+$("source-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  $("source-status").textContent = "Saving source...";
+  try {
+    const payload = await api("/api/sources", {
+      method: "POST",
+      body: JSON.stringify({
+        name: $("source-name").value,
+        type: $("source-type").value,
+        value: $("source-value").value,
+        source_group: $("source-group").value,
+        schedule: $("source-schedule").value,
+        enabled: true,
+      }),
+    });
+    state.sources = payload.sources || state.sources;
+    state.sourceCoverage = payload.coverage || state.sourceCoverage;
+    state.activeSourceScan = null;
+    renderSources();
+    $("source-form").reset();
+    $("source-status").textContent = `Saved source ${payload.source?.name || ""}.`;
+  } catch (error) {
+    $("source-status").textContent = error.message;
   }
 });
 

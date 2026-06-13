@@ -161,6 +161,9 @@ const runtime = {
   criteriaVersions: [],
   runs: new Map(),
   seedLists: null,
+  leadStates: new Map(),
+  sources: null,
+  sourceScans: [],
 };
 
 export default {
@@ -218,6 +221,10 @@ async function handleApiRequest(request, env, url) {
     return json(currentState(env, lists));
   }
 
+  if (method === "GET" && url.pathname === "/api/sources") {
+    return json({ sources: loadSources(lists), scans: runtime.sourceScans.slice(-50), coverage: sourceCoverage(lists) });
+  }
+
   if (method === "GET" && url.pathname === "/api/criteria/versions") {
     return json({ versions: criteriaVersions(), current_hash: currentCriteria().hash });
   }
@@ -246,6 +253,27 @@ async function handleApiRequest(request, env, url) {
     return json({ criteria: runtime.criteria, versions: criteriaVersions(), lint: lintCriteriaMarkdown(runtime.criteria.markdown) });
   }
 
+  if (method === "POST" && url.pathname === "/api/sources") {
+    const payload = await readJson(request);
+    try {
+      const source = saveSource(payload, lists);
+      return json({ source, sources: loadSources(lists), coverage: sourceCoverage(lists) });
+    } catch (error) {
+      return json({ error: error.message || String(error) }, 400);
+    }
+  }
+
+  const sourceScanMatch = url.pathname.match(/^\/api\/sources\/([^/]+)\/scan$/);
+  if (method === "POST" && sourceScanMatch) {
+    const payload = await readJson(request);
+    const sourceId = decodeURIComponent(sourceScanMatch[1]);
+    const source = loadSources(lists).find((item) => item.id === sourceId);
+    if (!source) return json({ error: "Source not found." }, 404);
+    const result = await scanSource(source, Number(payload.max_companies || 25), lists, env);
+    const scan = recordSourceScan(source, result.candidates, result.warnings, result.status);
+    return json({ source: loadSources(lists).find((item) => item.id === sourceId) || source, scan, candidates: result.candidates, warnings: result.warnings, coverage: sourceCoverage(lists) });
+  }
+
   if (method === "POST" && url.pathname === "/api/search") {
     const payload = await readJson(request);
     const result = await discoverCandidates(payload, lists, env);
@@ -266,12 +294,32 @@ async function handleApiRequest(request, env, url) {
     return json(localResearchAnswer(run, String(payload.question || "")));
   }
 
+  const accountMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/accounts\/([^/]+)$/);
+  if (method === "GET" && accountMatch) {
+    const run = loadRun(accountMatch[1], lists);
+    if (!run) return json({ error: "Run not found." }, 404);
+    const detail = accountDetail(run, decodeURIComponent(accountMatch[2]));
+    if (!detail) return json({ error: "Account not found." }, 404);
+    return json(detail);
+  }
+
   const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)(?:\/([^/]+))?$/);
   if (runMatch) {
     const run = loadRun(runMatch[1], lists);
     if (!run) return json({ error: "Run not found." }, 404);
     const action = runMatch[2] || "";
     if (method === "GET" && !action) return json(run);
+    if (method === "POST" && action === "lead-state") {
+      const payload = await readJson(request);
+      let record;
+      try {
+        record = saveLeadState(run.id, payload);
+      } catch (error) {
+        return json({ error: error.message || String(error) }, 400);
+      }
+      attachWorkflow(run);
+      return json({ lead_state: record, status_counts: leadStatusCounts(run) });
+    }
     if (method === "GET" && action === "prospects") return json(await buildRunProspectsWithApollo(run, env));
     if (method === "GET" && action === "prospects.csv") {
       const prospects = await buildRunProspectsWithApollo(run, env);
@@ -372,9 +420,180 @@ function currentState(env, lists) {
     settings: clone(SEED_SETTINGS),
     lists: clone(lists),
     runs,
+    sources: loadSources(lists),
+    source_scans: runtime.sourceScans.slice(-25),
+    source_coverage: sourceCoverage(lists),
     provider_status: providerStatus(env),
     latest_run: loadRun(runs[0]?.id || SEED_RUN_ID, lists),
   };
+}
+
+function loadSources(lists) {
+  if (!runtime.sources) runtime.sources = defaultSources(lists);
+  return runtime.sources;
+}
+
+function defaultSources(lists) {
+  const accountCount = Array.isArray(lists.account_universe) ? lists.account_universe.length : 0;
+  const discoveryPrompt = SEED_PROMPTS.find((item) => item.id === "discovery-query")?.text || "vertical market software portfolio companies with workflow data";
+  return [
+    sourceRecord({
+      id: "seed-constellation-portfolio",
+      name: "Constellation/Volaris/Harris account universe",
+      type: "manual_seed",
+      value: `${accountCount} committed portfolio and ICP accounts from local seed data`,
+      source_group: "seeded-portfolio",
+      schedule: "manual",
+      last_status: "seeded",
+      last_candidate_count: accountCount,
+    }),
+    sourceRecord({
+      id: "seed-portfolio-expansion-serp",
+      name: "Portfolio expansion SERP",
+      type: "serp_query",
+      value: discoveryPrompt,
+      source_group: "portfolio-expansion",
+      schedule: "weekly",
+    }),
+    sourceRecord({
+      id: "seed-ai-gap-serp",
+      name: "AI gap audit SERP",
+      type: "serp_query",
+      value: "pre-2025 vertical SaaS workflow software weak AI positioning API integrations",
+      source_group: "ai-gap-audit",
+      schedule: "weekly",
+    }),
+  ];
+}
+
+function sourceRecord(input) {
+  const now = input.updated_at || "2026-06-13T00:00:00+00:00";
+  const type = normalizeSourceType(input.type || "serp_query");
+  const id = input.id || criteriaHash(`${type}:${input.name}:${input.value}`).slice(0, 16);
+  return {
+    id,
+    name: String(input.name || "Source").trim(),
+    type,
+    value: String(input.value || "").trim(),
+    source_group: String(input.source_group || sourceGroupForType(type)).trim(),
+    schedule: normalizeSourceSchedule(String(input.schedule || "manual")),
+    enabled: input.enabled !== false,
+    created_at: input.created_at || now,
+    updated_at: now,
+    last_scan_at: input.last_scan_at || "",
+    last_status: input.last_status || "never_scanned",
+    last_candidate_count: Number(input.last_candidate_count || 0),
+    last_warning_count: Number(input.last_warning_count || 0),
+  };
+}
+
+function saveSource(payload, lists) {
+  const source = sourceRecord({
+    id: payload.id ? String(payload.id) : "",
+    name: String(payload.name || ""),
+    type: String(payload.type || "serp_query"),
+    value: String(payload.value || ""),
+    source_group: String(payload.source_group || ""),
+    schedule: String(payload.schedule || "manual"),
+    enabled: payload.enabled !== false,
+    updated_at: nowIso(),
+  });
+  if (!source.name) throw new Error("Source name is required.");
+  if (!source.value) throw new Error("Source value is required.");
+  const sources = loadSources(lists).filter((item) => item.id !== source.id);
+  sources.push(source);
+  runtime.sources = sources.sort((left, right) => String(left.name).localeCompare(String(right.name)));
+  return source;
+}
+
+async function scanSource(source, maxCompanies, lists, env) {
+  let result;
+  if (source.type === "manual_seed") {
+    const candidates = parseSeedText(source.value).slice(0, maxCompanies);
+    result = { candidates, warnings: candidates.length ? [] : ["No company domains were discovered from manual seed text."] };
+  } else {
+    result = await discoverCandidates({ query: source.value, max_companies: maxCompanies }, lists, env);
+    if (source.type === "portfolio_url") {
+      result.warnings = [`Portfolio URL scanning uses configured search providers on Worker for ${source.value}.`, ...(result.warnings || [])];
+    }
+  }
+  return {
+    status: result.candidates?.length ? "completed" : "empty",
+    candidates: result.candidates || [],
+    warnings: result.warnings || [],
+  };
+}
+
+function recordSourceScan(source, candidates, warnings, status) {
+  const now = nowIso();
+  const scan = {
+    id: criteriaHash(`${now}:${source.id}:${candidates.length}:${warnings.length}`).slice(0, 16),
+    source_id: source.id,
+    source_name: source.name,
+    source_type: source.type,
+    source_group: source.source_group,
+    status,
+    scanned_at: now,
+    candidate_count: candidates.length,
+    warning_count: warnings.length,
+    warnings: warnings.slice(0, 20),
+    candidates: candidates.slice(0, 100),
+  };
+  runtime.sourceScans.push(scan);
+  runtime.sourceScans = runtime.sourceScans.slice(-500);
+  runtime.sources = loadSources({}).map((item) => item.id === source.id
+    ? { ...item, last_scan_at: now, last_status: status, last_candidate_count: candidates.length, last_warning_count: warnings.length, updated_at: now }
+    : item);
+  return scan;
+}
+
+function sourceCoverage(lists) {
+  const sources = loadSources(lists);
+  const domains = new Set();
+  for (const scan of runtime.sourceScans) {
+    for (const candidate of scan.candidates || []) {
+      if (candidate.domain) domains.add(candidate.domain);
+    }
+  }
+  return {
+    source_count: sources.length,
+    enabled_count: sources.filter((item) => item.enabled).length,
+    source_type_counts: countByKey(sources, "type"),
+    source_group_counts: countByKey(sources, "source_group"),
+    scan_count: runtime.sourceScans.length,
+    candidate_count: runtime.sourceScans.reduce((sum, scan) => sum + Number(scan.candidate_count || 0), 0),
+    unique_candidate_domains: domains.size,
+    latest_scan: runtime.sourceScans[runtime.sourceScans.length - 1] || null,
+  };
+}
+
+function normalizeSourceType(value) {
+  const type = String(value || "serp_query").trim().toLowerCase().replaceAll("-", "_").replaceAll(" ", "_");
+  if (!["serp_query", "portfolio_url", "manual_seed", "apollo_query"].includes(type)) throw new Error(`Invalid source type: ${value}.`);
+  return type;
+}
+
+function sourceGroupForType(type) {
+  return {
+    serp_query: "saved-serp",
+    portfolio_url: "portfolio-page",
+    manual_seed: "manual-seed",
+    apollo_query: "apollo-search",
+  }[type] || "source";
+}
+
+function normalizeSourceSchedule(value) {
+  const schedule = String(value || "manual").trim().toLowerCase().replaceAll("_", "-");
+  if (!["manual", "daily", "weekly", "monthly"].includes(schedule) && !schedule.startsWith("cron:")) throw new Error("Source schedule must be manual, daily, weekly, monthly, or cron:<utc expression>.");
+  return schedule;
+}
+
+function countByKey(items, key) {
+  return items.reduce((acc, item) => {
+    const value = String(item[key] || "unknown");
+    acc[value] = (acc[value] || 0) + 1;
+    return acc;
+  }, {});
 }
 
 function providerStatus(env) {
@@ -537,9 +756,134 @@ function listRuns(lists) {
 }
 
 function loadRun(runId, lists) {
-  if (runtime.runs.has(runId)) return clone(runtime.runs.get(runId));
-  if (runId === SEED_RUN_ID) return seedRun(lists);
+  if (runtime.runs.has(runId)) return attachWorkflow(clone(runtime.runs.get(runId)));
+  if (runId === SEED_RUN_ID) return attachWorkflow(seedRun(lists));
   return null;
+}
+
+function attachWorkflow(run) {
+  const states = runtime.leadStates.get(run.id) || new Map();
+  for (const lead of run.leads || []) {
+    const domain = normalizeDomain(lead.score?.company?.domain || "");
+    lead.workflow = states.get(domain) || defaultLeadState(run.id, domain, lead.score?.company?.company || "");
+  }
+  run.workflow = {
+    lead_statuses: ["New", "Review", "Qualified", "Rejected", "Exported"],
+    status_counts: leadStatusCounts(run),
+    saved_views: [],
+  };
+  return run;
+}
+
+function saveLeadState(runId, payload) {
+  const domain = normalizeDomain(payload.domain || "");
+  if (!domain) throw new Error("Lead domain is required.");
+  const runStates = runtime.leadStates.get(runId) || new Map();
+  const existing = runStates.get(domain) || {};
+  const now = nowIso();
+  const record = {
+    run_id: runId,
+    domain,
+    company: String(payload.company || existing.company || ""),
+    status: normalizeLeadStatus(payload.status || existing.status || "Review"),
+    note: String(payload.note ?? existing.note ?? ""),
+    owner: String(payload.owner ?? existing.owner ?? ""),
+    tags: Array.isArray(payload.tags) ? [...new Set(payload.tags.map((tag) => String(tag).trim()).filter(Boolean))].slice(0, 20) : existing.tags || [],
+    created_at: existing.created_at || now,
+    updated_at: now,
+  };
+  runStates.set(domain, record);
+  runtime.leadStates.set(runId, runStates);
+  return record;
+}
+
+function defaultLeadState(runId, domain, company) {
+  return { run_id: runId, domain, company, status: "New", note: "", owner: "", tags: [], created_at: "", updated_at: "" };
+}
+
+function normalizeLeadStatus(value) {
+  const status = String(value || "").trim().replace(/\b\w/g, (letter) => letter.toUpperCase());
+  if (!["New", "Review", "Qualified", "Rejected", "Exported"].includes(status)) throw new Error(`Invalid lead status: ${value}.`);
+  return status;
+}
+
+function leadStatusCounts(run) {
+  const counts = { New: 0, Review: 0, Qualified: 0, Rejected: 0, Exported: 0 };
+  for (const lead of run.leads || []) {
+    const status = lead.workflow?.status || "New";
+    counts[status] = (counts[status] || 0) + 1;
+  }
+  return counts;
+}
+
+function accountDetail(run, accountKey) {
+  const lead = findLead(run, accountKey);
+  if (!lead) return null;
+  const company = lead.score?.company || {};
+  const domain = normalizeDomain(company.domain || "");
+  const prospects = buildRunProspects(run).prospects.filter((prospect) => normalizeDomain(prospect.domain || "") === domain || prospect.lead_id === lead.id);
+  const workflow = lead.workflow || defaultLeadState(run.id, domain, company.company || "");
+  const criteria = run.criteria || {};
+  return {
+    run_id: run.id,
+    lead_id: lead.id,
+    company,
+    score: lead.score || {},
+    strategy: lead.strategy || {},
+    workflow,
+    lead_statuses: ["New", "Review", "Qualified", "Rejected", "Exported"],
+    prospects,
+    role_groups: prospectRoleGroups(prospects),
+    evidence_timeline: evidenceTimeline(lead.evidence || []),
+    source_refs: lead.metadata?.source_refs || {},
+    source_counts: lead.metadata?.source_counts || {},
+    coverage: lead.metadata?.intelligence_coverage || {},
+    criteria_snapshot: {
+      hash: criteria.hash || lead.metadata?.criteria_profile?.hash || "",
+      source: criteria.source || "",
+      profile: criteria.profile || lead.metadata?.criteria_profile || {},
+    },
+    audit_events: [],
+  };
+}
+
+function findLead(run, accountKey) {
+  const key = normalizeDomain(accountKey);
+  return (run.leads || []).find((lead) => {
+    const company = lead.score?.company || {};
+    return [lead.id, lead.domain, lead.company, company.domain, company.company].map((item) => normalizeDomain(item || "")).includes(key);
+  });
+}
+
+function prospectRoleGroups(prospects) {
+  const groups = new Map();
+  for (const prospect of [...prospects].sort((left, right) => prospectSortRank(left) - prospectSortRank(right))) {
+    const role = prospect.persona || prospect.title || "Other role";
+    if (!groups.has(role)) groups.set(role, []);
+    groups.get(role).push(prospect);
+  }
+  return Array.from(groups.entries()).map(([role, items]) => ({ role, priority: items[0]?.persona_priority || items[0]?.source || "", prospects: items }));
+}
+
+function prospectSortRank(prospect) {
+  const priority = { primary: 0, secondary: 1, tertiary: 2 }[String(prospect.persona_priority || "").toLowerCase()] ?? 3;
+  const source = String(prospect.source || "").toLowerCase() === "apollo" ? 0 : 1;
+  return priority * 1000 + source * 100 - Number(prospect.priority_score || 0);
+}
+
+function evidenceTimeline(evidence) {
+  return evidence.map((item, index) => {
+    const metadata = item.metadata || {};
+    return {
+      id: item.evidence_id || `evidence-${index + 1}`,
+      title: item.title || item.url || "Evidence",
+      url: item.url || "",
+      text: item.text || "",
+      source_type: item.source_type || metadata.source_type || metadata.page_category || "website",
+      page_category: metadata.page_category || "",
+      captured_at: item.captured_at || metadata.captured_at || "",
+    };
+  });
 }
 
 function runSummary(run) {

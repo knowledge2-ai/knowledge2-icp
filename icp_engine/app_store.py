@@ -15,6 +15,7 @@ from .seed_defaults import SEEDED_CRITERIA_MARKDOWN, SEEDED_LISTS, SEEDED_PROMPT
 DEFAULT_STATE_DIR = Path(os.environ.get("ICP_APP_STATE_DIR", "out/app_state"))
 DEFAULT_ICP_PATH = Path(os.environ.get("ICP_CRITERIA_PATH", "icp.md"))
 LEAD_STATUSES = ("New", "Review", "Qualified", "Rejected", "Exported")
+SOURCE_TYPES = ("serp_query", "portfolio_url", "manual_seed", "apollo_query")
 
 
 def now_iso() -> str:
@@ -37,6 +38,8 @@ class AppStore:
         self.lead_states_path = self.state_dir / "lead_states.json"
         self.lead_views_path = self.state_dir / "lead_views.json"
         self.audit_log_path = self.state_dir / "audit_log.json"
+        self.sources_path = self.state_dir / "sources.json"
+        self.source_scans_path = self.state_dir / "source_scans.json"
         self.runs_dir = self.state_dir / "runs"
         self.index_path = self.state_dir / "runs.json"
 
@@ -110,6 +113,139 @@ class AppStore:
         if value is None:
             return json.loads(json.dumps(SEEDED_LISTS))
         return {**json.loads(json.dumps(SEEDED_LISTS)), **value}
+
+    def load_sources(self) -> list[dict[str, Any]]:
+        self.ensure()
+        value = _load_json_file(self.sources_path, list)
+        sources = value if value is not None else _default_sources()
+        return [_normalize_source_record(item) for item in sources if isinstance(item, dict) and item.get("name")]
+
+    def save_source(
+        self,
+        name: str,
+        *,
+        source_type: str,
+        value: str,
+        source_group: str = "",
+        schedule: str = "",
+        enabled: bool = True,
+        source_id: str | None = None,
+    ) -> dict[str, Any]:
+        self.ensure()
+        clean_name = " ".join(name.strip().split())
+        clean_value = value.strip()
+        clean_type = _normalize_source_type(source_type)
+        if not clean_name:
+            raise ValueError("Source name is required.")
+        if not clean_value:
+            raise ValueError("Source value is required.")
+        now = now_iso()
+        sources = self.load_sources()
+        record_id = source_id or stable_hash(f"{clean_type}:{clean_name.lower()}:{clean_value.lower()}")
+        previous = next((item for item in sources if item.get("id") == record_id), {})
+        record = {
+            "id": record_id,
+            "name": clean_name,
+            "type": clean_type,
+            "value": clean_value,
+            "source_group": " ".join(source_group.strip().split()) or _source_group_for_type(clean_type),
+            "schedule": _normalize_source_schedule(schedule),
+            "enabled": bool(enabled),
+            "created_at": str(previous.get("created_at") or now),
+            "updated_at": now,
+            "last_scan_at": str(previous.get("last_scan_at") or ""),
+            "last_status": str(previous.get("last_status") or "never_scanned"),
+            "last_candidate_count": int(previous.get("last_candidate_count") or 0),
+            "last_warning_count": int(previous.get("last_warning_count") or 0),
+        }
+        next_sources = [item for item in sources if item.get("id") != record_id]
+        next_sources.append(record)
+        self.sources_path.write_text(json.dumps(sorted(next_sources, key=lambda item: str(item.get("name"))), indent=2, sort_keys=True), encoding="utf-8")
+        self.append_audit_event(
+            "source.saved",
+            subject_type="source",
+            subject_id=record_id,
+            details={"name": clean_name, "type": clean_type, "source_group": record["source_group"]},
+        )
+        return record
+
+    def record_source_scan(
+        self,
+        source_id: str,
+        *,
+        status: str,
+        candidates: list[dict[str, Any]],
+        warnings: list[str] | None = None,
+    ) -> dict[str, Any]:
+        self.ensure()
+        source = next((item for item in self.load_sources() if item.get("id") == source_id), None)
+        if not source:
+            raise ValueError("Source not found.")
+        now = now_iso()
+        clean_candidates = [_candidate_preview_record(item) for item in candidates if isinstance(item, dict)]
+        clean_warnings = [str(item) for item in warnings or [] if str(item).strip()]
+        scan = {
+            "id": stable_hash(f"{now}:{source_id}:{len(clean_candidates)}:{len(clean_warnings)}"),
+            "source_id": source_id,
+            "source_name": source.get("name", ""),
+            "source_type": source.get("type", ""),
+            "source_group": source.get("source_group", ""),
+            "status": status,
+            "scanned_at": now,
+            "candidate_count": len(clean_candidates),
+            "warning_count": len(clean_warnings),
+            "warnings": clean_warnings[:20],
+            "candidates": clean_candidates[:100],
+        }
+        scans = self.list_source_scans(limit=500)
+        scans.append(scan)
+        self.source_scans_path.write_text(json.dumps(scans[-500:], indent=2, sort_keys=True), encoding="utf-8")
+
+        sources = self.load_sources()
+        for item in sources:
+            if item.get("id") != source_id:
+                continue
+            item["last_scan_at"] = now
+            item["last_status"] = status
+            item["last_candidate_count"] = len(clean_candidates)
+            item["last_warning_count"] = len(clean_warnings)
+            item["updated_at"] = now
+        self.sources_path.write_text(json.dumps(sorted(sources, key=lambda item: str(item.get("name"))), indent=2, sort_keys=True), encoding="utf-8")
+        self.append_audit_event(
+            "source.scan",
+            subject_type="source",
+            subject_id=source_id,
+            details={"status": status, "candidate_count": len(clean_candidates), "warning_count": len(clean_warnings)},
+        )
+        return scan
+
+    def list_source_scans(self, *, source_id: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        self.ensure()
+        value = _load_json_file(self.source_scans_path, list)
+        scans = [item for item in value or [] if isinstance(item, dict)]
+        if source_id:
+            scans = [item for item in scans if item.get("source_id") == source_id]
+        return scans[-max(1, min(limit, 500)) :]
+
+    def source_coverage(self) -> dict[str, Any]:
+        sources = self.load_sources()
+        scans = self.list_source_scans(limit=500)
+        domains = {
+            str(candidate.get("domain") or "")
+            for scan in scans
+            for candidate in scan.get("candidates", [])
+            if isinstance(candidate, dict) and candidate.get("domain")
+        }
+        return {
+            "source_count": len(sources),
+            "enabled_count": sum(1 for item in sources if item.get("enabled")),
+            "source_type_counts": _count_by_key(sources, "type"),
+            "source_group_counts": _count_by_key(sources, "source_group"),
+            "scan_count": len(scans),
+            "candidate_count": sum(int(item.get("candidate_count") or 0) for item in scans),
+            "unique_candidate_domains": len(domains),
+            "latest_scan": scans[-1] if scans else None,
+        }
 
     def list_runs(self) -> list[dict[str, Any]]:
         self.ensure()
@@ -397,6 +533,9 @@ class AppStore:
             "runs": summaries,
             "lead_statuses": list(LEAD_STATUSES),
             "lead_views": self.list_lead_views(),
+            "sources": self.load_sources(),
+            "source_scans": self.list_source_scans(limit=25),
+            "source_coverage": self.source_coverage(),
             "audit_log": self.list_audit_events(limit=25),
             "provider_status": provider_status(),
             "latest_run": latest_run,
@@ -502,6 +641,129 @@ def _load_json_file(path: Path, expected_type: type) -> Any | None:
     except json.JSONDecodeError:
         return None
     return value if isinstance(value, expected_type) else None
+
+
+def _default_sources() -> list[dict[str, Any]]:
+    prompts = {item.get("id"): item for item in SEEDED_PROMPTS if isinstance(item, dict)}
+    discovery_prompt = prompts.get("discovery-query", {})
+    source_count = len(SEEDED_LISTS.get("account_universe", []))
+    return [
+        _source_seed_record(
+            "seed-constellation-portfolio",
+            name="Constellation/Volaris/Harris account universe",
+            source_type="manual_seed",
+            value=f"{source_count} committed portfolio and ICP accounts from local seed data",
+            source_group="seeded-portfolio",
+            schedule="manual",
+            candidate_count=source_count,
+        ),
+        _source_seed_record(
+            "seed-portfolio-expansion-serp",
+            name="Portfolio expansion SERP",
+            source_type="serp_query",
+            value=str(discovery_prompt.get("text") or "vertical market software portfolio companies with workflow data"),
+            source_group="portfolio-expansion",
+            schedule="weekly",
+        ),
+        _source_seed_record(
+            "seed-ai-gap-serp",
+            name="AI gap audit SERP",
+            source_type="serp_query",
+            value="pre-2025 vertical SaaS workflow software weak AI positioning API integrations",
+            source_group="ai-gap-audit",
+            schedule="weekly",
+        ),
+    ]
+
+
+def _source_seed_record(
+    source_id: str,
+    *,
+    name: str,
+    source_type: str,
+    value: str,
+    source_group: str,
+    schedule: str,
+    candidate_count: int = 0,
+) -> dict[str, Any]:
+    return {
+        "id": source_id,
+        "name": name,
+        "type": source_type,
+        "value": value,
+        "source_group": source_group,
+        "schedule": schedule,
+        "enabled": True,
+        "created_at": "2026-06-13T00:00:00+00:00",
+        "updated_at": "2026-06-13T00:00:00+00:00",
+        "last_scan_at": "",
+        "last_status": "seeded" if candidate_count else "never_scanned",
+        "last_candidate_count": candidate_count,
+        "last_warning_count": 0,
+    }
+
+
+def _normalize_source_record(item: dict[str, Any]) -> dict[str, Any]:
+    source_type = _normalize_source_type(str(item.get("type") or "serp_query"))
+    return {
+        "id": str(item.get("id") or stable_hash(f"{source_type}:{item.get('name')}:{item.get('value')}")),
+        "name": " ".join(str(item.get("name") or "Source").strip().split()),
+        "type": source_type,
+        "value": str(item.get("value") or "").strip(),
+        "source_group": " ".join(str(item.get("source_group") or _source_group_for_type(source_type)).strip().split()),
+        "schedule": _normalize_source_schedule(str(item.get("schedule") or "manual")),
+        "enabled": bool(item.get("enabled", True)),
+        "created_at": str(item.get("created_at") or ""),
+        "updated_at": str(item.get("updated_at") or ""),
+        "last_scan_at": str(item.get("last_scan_at") or ""),
+        "last_status": str(item.get("last_status") or "never_scanned"),
+        "last_candidate_count": int(item.get("last_candidate_count") or 0),
+        "last_warning_count": int(item.get("last_warning_count") or 0),
+    }
+
+
+def _normalize_source_type(source_type: str) -> str:
+    normalized = source_type.strip().lower().replace("-", "_").replace(" ", "_")
+    if normalized not in SOURCE_TYPES:
+        raise ValueError(f"Invalid source type: {source_type}. Expected one of {', '.join(SOURCE_TYPES)}.")
+    return normalized
+
+
+def _source_group_for_type(source_type: str) -> str:
+    return {
+        "serp_query": "saved-serp",
+        "portfolio_url": "portfolio-page",
+        "manual_seed": "manual-seed",
+        "apollo_query": "apollo-search",
+    }.get(source_type, "source")
+
+
+def _normalize_source_schedule(schedule: str) -> str:
+    normalized = schedule.strip().lower().replace("_", "-") or "manual"
+    if normalized not in {"manual", "daily", "weekly", "monthly"} and not normalized.startswith("cron:"):
+        raise ValueError("Source schedule must be manual, daily, weekly, monthly, or cron:<utc expression>.")
+    return normalized
+
+
+def _candidate_preview_record(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "company": str(item.get("company") or ""),
+        "domain": _normalize_domain(str(item.get("domain") or "")),
+        "source_url": str(item.get("source_url") or ""),
+        "source_title": str(item.get("source_title") or ""),
+        "notes": str(item.get("notes") or ""),
+        "github_urls": [str(value) for value in item.get("github_urls", []) if value] if isinstance(item.get("github_urls"), list) else [],
+        "linkedin_urls": [str(value) for value in item.get("linkedin_urls", []) if value] if isinstance(item.get("linkedin_urls"), list) else [],
+        "other_urls": [str(value) for value in item.get("other_urls", []) if value] if isinstance(item.get("other_urls"), list) else [],
+    }
+
+
+def _count_by_key(items: list[dict[str, Any]], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        value = str(item.get(key) or "unknown")
+        counts[value] = counts.get(value, 0) + 1
+    return counts
 
 
 def _normalize_domain(domain: str) -> str:

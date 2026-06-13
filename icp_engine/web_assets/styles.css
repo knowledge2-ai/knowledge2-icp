@@ -1026,6 +1026,79 @@ h1 {
   margin-bottom: 14px;
 }
 
+.sources-heading {
+  margin-bottom: 14px;
+}
+
+.sources-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.38fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.source-form {
+  position: sticky;
+  top: 14px;
+}
+
+.sources-workspace,
+.source-list,
+.source-candidate-list {
+  display: grid;
+  gap: 12px;
+}
+
+.source-summary {
+  justify-content: flex-start;
+}
+
+.source-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(130px, auto);
+  gap: 14px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: 14px;
+}
+
+.source-item strong,
+.source-item small,
+.source-candidate strong,
+.source-candidate span {
+  display: block;
+}
+
+.source-item p,
+.source-candidate p {
+  margin: 6px 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.source-item small,
+.source-candidate span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.source-item-actions {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+  text-align: right;
+}
+
+.source-candidate {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 12px;
+}
+
 .setup-grid {
   grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
   align-items: start;
@@ -1102,6 +1175,7 @@ h1 {
   .content-grid,
   .account-hero,
   .account-columns,
+  .sources-layout,
   .setup-grid {
     grid-template-columns: 1fr;
   }
@@ -1109,6 +1183,10 @@ h1 {
   .sidebar {
     border-right: 0;
     border-bottom: 1px solid var(--line);
+  }
+
+  .source-form {
+    position: static;
   }
 
   .topbar {
@@ -1141,6 +1219,7 @@ h1 {
   .workflow-form,
   .kv-grid.compact,
   .account-prospect-row,
+  .source-item,
   .table-head,
   .lead-row,
   .prospect-head,

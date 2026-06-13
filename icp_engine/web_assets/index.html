@@ -93,6 +93,7 @@
 
         <nav class="tabs" aria-label="Dashboard views">
           <button class="tab active" data-view="leads">Leads</button>
+          <button class="tab" data-view="sources">Sources</button>
           <button class="tab" data-view="prospects">Prospects</button>
           <button class="tab" data-view="research">Research</button>
           <button class="tab" data-view="k2">K2</button>
@@ -123,6 +124,59 @@
               <div id="lead-rows" class="lead-rows"></div>
             </section>
             <section id="lead-detail" class="detail-panel"></section>
+          </div>
+        </section>
+
+        <section id="view-sources" class="view">
+          <div class="section-heading sources-heading">
+            <div>
+              <p class="eyebrow">Discovery Sources</p>
+              <h2>Saved SERP, Portfolio, And Seed Sources</h2>
+            </div>
+          </div>
+          <div class="sources-layout">
+            <form id="source-form" class="panel source-form">
+              <h2>Add Source</h2>
+              <label>
+                Name
+                <input id="source-name" placeholder="Constellation portfolio sweep" />
+              </label>
+              <div class="inline-grid">
+                <label>
+                  Type
+                  <select id="source-type">
+                    <option value="serp_query">SERP query</option>
+                    <option value="portfolio_url">Portfolio URL</option>
+                    <option value="manual_seed">Manual seed list</option>
+                    <option value="apollo_query">Apollo query</option>
+                  </select>
+                </label>
+                <label>
+                  Schedule
+                  <select id="source-schedule">
+                    <option value="manual">Manual</option>
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="monthly">Monthly</option>
+                  </select>
+                </label>
+              </div>
+              <label>
+                Group
+                <input id="source-group" placeholder="portfolio-expansion" />
+              </label>
+              <label>
+                Query, URL, or seed text
+                <textarea id="source-value" rows="5" placeholder="vertical market software portfolio companies with workflow data"></textarea>
+              </label>
+              <button type="submit">Save source</button>
+              <p id="source-status" class="muted"></p>
+            </form>
+            <div class="sources-workspace">
+              <section id="source-coverage" class="source-coverage"></section>
+              <section id="source-list" class="source-list"></section>
+              <section id="source-scan-detail" class="detail-panel source-scan-detail empty">Scan a source to review candidate companies.</section>
+            </div>
           </div>
         </section>
 

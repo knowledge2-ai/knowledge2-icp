@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from icp_engine.discovery import candidates_from_links, candidates_from_serper_payload, discover_companies, extract_search_links, parse_seed_companies
+from icp_engine.discovery import candidates_from_links, candidates_from_serper_payload, discover_companies, discover_companies_from_url, extract_page_links, extract_search_links, parse_seed_companies
 
 
 SEARCH_HTML = """
@@ -41,6 +41,22 @@ class DiscoveryTest(unittest.TestCase):
 
         self.assertFalse(warnings)
         self.assertEqual(candidates[1].domain, "automate.co.za")
+
+    def test_discover_companies_from_portfolio_url(self) -> None:
+        html = """
+        <html><body>
+          <a href="https://www.moj.io/">Mojio connected mobility</a>
+          <a href="https://www.automate.co.za/">Automate dealer software</a>
+          <a href="/portfolio/internal">Internal page</a>
+        </body></html>
+        """
+
+        links = extract_page_links(html, base_url="https://portfolio.example/list")
+        candidates, warnings = discover_companies_from_url("https://portfolio.example/list", fetcher=lambda _: html)
+
+        self.assertIn(("https://www.moj.io/", "Mojio connected mobility"), links)
+        self.assertFalse(warnings)
+        self.assertEqual([item.domain for item in candidates[:2]], ["moj.io", "automate.co.za"])
 
     def test_candidates_from_serper_payload(self) -> None:
         candidates = candidates_from_serper_payload(

@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Callable
-from urllib.parse import parse_qs, quote_plus, urlparse
+from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from .enrichment import normalize_domain
@@ -148,6 +148,25 @@ def discover_companies_with_serper(
     return candidates, warnings
 
 
+def discover_companies_from_url(
+    url: str,
+    *,
+    max_results: int = 25,
+    fetcher: Callable[[str], str] | None = None,
+) -> tuple[list[DiscoveryCandidate], list[str]]:
+    if not url.strip():
+        return [], ["Portfolio/source URL is empty."]
+    fetch = fetcher or _fetch_url
+    try:
+        body = fetch(url)
+    except Exception as exc:
+        return [], [f"Source page fetch failed: {exc}"]
+    links = extract_page_links(body, base_url=url)
+    candidates = candidates_from_links(links, max_results=max_results)
+    warnings = [] if candidates else ["No company domains were discovered from source page links."]
+    return candidates, warnings
+
+
 def candidates_from_serper_payload(payload: dict[str, object], *, max_results: int = 10) -> list[DiscoveryCandidate]:
     organic = payload.get("organic")
     items = organic if isinstance(organic, list) else []
@@ -164,6 +183,12 @@ def candidates_from_serper_payload(payload: dict[str, object], *, max_results: i
 
 def extract_search_links(body: str) -> list[tuple[str, str]]:
     parser = _SearchLinkParser()
+    parser.feed(body)
+    return parser.links
+
+
+def extract_page_links(body: str, *, base_url: str = "") -> list[tuple[str, str]]:
+    parser = _AnchorLinkParser(base_url)
     parser.feed(body)
     return parser.links
 
@@ -323,13 +348,43 @@ class _SearchLinkParser(HTMLParser):
             self._current_href = href
             self._current_text = []
 
-    def handle_data(self, data: str) -> None:
-        if self._current_href:
-            self._current_text.append(data)
-
     def handle_endtag(self, tag: str) -> None:
         if tag == "a" and self._current_href:
             title = normalize_whitespace(" ".join(self._current_text))
             self.links.append((self._current_href, title))
             self._current_href = None
             self._current_text = []
+
+    def handle_data(self, data: str) -> None:
+        if self._current_href:
+            self._current_text.append(data)
+
+
+class _AnchorLinkParser(HTMLParser):
+    def __init__(self, base_url: str) -> None:
+        super().__init__()
+        self.base_url = base_url
+        self.links: list[tuple[str, str]] = []
+        self._current_href = ""
+        self._current_text: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "a":
+            return
+        attrs_dict = dict(attrs)
+        href = attrs_dict.get("href") or ""
+        if not href or href.startswith("#") or href.startswith("mailto:") or href.startswith("tel:"):
+            return
+        self._current_href = urljoin(self.base_url, href)
+        self._current_text = []
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self._current_href:
+            text = normalize_whitespace(" ".join(self._current_text))
+            self.links.append((self._current_href, text))
+            self._current_href = ""
+            self._current_text = []
+
+    def handle_data(self, data: str) -> None:
+        if self._current_href:
+            self._current_text.append(data)
