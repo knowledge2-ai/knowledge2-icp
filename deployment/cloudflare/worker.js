@@ -3282,7 +3282,7 @@ async function researchAnswer(env, run, question) {
 }
 
 async function k2ResearchAnswer(env, run, question) {
-  const corpusId = String(run.k2?.corpus_id || env.K2_RESEARCH_CORPUS_ID || "").trim();
+  const corpusId = String(env.K2_RESEARCH_CORPUS_ID || run.k2?.corpus_id || "").trim();
   if (!env.K2_API_KEY || !corpusId) return { status: "skipped" };
   const baseUrl = String(env.K2_BASE_URL || "https://api.knowledge2.ai").replace(/\/+$/, "");
   try {
