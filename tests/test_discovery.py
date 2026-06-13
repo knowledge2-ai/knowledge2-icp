@@ -84,8 +84,9 @@ class DiscoveryTest(unittest.TestCase):
         self.assertEqual(candidates[0].company, "ServiceTitan")
 
     def test_parse_seed_companies_accepts_csvish_lines(self) -> None:
-        candidates = parse_seed_companies("Mojio, moj.io\nAutomate | automate.co.za\n")
+        candidates = parse_seed_companies("Company,Domain\nMojio, moj.io\nAutomate | automate.co.za\n")
 
+        self.assertEqual(len(candidates), 2)
         self.assertEqual(candidates[0].company, "Mojio")
         self.assertEqual(candidates[1].domain, "automate.co.za")
 

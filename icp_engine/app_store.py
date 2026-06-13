@@ -25,7 +25,7 @@ from .seed_defaults import SEEDED_CRITERIA_MARKDOWN, SEEDED_LISTS, SEEDED_PROMPT
 DEFAULT_STATE_DIR = Path(os.environ.get("ICP_APP_STATE_DIR", "out/app_state"))
 DEFAULT_ICP_PATH = Path(os.environ.get("ICP_CRITERIA_PATH", "icp.md"))
 LEAD_STATUSES = ("New", "Review", "Qualified", "Rejected", "Exported")
-SOURCE_TYPES = ("serp_query", "portfolio_url", "manual_seed", "apollo_query")
+SOURCE_TYPES = ("serp_query", "portfolio_url", "manual_seed", "csv_upload", "apollo_query")
 QUALITY_DIMENSIONS = ("score", "persona", "outreach")
 QUALITY_RATINGS = ("positive", "neutral", "negative")
 
@@ -1600,6 +1600,7 @@ def _source_group_for_type(source_type: str) -> str:
         "serp_query": "saved-serp",
         "portfolio_url": "portfolio-page",
         "manual_seed": "manual-seed",
+        "csv_upload": "csv-upload",
         "apollo_query": "apollo-search",
     }.get(source_type, "source")
 

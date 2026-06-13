@@ -186,6 +186,20 @@ class WebApiTest(unittest.TestCase):
                 source_scan = _json_post(f"{base_url}/api/sources/{source['source']['id']}/scan", {"max_companies": 5})
                 self.assertEqual(source_scan["scan"]["candidate_count"], 2)
                 self.assertEqual(source_scan["candidates"][0]["domain"], "moj.io")
+                csv_source = _json_post(
+                    f"{base_url}/api/sources",
+                    {
+                        "name": "CSV portfolio source",
+                        "type": "csv_upload",
+                        "value": "Company,Domain\nMojio,moj.io\nAutomate,automate.co.za",
+                        "source_group": "portfolio-csv",
+                        "schedule": "manual",
+                    },
+                )
+                self.assertEqual(csv_source["source"]["type"], "csv_upload")
+                csv_scan = _json_post(f"{base_url}/api/sources/{csv_source['source']['id']}/scan", {"max_companies": 5})
+                self.assertEqual(csv_scan["scan"]["candidate_count"], 2)
+                self.assertEqual(csv_scan["candidates"][0]["domain"], "moj.io")
                 self.assertGreaterEqual(_json_get(f"{base_url}/api/sources")["coverage"]["unique_candidate_domains"], 2)
                 self.assertIn("expansion_runs", _json_get(f"{base_url}/api/sources"))
 

@@ -190,6 +190,7 @@
                     <option value="serp_query">SERP query</option>
                     <option value="portfolio_url">Portfolio URL</option>
                     <option value="manual_seed">Manual seed list</option>
+                    <option value="csv_upload">CSV upload</option>
                     <option value="apollo_query">Apollo query</option>
                   </select>
                 </label>
@@ -210,6 +211,10 @@
               <label>
                 Query, URL, or seed text
                 <textarea id="source-value" rows="5" placeholder="vertical market software portfolio companies with workflow data"></textarea>
+              </label>
+              <label>
+                CSV file
+                <input id="source-csv-file" type="file" accept=".csv,text/csv,text/plain" />
               </label>
               <button type="submit">Save source</button>
               <p id="source-status" class="muted"></p>

@@ -523,7 +523,7 @@ function renderSourceScanDetail(scan) {
   });
   $("copy-source-query")?.addEventListener("click", () => {
     const source = state.sources.find((item) => item.id === scan.source_id) || {};
-    if (source.type === "manual_seed") {
+    if (["manual_seed", "csv_upload"].includes(source.type)) {
       $("seed-text").value = source.value || "";
     } else {
       $("query").value = source.value || "";
@@ -553,6 +553,23 @@ async function scanSource(sourceId) {
   } finally {
     if (button) button.textContent = "Scan";
   }
+}
+
+async function loadSourceCsvFile(event) {
+  const file = event.currentTarget.files?.[0];
+  if (!file) return;
+  if (file.size > 1_000_000) {
+    $("source-status").textContent = "CSV file is too large. Keep uploads under 1 MB.";
+    event.currentTarget.value = "";
+    return;
+  }
+  const text = await file.text();
+  $("source-type").value = "csv_upload";
+  if (!$("source-name").value.trim()) {
+    $("source-name").value = file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ");
+  }
+  $("source-value").value = text.trim();
+  $("source-status").textContent = `Loaded ${text.split(/\r?\n/).filter((line) => line.trim()).length} CSV rows. Save then scan this source.`;
 }
 
 async function runExpansion() {
@@ -2406,6 +2423,11 @@ $("source-form").addEventListener("submit", async (event) => {
   } catch (error) {
     $("source-status").textContent = error.message;
   }
+});
+$("source-csv-file").addEventListener("change", (event) => {
+  loadSourceCsvFile(event).catch((error) => {
+    $("source-status").textContent = error.message;
+  });
 });
 
 $("criteria-form").addEventListener("submit", async (event) => {

@@ -101,6 +101,8 @@ class CloudflareConfigTest(unittest.TestCase):
         self.assertIn("saveSettings", worker)
         self.assertIn("normalizeSettingsPayload", worker)
         self.assertIn("mergeProviderLimits", worker)
+        self.assertIn("csv_upload", worker)
+        self.assertIn("looksLikeSeedHeader", worker)
         self.assertIn("async scheduled(event, env)", worker)
         self.assertIn('url.pathname === "/api/expansion/run"', worker)
         self.assertIn('url.pathname === "/api/expansion/runs"', worker)

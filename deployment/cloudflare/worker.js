@@ -874,9 +874,10 @@ async function saveSource(env, payload, lists) {
 
 async function scanSource(source, maxCompanies, lists, env) {
   let result;
-  if (source.type === "manual_seed") {
+  if (source.type === "manual_seed" || source.type === "csv_upload") {
     const candidates = parseSeedText(source.value).slice(0, maxCompanies);
-    result = { candidates, warnings: candidates.length ? [] : ["No company domains were discovered from manual seed text."] };
+    const sourceLabel = source.type === "csv_upload" ? "CSV source text" : "manual seed text";
+    result = { candidates, warnings: candidates.length ? [] : [`No company domains were discovered from ${sourceLabel}.`] };
   } else {
     result = await discoverCandidates({ query: source.value, max_companies: maxCompanies }, lists, env);
     if (source.type === "portfolio_url") {
@@ -1162,7 +1163,7 @@ function coerceBoolean(value, fallback) {
 
 function normalizeSourceType(value) {
   const type = String(value || "serp_query").trim().toLowerCase().replaceAll("-", "_").replaceAll(" ", "_");
-  if (!["serp_query", "portfolio_url", "manual_seed", "apollo_query"].includes(type)) throw new Error(`Invalid source type: ${value}.`);
+  if (!["serp_query", "portfolio_url", "manual_seed", "csv_upload", "apollo_query"].includes(type)) throw new Error(`Invalid source type: ${value}.`);
   return type;
 }
 
@@ -1171,6 +1172,7 @@ function sourceGroupForType(type) {
     serp_query: "saved-serp",
     portfolio_url: "portfolio-page",
     manual_seed: "manual-seed",
+    csv_upload: "csv-upload",
     apollo_query: "apollo-search",
   }[type] || "source";
 }
@@ -2784,6 +2786,7 @@ function parseSeedText(seedText) {
     .filter(Boolean)
     .map((line) => {
       const parts = line.split(",").map((part) => part.trim()).filter(Boolean);
+      if (looksLikeSeedHeader(parts)) return null;
       const company = parts[0] || "";
       const domain = normalizeDomain(parts[1] || company);
       return company && domain ? {
@@ -2798,6 +2801,13 @@ function parseSeedText(seedText) {
       } : null;
     })
     .filter(Boolean);
+}
+
+function looksLikeSeedHeader(parts) {
+  if (!Array.isArray(parts) || parts.length < 2) return false;
+  const first = String(parts[0] || "").toLowerCase();
+  const second = String(parts[1] || "").toLowerCase();
+  return ["company", "company name", "name", "account"].includes(first) && ["domain", "website", "url", "company domain"].includes(second);
 }
 
 function candidateFromAccount(account, sourceTitle) {

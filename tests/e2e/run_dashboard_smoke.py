@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -66,6 +67,8 @@ def main() -> int:
         try:
             _wait_for_health(base_url, str(app.get("healthCheckPath") or "/healthz"), int(app.get("startTimeoutSeconds") or 15))
             run = _seed_run(Path(state_dir))
+            csv_source_path = Path(state_dir) / "smoke-sources.csv"
+            csv_source_path.write_text("Company,Domain\nMojio,moj.io\nAutomate,automate.co.za\n", encoding="utf-8")
             console_errors: list[str] = []
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(headless=not args.headed and bool(manifest.get("execution", {}).get("headless", True)))
@@ -102,6 +105,13 @@ def main() -> int:
                 page.locator("#source-value").fill("Mojio, moj.io\nAutomate, automate.co.za")
                 page.locator("#source-form button[type='submit']").click()
                 expect(page.locator("#source-list")).to_contain_text("Smoke manual source", timeout=timeout)
+                page.locator("#source-csv-file").set_input_files(str(csv_source_path))
+                expect(page.locator("#source-type")).to_have_value("csv_upload", timeout=timeout)
+                expect(page.locator("#source-value")).to_have_value(re.compile("Mojio"), timeout=timeout)
+                page.locator("#source-form button[type='submit']").click()
+                expect(page.locator("#source-list")).to_contain_text("smoke sources", timeout=timeout)
+                page.locator("#source-list .source-item").filter(has_text="smoke sources").get_by_role("button", name="Scan").click()
+                expect(page.locator("#source-scan-detail")).to_contain_text("Automate", timeout=timeout)
                 page.locator("#source-list .source-item").filter(has_text="Smoke manual source").get_by_role("button", name="Scan").click()
                 expect(page.locator("#source-scan-detail")).to_contain_text("Mojio", timeout=timeout)
                 page.locator("#use-source-candidates").click()

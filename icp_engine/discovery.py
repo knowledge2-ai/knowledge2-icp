@@ -234,6 +234,8 @@ def parse_seed_companies(seed_text: str) -> list[DiscoveryCandidate]:
         if not cleaned or cleaned.startswith("#"):
             continue
         parts = [part.strip() for part in re.split(r"[,|\t]", cleaned) if part.strip()]
+        if _looks_like_seed_header(parts):
+            continue
         if len(parts) == 1:
             domain = normalize_domain(parts[0])
             company = _company_name_from_title_or_domain("", domain)
@@ -251,6 +253,14 @@ def parse_seed_companies(seed_text: str) -> list[DiscoveryCandidate]:
                 )
             )
     return candidates
+
+
+def _looks_like_seed_header(parts: list[str]) -> bool:
+    if len(parts) < 2:
+        return False
+    first = parts[0].strip().lower()
+    second = parts[1].strip().lower()
+    return first in {"company", "company name", "name", "account"} and second in {"domain", "website", "url", "company domain"}
 
 
 def _fetch_url(url: str) -> str:

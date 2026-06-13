@@ -53,9 +53,10 @@ class ResearchPipeline:
         value = str(source.get("value") or "")
         if source_type == "portfolio_url":
             candidates, warnings = discover_companies_from_url(value, max_results=max_companies, fetcher=self.search_fetcher)
-        elif source_type == "manual_seed":
+        elif source_type in {"manual_seed", "csv_upload"}:
             candidates = parse_seed_companies(value)
-            warnings = [] if candidates else ["No company domains were discovered from manual seed text."]
+            source_label = "CSV source text" if source_type == "csv_upload" else "manual seed text"
+            warnings = [] if candidates else [f"No company domains were discovered from {source_label}."]
         else:
             candidates, warnings = self.discover(value, max_companies=max_companies)
             if source_type == "apollo_query" and not self.apollo.configured:
