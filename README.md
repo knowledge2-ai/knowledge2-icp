@@ -96,6 +96,18 @@ curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
   http://127.0.0.1:8765/api/runs/<run-id>/accounts/<domain>
 ```
 
+Account drilldowns also generate evidence-backed outreach drafts for each
+prospect/persona. Operators can approve, reject, export, and label drafts; the
+status history is stored with app state and exported for BDR review or eval
+pipelines:
+
+```bash
+curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
+  http://127.0.0.1:8765/api/runs/<run-id>/outreach-drafts
+curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
+  http://127.0.0.1:8765/api/runs/<run-id>/outreach-drafts.csv
+```
+
 Saved discovery sources are available from the Sources tab or API. Source scans
 reuse the configured search provider for SERP-style sources and parse manual
 seed lists without calling external providers:
@@ -142,6 +154,23 @@ curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
 
 curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
   http://127.0.0.1:8765/api/runs/<run-id>/quality-feedback.csv
+```
+
+The Evals tab runs a deterministic quality gate over loaded data and produced
+results. The first evaluator is K2-aligned but local/Worker-native: it checks
+seed completeness, duplicate domains, evidence/citation coverage, gold
+qualification cases, prospect role coverage, contact completeness, and outreach
+readiness. K2 `EvalRun`, `GoldLabel`, feedback, quality metrics, metadata,
+feeds, and agents remain the target system of record when the K2 dev project
+exposes the relevant feature-gated APIs:
+
+```bash
+curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"run_id":"<run-id>"}' \
+  http://127.0.0.1:8765/api/evals/runs
+curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
+  http://127.0.0.1:8765/api/evals/runs.csv
 ```
 
 Health checks:

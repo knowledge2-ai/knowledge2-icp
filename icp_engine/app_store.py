@@ -8,6 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from .criteria_editor import format_criteria_markdown, lint_criteria_markdown
+from .evals import (
+    default_eval_cases,
+    eval_runs_to_csv,
+    normalize_eval_case,
+    run_icp_evaluation,
+    summarize_eval_runs,
+)
+from .outreach import build_lead_outreach_drafts, normalize_outreach_status, outreach_drafts_to_csv, summarize_outreach_drafts
 from .prospects import build_lead_prospects
 from .seed_defaults import SEEDED_CRITERIA_MARKDOWN, SEEDED_LISTS, SEEDED_PROMPTS, SEEDED_SETTINGS, SEED_RUN_ID, seeded_run
 
@@ -44,6 +52,9 @@ class AppStore:
         self.source_scans_path = self.state_dir / "source_scans.json"
         self.provider_usage_path = self.state_dir / "provider_usage.json"
         self.quality_feedback_path = self.state_dir / "quality_feedback.json"
+        self.outreach_status_path = self.state_dir / "outreach_statuses.json"
+        self.eval_cases_path = self.state_dir / "eval_cases.json"
+        self.eval_runs_path = self.state_dir / "eval_runs.json"
         self.runs_dir = self.state_dir / "runs"
         self.index_path = self.state_dir / "runs.json"
 
@@ -434,6 +445,7 @@ class AppStore:
         criteria = run.get("criteria", {}) if isinstance(run.get("criteria"), dict) else {}
         criteria_profile = criteria.get("profile") if isinstance(criteria.get("profile"), dict) else metadata.get("criteria_profile", {})
         quality_feedback = self.list_quality_feedback(run_id=run_id, domain=domain, limit=25)
+        outreach_drafts = self.list_outreach_drafts(run_id=run_id, domain=domain)
         return {
             "run_id": run_id,
             "lead_id": lead.get("id"),
@@ -455,8 +467,176 @@ class AppStore:
             },
             "quality_feedback": quality_feedback,
             "quality_summary": self.quality_feedback_summary(run_id=run_id, domain=domain),
+            "outreach_drafts": outreach_drafts,
+            "outreach_summary": summarize_outreach_drafts(outreach_drafts),
             "audit_events": _audit_events_for_account(self.list_audit_events(limit=500), run_id, domain),
         }
+
+    def list_outreach_drafts(self, *, run_id: str, domain: str | None = None) -> list[dict[str, Any]]:
+        run = self.load_run(run_id)
+        if not run:
+            return []
+        domain_key = _normalize_domain(domain or "")
+        status_map = self.load_outreach_statuses(run_id)
+        drafts: list[dict[str, Any]] = []
+        for lead in run.get("leads", []):
+            if not isinstance(lead, dict):
+                continue
+            if domain_key and _lead_domain(lead) != domain_key:
+                continue
+            drafts.extend(build_lead_outreach_drafts(run, lead, status_map))
+        return drafts
+
+    def load_outreach_statuses(self, run_id: str | None = None) -> dict[str, dict[str, Any]]:
+        self.ensure()
+        payload = _load_json_file(self.outreach_status_path, dict) or {}
+        if run_id is None:
+            merged: dict[str, dict[str, Any]] = {}
+            for run_statuses in payload.values():
+                if isinstance(run_statuses, dict):
+                    merged.update({str(key): value for key, value in run_statuses.items() if isinstance(value, dict)})
+            return merged
+        run_statuses = payload.get(run_id, {}) if isinstance(payload, dict) else {}
+        return {
+            str(key): value
+            for key, value in run_statuses.items()
+            if isinstance(value, dict)
+        } if isinstance(run_statuses, dict) else {}
+
+    def save_outreach_status(
+        self,
+        run_id: str,
+        prospect_id: str,
+        *,
+        domain: str = "",
+        company: str = "",
+        status: str = "Approved",
+        note: str = "",
+    ) -> dict[str, Any]:
+        self.ensure()
+        clean_prospect_id = str(prospect_id or "").strip()
+        if not clean_prospect_id:
+            raise ValueError("Prospect id is required.")
+        clean_status = normalize_outreach_status(status)
+        payload = _load_json_file(self.outreach_status_path, dict) or {}
+        run_statuses = payload.setdefault(run_id, {})
+        if not isinstance(run_statuses, dict):
+            run_statuses = {}
+            payload[run_id] = run_statuses
+        existing = run_statuses.get(clean_prospect_id, {}) if isinstance(run_statuses.get(clean_prospect_id), dict) else {}
+        now = now_iso()
+        record = {
+            "run_id": run_id,
+            "prospect_id": clean_prospect_id,
+            "domain": _normalize_domain(domain),
+            "company": " ".join(str(company or existing.get("company") or "").strip().split()),
+            "status": clean_status,
+            "note": str(note if note is not None else existing.get("note", "")),
+            "created_at": str(existing.get("created_at") or now),
+            "updated_at": now,
+        }
+        run_statuses[clean_prospect_id] = record
+        self.outreach_status_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        self.append_audit_event(
+            "outreach_status.updated",
+            subject_type="outreach_draft",
+            subject_id=f"{run_id}:{clean_prospect_id}",
+            details={
+                "run_id": run_id,
+                "prospect_id": clean_prospect_id,
+                "domain": record["domain"],
+                "company": record["company"],
+                "status": clean_status,
+            },
+        )
+        return record
+
+    def outreach_summary(self, *, run_id: str | None = None) -> dict[str, Any]:
+        if run_id:
+            return summarize_outreach_drafts(self.list_outreach_drafts(run_id=run_id))
+        summaries = [summarize_outreach_drafts(self.list_outreach_drafts(run_id=str(item.get("id") or ""))) for item in self.list_runs()]
+        counts = {"Draft": 0, "Approved": 0, "Rejected": 0, "Exported": 0}
+        total = 0
+        for summary in summaries:
+            total += int(summary.get("total") or 0)
+            for status, count in summary.get("status_counts", {}).items():
+                counts[status] = counts.get(status, 0) + int(count or 0)
+        return {"total": total, "status_counts": counts, "ready_count": counts["Approved"] + counts["Exported"]}
+
+    def outreach_drafts_csv(self, *, run_id: str, domain: str | None = None) -> str:
+        return outreach_drafts_to_csv(self.list_outreach_drafts(run_id=run_id, domain=domain))
+
+    def list_eval_cases(self, *, run_id: str | None = None) -> list[dict[str, Any]]:
+        self.ensure()
+        value = _load_json_file(self.eval_cases_path, list)
+        run = self.load_run(run_id) if run_id else None
+        if value is None:
+            return default_eval_cases(run)
+        cases = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            try:
+                cases.append(normalize_eval_case(item))
+            except ValueError:
+                continue
+        return cases or default_eval_cases(run)
+
+    def save_eval_case(self, case: dict[str, Any]) -> dict[str, Any]:
+        self.ensure()
+        normalized = normalize_eval_case(case)
+        cases = [item for item in self.list_eval_cases() if item.get("id") != normalized["id"]]
+        cases.append(normalized)
+        self.eval_cases_path.write_text(json.dumps(sorted(cases, key=lambda item: str(item.get("id"))), indent=2, sort_keys=True), encoding="utf-8")
+        self.append_audit_event(
+            "eval_case.saved",
+            subject_type="eval_case",
+            subject_id=normalized["id"],
+            details={"type": normalized["type"], "domain": normalized["domain"], "label_source": normalized["label_source"]},
+        )
+        return normalized
+
+    def run_eval(self, run_id: str, *, case_ids: list[str] | None = None) -> dict[str, Any]:
+        self.ensure()
+        run = self.load_run(run_id)
+        if not run:
+            raise ValueError("Run not found.")
+        cases = self.list_eval_cases(run_id=run_id)
+        if case_ids:
+            selected = {str(case_id) for case_id in case_ids}
+            cases = [case for case in cases if str(case.get("id")) in selected]
+        result = run_icp_evaluation(
+            run=run,
+            cases=cases,
+            quality_feedback=self.list_quality_feedback(run_id=run_id, limit=1000),
+            outreach_drafts=self.list_outreach_drafts(run_id=run_id),
+            source_coverage=self.source_coverage(),
+            k2_status={"configured": provider_status()["k2"]["configured"], "base_url": provider_status()["k2"]["base_url"]},
+        )
+        runs = self.list_eval_runs(limit=500)
+        runs.append(result)
+        self.eval_runs_path.write_text(json.dumps(runs[-500:], indent=2, sort_keys=True), encoding="utf-8")
+        self.append_audit_event(
+            "eval_run.completed",
+            subject_type="eval_run",
+            subject_id=str(result.get("id") or ""),
+            details={"run_id": run_id, "status": result.get("status"), "case_count": result.get("case_count")},
+        )
+        return result
+
+    def list_eval_runs(self, *, run_id: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        self.ensure()
+        value = _load_json_file(self.eval_runs_path, list)
+        runs = [item for item in value or [] if isinstance(item, dict)]
+        if run_id:
+            runs = [item for item in runs if item.get("run_id") == run_id]
+        return runs[-max(1, min(limit, 500)) :]
+
+    def eval_summary(self, *, run_id: str | None = None) -> dict[str, Any]:
+        return summarize_eval_runs(self.list_eval_runs(run_id=run_id, limit=500))
+
+    def eval_runs_csv(self, *, run_id: str | None = None) -> str:
+        return eval_runs_to_csv(self.list_eval_runs(run_id=run_id, limit=500))
 
     def save_quality_feedback(
         self,
@@ -771,6 +951,8 @@ class AppStore:
             "source_coverage": self.source_coverage(),
             "provider_controls": self.provider_usage_summary(),
             "quality_feedback_summary": self.quality_feedback_summary(),
+            "outreach_summary": self.outreach_summary(),
+            "eval_summary": self.eval_summary(),
             "audit_log": self.list_audit_events(limit=25),
             "provider_status": provider_status(),
             "latest_run": latest_run,
@@ -865,6 +1047,8 @@ class AppStore:
             **summary,
             "lead_status_counts": self.lead_status_counts(run_id),
             "quality_feedback_counts": self.quality_feedback_summary(run_id=run_id).get("rating_counts", {}),
+            "outreach_counts": self.outreach_summary(run_id=run_id).get("status_counts", {}),
+            "eval_status": self.eval_summary(run_id=run_id).get("latest_status", "not_run"),
         }
 
     def _criteria_history_with(self, criteria: dict[str, Any]) -> list[dict[str, Any]]:

@@ -17,6 +17,7 @@ const state = {
   sourceScans: [],
   sourceCoverage: {},
   qualityFeedbackSummary: {},
+  evalSummary: {},
   activeSourceScan: null,
   criteriaVersions: [],
   criteriaUndoStack: [],
@@ -73,6 +74,7 @@ async function loadState() {
   state.sourceScans = payload.source_scans || [];
   state.sourceCoverage = payload.source_coverage || {};
   state.qualityFeedbackSummary = payload.quality_feedback_summary || {};
+  state.evalSummary = payload.eval_summary || {};
   applySeededDefaults();
   renderSeedSummary();
   renderSetup();
@@ -678,6 +680,7 @@ function renderRun(run) {
   renderSummary(run, leads);
   renderLeadRows(leads);
   renderK2Panel();
+  renderEvalPanel();
   renderLeadDetail(selected);
   renderProspectsPanel();
   if (run && state.prospectsRunId !== run.id) {
@@ -701,6 +704,7 @@ function renderSummary(run, leads) {
     metric("Top score", topScore),
     metric("Tier A", tierCounts.A || 0),
     metric("Feedback", state.qualityFeedbackSummary.total || 0),
+    metric("Eval", state.evalSummary.latest_status || "not_run"),
   ].join("");
 }
 
@@ -932,6 +936,77 @@ function renderK2SyncResult(result) {
   </div>`;
 }
 
+function renderEvalPanel(summary = state.evalSummary) {
+  const root = $("eval-panel");
+  if (!root) return;
+  const latest = summary.latest_run || null;
+  if (!latest) {
+    root.className = "detail-panel empty";
+    root.textContent = state.currentRun
+      ? "Run an eval to validate loaded data, qualification output, prospect trees, and outreach readiness."
+      : "Run research before validating quality.";
+    return;
+  }
+  const metrics = latest.metrics || {};
+  const checks = latest.checks || {};
+  const failures = latest.failures || [];
+  root.className = "detail-panel";
+  root.innerHTML = `<div class="detail-stack">
+    <div class="detail-section">
+      <h2>Latest Eval</h2>
+      <div class="kv-grid">
+        ${kv("Status", latest.status || "")}
+        ${kv("Run", latest.run_id || "")}
+        ${kv("Cases", latest.case_count || 0)}
+        ${kv("Criteria", shortHash(latest.criteria_hash || ""))}
+      </div>
+    </div>
+    <div class="detail-section">
+      <h2>Quality Metrics</h2>
+      <div class="metadata-grid eval-metrics">
+        ${evalMetric("Leads", metrics.lead_count)}
+        ${evalMetric("Metadata", pct(metrics.required_metadata_completeness))}
+        ${evalMetric("Evidence", pct(metrics.evidence_coverage))}
+        ${evalMetric("Gold cases", pct(metrics.qualification_case_pass_rate))}
+        ${evalMetric("Role tree", pct(metrics.prospect_role_coverage))}
+        ${evalMetric("Outreach", pct(metrics.outreach_draft_coverage))}
+        ${evalMetric("Ready drafts", pct(metrics.outreach_ready_rate))}
+        ${evalMetric("Contacts", pct(metrics.contact_detail_rate))}
+      </div>
+    </div>
+    <div class="detail-section">
+      <h2>Gate Checks</h2>
+      <div class="eval-checks">
+        ${Object.entries(checks).map(([name, check]) => `<span class="tag ${check.passed ? "ok-tag" : "warn-tag"}">${escapeHtml(name.replaceAll("_", " "))}: ${check.skipped ? "skipped" : check.passed ? "pass" : "review"}</span>`).join("")}
+      </div>
+    </div>
+    <div class="detail-section">
+      <h2>Review Queue</h2>
+      ${failures.length ? failures.slice(0, 12).map(evalFailureMarkup).join("") : "<p>No eval failures in the latest run.</p>"}
+    </div>
+    <div class="detail-section">
+      <h2>K2 Alignment</h2>
+      <div class="tag-list">${(latest.k2_alignment?.primitives || []).map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join("")}</div>
+      <p class="muted">${escapeHtml(latest.k2_alignment?.native_eval_status?.reason || "K2 quality primitives remain the target system of record.")}</p>
+    </div>
+  </div>`;
+}
+
+function evalMetric(label, value) {
+  return `<span><strong>${escapeHtml(value ?? 0)}</strong>${escapeHtml(label)}</span>`;
+}
+
+function evalFailureMarkup(failure) {
+  const title = failure.metric || failure.case_id || failure.domain || failure.type || "failure";
+  const detail = failure.reason || failure.threshold || failure.value || "";
+  return `<p class="audit-item"><strong>${escapeHtml(failure.type || "eval")}</strong> ${escapeHtml(title)}${detail ? ` · ${escapeHtml(detail)}` : ""}</p>`;
+}
+
+function pct(value) {
+  const number = Number(value || 0);
+  return `${Math.round(number * 100)}%`;
+}
+
 function renderProspectsPanel(payload = state.currentProspects) {
   const summary = $("prospect-summary");
   const rows = $("prospect-rows");
@@ -1026,6 +1101,10 @@ function renderAccountDrilldown(focusLead) {
   $("account-workflow-form")?.addEventListener("submit", saveAccountWorkflow);
   $("account-feedback-form")?.addEventListener("submit", saveAccountQualityFeedback);
   $("account-feedback-export")?.addEventListener("click", downloadQualityFeedback);
+  $("account-outreach-export")?.addEventListener("click", downloadOutreachDrafts);
+  root.querySelectorAll(".draft-status-form").forEach((form) => {
+    form.addEventListener("submit", saveOutreachDraftStatus);
+  });
 }
 
 async function ensureAccountDetail(key) {
@@ -1068,6 +1147,8 @@ function accountDetailMarkup(detail) {
   const auditEvents = detail.audit_events || [];
   const qualitySummary = detail.quality_summary || {};
   const qualityFeedback = detail.quality_feedback || [];
+  const outreachSummary = detail.outreach_summary || {};
+  const outreachDrafts = detail.outreach_drafts || [];
   return `<div class="account-detail-stack">
     <section class="account-hero">
       <div>
@@ -1128,6 +1209,21 @@ function accountDetailMarkup(detail) {
       <h3>Prospect Role Tree</h3>
       ${roleGroups.length ? roleGroups.map(accountRoleGroupMarkup).join("") : "<p>No prospects or personas available for this account.</p>"}
     </section>
+    <section class="account-card outreach-card">
+      <div class="card-heading-row">
+        <h3>Outreach Drafts</h3>
+        <button id="account-outreach-export" type="button" class="secondary small">Export CSV</button>
+      </div>
+      <div class="account-metrics compact">
+        ${metric("Drafts", outreachSummary.total || outreachDrafts.length || 0)}
+        ${metric("Approved", outreachSummary.status_counts?.Approved || 0)}
+        ${metric("Exported", outreachSummary.status_counts?.Exported || 0)}
+        ${metric("Ready", outreachSummary.ready_count || 0)}
+      </div>
+      <div class="outreach-draft-list">
+        ${outreachDrafts.length ? outreachDrafts.map(accountOutreachDraftMarkup).join("") : "<p>No outreach drafts available for this account.</p>"}
+      </div>
+    </section>
     <section class="account-card quality-feedback-card">
       <div class="card-heading-row">
         <h3>Quality Feedback</h3>
@@ -1183,6 +1279,39 @@ function accountDetailMarkup(detail) {
       ${auditEvents.length ? auditEvents.map(accountAuditMarkup).join("") : "<p>No workflow history yet.</p>"}
     </section>
   </div>`;
+}
+
+function accountOutreachDraftMarkup(draft) {
+  const evidenceLinks = (draft.evidence || []).filter((item) => item.url).map((item) => (
+    `<a href="${escapeAttribute(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title || item.url)}</a>`
+  ));
+  return `<article class="outreach-draft">
+    <div class="outreach-draft-heading">
+      <div>
+        <span class="status-pill">${escapeHtml(draft.status || "Draft")}</span>
+        <strong>${escapeHtml(draft.prospect_name || draft.persona || draft.title || "Prospect")}</strong>
+        <small>${escapeHtml(draft.title || draft.persona || "")} · ${escapeHtml(draft.source || "")}</small>
+      </div>
+      <span class="muted">${escapeHtml(draft.updated_at || "")}</span>
+    </div>
+    <p><strong>Subject:</strong> ${escapeHtml(draft.subject || "")}</p>
+    <pre class="draft-body">${escapeHtml(draft.body || "")}</pre>
+    <p><strong>CTA:</strong> ${escapeHtml(draft.cta || draft.first_step || "")}</p>
+    <div class="draft-evidence">${evidenceLinks.length ? evidenceLinks.join("") : "<span class=\"muted\">No citation link captured.</span>"}</div>
+    <form class="draft-status-form" data-prospect-id="${escapeAttribute(draft.prospect_id || "")}" data-domain="${escapeAttribute(draft.domain || "")}" data-company="${escapeAttribute(draft.company || "")}">
+      <label>
+        Status
+        <select name="status">
+          ${["Draft", "Approved", "Rejected", "Exported"].map((status) => `<option value="${escapeAttribute(status)}"${status === draft.status ? " selected" : ""}>${escapeHtml(status)}</option>`).join("")}
+        </select>
+      </label>
+      <label class="draft-note">
+        Review note
+        <input name="note" value="${escapeAttribute(draft.approval_note || "")}" placeholder="Why approve, reject, or export?" />
+      </label>
+      <button type="submit" class="secondary">Save</button>
+    </form>
+  </article>`;
 }
 
 function accountFeedbackMarkup(item) {
@@ -1300,6 +1429,39 @@ async function downloadQualityFeedback() {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+async function saveOutreachDraftStatus(event) {
+  event.preventDefault();
+  if (!state.currentRun || !state.currentAccountDetail) return;
+  const form = event.currentTarget;
+  const payload = await api(`/api/runs/${state.currentRun.id}/outreach-drafts/status`, {
+    method: "POST",
+    body: JSON.stringify({
+      prospect_id: form.dataset.prospectId || "",
+      domain: form.dataset.domain || state.currentAccountDetail.workflow?.domain || state.currentAccountDetail.company?.domain || "",
+      company: form.dataset.company || state.currentAccountDetail.company?.company || "",
+      status: form.elements.status.value,
+      note: form.elements.note.value,
+    }),
+  });
+  const record = payload.outreach_status || {};
+  state.currentAccountDetail.outreach_summary = payload.account_summary || state.currentAccountDetail.outreach_summary || {};
+  state.currentAccountDetail.outreach_drafts = (state.currentAccountDetail.outreach_drafts || []).map((draft) => (
+    draft.prospect_id === record.prospect_id
+      ? { ...draft, status: record.status || draft.status, approval_note: record.note || "", updated_at: record.updated_at || "" }
+      : draft
+  ));
+  renderAccountDrilldown(currentProspectFocusLead());
+}
+
+async function downloadOutreachDrafts() {
+  if (!state.currentRun) return;
+  await downloadWithAuth(
+    `/api/runs/${encodeURIComponent(state.currentRun.id)}/outreach-drafts.csv`,
+    `${state.currentRun.id}-outreach-drafts.csv`,
+    "text/csv",
+  );
 }
 
 function accountKey(lead) {
@@ -1798,6 +1960,35 @@ $("k2-sync-apply").addEventListener("click", async () => {
   } catch (error) {
     renderK2SyncResult({ status: "error", reason: error.message });
   }
+});
+
+$("run-eval").addEventListener("click", async () => {
+  if (!state.currentRun) return;
+  const button = $("run-eval");
+  button.disabled = true;
+  $("eval-panel").className = "detail-panel";
+  $("eval-panel").textContent = "Running deterministic ICP eval...";
+  try {
+    const payload = await api("/api/evals/runs", {
+      method: "POST",
+      body: JSON.stringify({ run_id: state.currentRun.id }),
+    });
+    state.evalSummary = payload.summary || state.evalSummary;
+    renderEvalPanel(state.evalSummary);
+    renderSummary(state.currentRun, state.currentRun.leads || []);
+  } catch (error) {
+    $("eval-panel").className = "detail-panel empty";
+    $("eval-panel").textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$("download-evals").addEventListener("click", () => {
+  downloadWithAuth("/api/evals/runs.csv", "icp-eval-runs.csv", "text/csv").catch((error) => {
+    $("eval-panel").className = "detail-panel empty";
+    $("eval-panel").textContent = error.message;
+  });
 });
 
 $("refresh-prospects").addEventListener("click", () => {

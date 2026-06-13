@@ -794,6 +794,76 @@ h1 {
   gap: 10px;
 }
 
+.outreach-card {
+  display: grid;
+  gap: 10px;
+}
+
+.outreach-draft-list {
+  display: grid;
+  gap: 10px;
+}
+
+.outreach-draft {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px;
+}
+
+.outreach-draft-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.outreach-draft-heading strong,
+.outreach-draft-heading small {
+  display: block;
+}
+
+.outreach-draft-heading small {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.draft-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f7faf8;
+  padding: 10px;
+  color: var(--ink);
+  font-family: inherit;
+}
+
+.draft-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.draft-evidence a {
+  color: var(--blue);
+  font-weight: 800;
+}
+
+.draft-status-form {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.6fr) minmax(220px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.draft-status-form label {
+  display: grid;
+  gap: 5px;
+}
+
 .feedback-form {
   display: grid;
   grid-template-columns: minmax(140px, 0.8fr) minmax(140px, 0.8fr) minmax(240px, 1.4fr) auto;
@@ -1018,6 +1088,24 @@ h1 {
 .link-stack {
   display: grid;
   gap: 4px;
+}
+
+.eval-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ok-tag {
+  border-color: rgba(25, 111, 61, 0.35);
+  background: #e8f5ee;
+  color: #196f3d;
+}
+
+.warn-tag {
+  border-color: rgba(167, 86, 0, 0.35);
+  background: #fff5e8;
+  color: #8a5200;
 }
 
 .button-row {
@@ -1303,6 +1391,7 @@ h1 {
   .account-metrics,
   .workflow-form,
   .feedback-form,
+  .draft-status-form,
   .kv-grid.compact,
   .account-prospect-row,
   .source-item,

@@ -216,6 +216,9 @@ class AppStoreTest(unittest.TestCase):
             self.assertEqual(detail["criteria_snapshot"]["hash"], "criteria123")
             self.assertEqual(detail["role_groups"][0]["role"], "VP Engineering")
             self.assertEqual(detail["prospects"][0]["status"], "persona_target")
+            self.assertEqual(detail["outreach_summary"]["total"], 2)
+            self.assertIn("AI workflow opportunity map", detail["outreach_drafts"][0]["subject"])
+            self.assertIn("Platform", detail["outreach_drafts"][0]["evidence_titles"])
             self.assertEqual(detail["evidence_timeline"][0]["title"], "Platform")
             self.assertEqual(detail["source_counts"]["website"], 1)
             self.assertIn("lead_state.updated", {item["action"] for item in detail["audit_events"]})
@@ -281,6 +284,72 @@ class AppStoreTest(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 reloaded.save_quality_feedback("run-feedback", "moj.io", dimension="bad", rating="positive")
+
+    def test_outreach_status_and_eval_runs_are_durable_and_exportable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            run = {
+                "id": "run-eval",
+                "query": "fleet software",
+                "created_at": "2026-06-11T00:00:00+00:00",
+                "status": "completed",
+                "criteria": {"hash": "criteria-eval"},
+                "leads": [
+                    {
+                        "id": "lead-mojio",
+                        "score": {
+                            "company": {"company": "Mojio", "domain": "moj.io"},
+                            "tier": "A",
+                            "total_score": 82,
+                            "hard_gate_failed": False,
+                        },
+                        "strategy": {
+                            "outreach_angle": "Workflow AI opportunity map.",
+                            "first_step": "Send VP Engineering brief.",
+                            "personas": [{"title": "VP Engineering", "priority": "primary"}],
+                        },
+                        "metadata": {"criteria_profile": {"hash": "criteria-eval"}},
+                        "evidence": [
+                            {
+                                "evidence_id": "e1",
+                                "url": "https://moj.io/platform",
+                                "title": "Platform",
+                                "text": "Fleet workflow API evidence.",
+                            }
+                        ],
+                    }
+                ],
+            }
+            store.save_run(run)
+
+            drafts = store.list_outreach_drafts(run_id="run-eval", domain="moj.io")
+            record = store.save_outreach_status(
+                "run-eval",
+                drafts[0]["prospect_id"],
+                domain="moj.io",
+                company="Mojio",
+                status="Approved",
+                note="Ready for BDR review.",
+            )
+            eval_run = store.run_eval("run-eval")
+
+            reloaded = AppStore(Path(tmp))
+            detail = reloaded.account_detail("run-eval", "moj.io")
+            outreach_csv = reloaded.outreach_drafts_csv(run_id="run-eval")
+            eval_csv = reloaded.eval_runs_csv()
+
+            self.assertEqual(record["status"], "Approved")
+            self.assertIsNotNone(detail)
+            assert detail is not None
+            self.assertEqual(detail["outreach_drafts"][0]["status"], "Approved")
+            self.assertEqual(detail["outreach_summary"]["status_counts"]["Approved"], 1)
+            self.assertIn("Ready for BDR review.", outreach_csv)
+            self.assertEqual(eval_run["metrics"]["qualification_case_pass_rate"], 1)
+            self.assertEqual(reloaded.eval_summary(run_id="run-eval")["latest_status"], "passed")
+            self.assertIn("qualification_case_pass_rate", eval_csv)
+            audit_actions = {item["action"] for item in reloaded.list_audit_events(limit=20)}
+            self.assertIn("outreach_status.updated", audit_actions)
+            self.assertIn("eval_run.completed", audit_actions)
 
     def test_sources_and_scan_history_are_durable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -191,6 +191,9 @@ const runtime = {
   sourceScans: [],
   providerUsage: [],
   qualityFeedback: [],
+  outreachStatuses: {},
+  evalCases: null,
+  evalRuns: [],
 };
 
 export default {
@@ -247,6 +250,48 @@ async function handleApiRequest(request, env, url) {
 
   if (method === "GET" && url.pathname === "/api/state") {
     return json(await currentState(env, lists));
+  }
+
+  if (method === "GET" && url.pathname === "/api/evals/cases") {
+    return json({ cases: await loadEvalCases(env, null) });
+  }
+
+  if (method === "POST" && url.pathname === "/api/evals/cases") {
+    const payload = await readJson(request);
+    try {
+      const saved = await saveEvalCase(env, payload);
+      return json({ case: saved, cases: await loadEvalCases(env, null) });
+    } catch (error) {
+      return json({ error: error.message || String(error) }, 400);
+    }
+  }
+
+  if (method === "GET" && url.pathname === "/api/evals/runs.csv") {
+    return new Response(evalRunsCsv(await listEvalRuns(env)), {
+      headers: {
+        "content-type": "text/csv; charset=utf-8",
+        "cache-control": "no-store",
+        "content-disposition": 'attachment; filename="icp-eval-runs.csv"',
+      },
+    });
+  }
+
+  if (method === "GET" && url.pathname === "/api/evals/runs") {
+    const runs = await listEvalRuns(env);
+    return json({ runs, summary: evalSummary(runs) });
+  }
+
+  if (method === "POST" && url.pathname === "/api/evals/runs") {
+    const payload = await readJson(request);
+    const run = await loadRun(env, String(payload.run_id || ""), lists);
+    if (!run) return json({ error: "Run not found." }, 400);
+    const result = await runIcpEval(env, run, lists, Array.isArray(payload.case_ids) ? payload.case_ids.map(String) : []);
+    const runs = await appendEvalRun(env, result);
+    return json({ eval_run: result, summary: evalSummary(runs.filter((item) => item.run_id === run.id)) });
+  }
+
+  if (method === "GET" && url.pathname === "/api/evals/summary") {
+    return json(evalSummary(await listEvalRuns(env)));
   }
 
   if (method === "GET" && url.pathname === "/api/sources") {
@@ -379,6 +424,25 @@ async function handleApiRequest(request, env, url) {
     return json(detail);
   }
 
+  const outreachStatusMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/outreach-drafts\/status$/);
+  if (method === "POST" && outreachStatusMatch) {
+    const run = await loadRun(env, outreachStatusMatch[1], lists);
+    if (!run) return json({ error: "Run not found." }, 404);
+    const payload = await readJson(request);
+    let record;
+    try {
+      record = await saveOutreachStatus(env, run.id, payload);
+    } catch (error) {
+      return json({ error: error.message || String(error) }, 400);
+    }
+    const accountDrafts = await listOutreachDrafts(env, run, { domain: record.domain });
+    return json({
+      outreach_status: record,
+      summary: outreachSummary(await listOutreachDrafts(env, run)),
+      account_summary: outreachSummary(accountDrafts),
+    });
+  }
+
   const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)(?:\/([^/]+))?$/);
   if (runMatch) {
     const run = await loadRun(env, runMatch[1], lists);
@@ -424,6 +488,19 @@ async function handleApiRequest(request, env, url) {
         feedback: record,
         summary: await qualityFeedbackSummary(env, { runId: run.id }),
         account_summary: await qualityFeedbackSummary(env, { runId: run.id, domain: record.domain }),
+      });
+    }
+    if (method === "GET" && action === "outreach-drafts") {
+      const drafts = await listOutreachDrafts(env, run);
+      return json({ run_id: run.id, drafts, summary: outreachSummary(drafts) });
+    }
+    if (method === "GET" && action === "outreach-drafts.csv") {
+      return new Response(outreachDraftsCsv(await listOutreachDrafts(env, run)), {
+        headers: {
+          "content-type": "text/csv; charset=utf-8",
+          "cache-control": "no-store",
+          "content-disposition": `attachment; filename="${run.id}-outreach-drafts.csv"`,
+        },
       });
     }
     if (method === "GET" && action === "prospects") return json(await buildRunProspectsWithApollo(run, env));
@@ -529,6 +606,9 @@ async function currentState(env, lists) {
   const runs = await listRuns(env, lists);
   for (const run of runs) {
     run.quality_feedback_counts = (await qualityFeedbackSummary(env, { runId: run.id })).rating_counts;
+    const hydrated = await loadRun(env, run.id, lists);
+    run.outreach_counts = hydrated ? outreachSummary(await listOutreachDrafts(env, hydrated)).status_counts : {};
+    run.eval_status = evalSummary(await listEvalRuns(env, { runId: run.id })).latest_status;
   }
   const criteria = await currentCriteria(env);
   return {
@@ -543,6 +623,8 @@ async function currentState(env, lists) {
     source_coverage: await sourceCoverage(env, lists),
     provider_controls: await providerControls(env),
     quality_feedback_summary: await qualityFeedbackSummary(env),
+    outreach_summary: await workspaceOutreachSummary(env, lists),
+    eval_summary: evalSummary(await listEvalRuns(env)),
     provider_status: providerStatus(env),
     latest_run: await loadRun(env, runs[0]?.id || SEED_RUN_ID, lists),
   };
@@ -1283,6 +1365,473 @@ function qualityFeedbackOutcome(rating) {
   return { positive: "accepted", neutral: "needs_review", negative: "rejected" }[rating] || "needs_review";
 }
 
+async function listOutreachDrafts(env, run, { domain = "" } = {}) {
+  const domainKey = normalizeDomain(domain || "");
+  const statuses = await loadOutreachStatuses(env, run.id);
+  const leadsById = new Map((run.leads || []).map((lead) => [String(lead.id || ""), lead]));
+  const prospects = buildRunProspects(run).prospects;
+  return prospects
+    .filter((prospect) => !domainKey || normalizeDomain(prospect.domain || "") === domainKey)
+    .map((prospect) => {
+      const lead = leadsById.get(String(prospect.lead_id || "")) || {};
+      return outreachDraftForProspect(run, lead, prospect, statuses[String(prospect.id || "")] || {});
+    });
+}
+
+function outreachDraftForProspect(run, lead, prospect, statusRecord) {
+  const evidence = (lead.evidence || []).filter((item) => item && typeof item === "object").slice(0, 2);
+  const evidenceRefs = evidence.map((item) => ({
+    title: String(item.title || item.url || "Evidence"),
+    url: String(item.url || ""),
+    snippet: String(item.text || "").slice(0, 220),
+  }));
+  const company = lead.score?.company || {};
+  const companyName = String(company.company || prospect.company || "your team");
+  const contactLabel = String(prospect.name || prospect.persona || prospect.title || "there");
+  const firstName = contactLabel.includes(" ") ? contactLabel.split(/\s+/)[0] : contactLabel;
+  const strategy = lead.strategy || {};
+  const angle = String(strategy.outreach_angle || prospect.outreach_angle || "Your workflow data may support a sharper AI product narrative.");
+  const offer = String(strategy.offer || "Propose a 2-week AI opportunity map grounded in existing product data and evidence.");
+  const firstStep = String(strategy.first_step || prospect.first_step || "Share a short account-specific brief.");
+  const evidenceLine = evidenceRefs[0]?.snippet
+    ? `${evidenceRefs[0].title}: ${evidenceRefs[0].snippet}`
+    : evidenceRefs[0]?.title || "public evidence that suggests an operational workflow/data asset";
+  const prospectId = String(prospect.id || "");
+  return {
+    id: `draft-${prospectId}`,
+    run_id: run.id,
+    lead_id: lead.id || prospect.lead_id || "",
+    prospect_id: prospectId,
+    company: companyName,
+    domain: String(company.domain || prospect.domain || ""),
+    prospect_name: String(prospect.name || ""),
+    title: String(prospect.title || ""),
+    persona: String(prospect.persona || prospect.title || ""),
+    source: String(prospect.source || ""),
+    status: normalizeOutreachStatus(statusRecord.status || "Draft"),
+    subject: `${companyName} AI workflow opportunity map`,
+    body: [
+      `Hi ${firstName || "there"},`,
+      `I was reviewing ${companyName} and noticed ${evidenceLine}.`,
+      angle,
+      `A practical next step would be: ${offer}`,
+      `Would it be useful to compare this against one workflow where ${companyName} already has proprietary operational data?`,
+    ].join("\n\n"),
+    cta: firstStep,
+    evidence: evidenceRefs,
+    evidence_titles: evidenceRefs.map((item) => item.title),
+    evidence_urls: evidenceRefs.map((item) => item.url),
+    outreach_angle: angle,
+    first_step: firstStep,
+    approval_note: String(statusRecord.note || ""),
+    updated_at: String(statusRecord.updated_at || ""),
+  };
+}
+
+function normalizeOutreachStatus(value) {
+  const status = String(value || "Draft").trim().replace(/\b\w/g, (letter) => letter.toUpperCase()) || "Draft";
+  if (!["Draft", "Approved", "Rejected", "Exported"].includes(status)) throw new Error(`Invalid outreach status: ${value}.`);
+  return status;
+}
+
+function outreachSummary(drafts) {
+  const status_counts = { Draft: 0, Approved: 0, Rejected: 0, Exported: 0 };
+  for (const draft of drafts || []) {
+    status_counts[normalizeOutreachStatus(draft.status || "Draft")] += 1;
+  }
+  return {
+    total: (drafts || []).length,
+    status_counts,
+    ready_count: status_counts.Approved + status_counts.Exported,
+  };
+}
+
+async function workspaceOutreachSummary(env, lists) {
+  const runs = await listRuns(env, lists);
+  const status_counts = { Draft: 0, Approved: 0, Rejected: 0, Exported: 0 };
+  let total = 0;
+  for (const summary of runs) {
+    const run = await loadRun(env, summary.id, lists);
+    if (!run) continue;
+    const runSummary = outreachSummary(await listOutreachDrafts(env, run));
+    total += runSummary.total;
+    for (const [status, count] of Object.entries(runSummary.status_counts)) {
+      status_counts[status] = (status_counts[status] || 0) + Number(count || 0);
+    }
+  }
+  return { total, status_counts, ready_count: status_counts.Approved + status_counts.Exported };
+}
+
+async function saveOutreachStatus(env, runId, payload) {
+  const prospectId = String(payload.prospect_id || "").trim();
+  if (!prospectId) throw new Error("Prospect id is required.");
+  const statuses = await loadAllOutreachStatuses(env);
+  const runStatuses = statuses[runId] && typeof statuses[runId] === "object" ? statuses[runId] : {};
+  const existing = runStatuses[prospectId] && typeof runStatuses[prospectId] === "object" ? runStatuses[prospectId] : {};
+  const now = nowIso();
+  const record = {
+    run_id: runId,
+    prospect_id: prospectId,
+    domain: normalizeDomain(payload.domain || existing.domain || ""),
+    company: String(payload.company || existing.company || "").trim().replace(/\s+/g, " "),
+    status: normalizeOutreachStatus(payload.status || existing.status || "Approved"),
+    note: String(payload.note ?? existing.note ?? ""),
+    created_at: existing.created_at || now,
+    updated_at: now,
+  };
+  runStatuses[prospectId] = record;
+  statuses[runId] = runStatuses;
+  await persistOutreachStatuses(env, statuses);
+  return record;
+}
+
+async function loadOutreachStatuses(env, runId) {
+  const statuses = await loadAllOutreachStatuses(env);
+  return statuses[runId] && typeof statuses[runId] === "object" ? statuses[runId] : {};
+}
+
+async function loadAllOutreachStatuses(env) {
+  if (env?.ICP_STATE?.get) {
+    const stored = await getStateJson(env, "outreach_statuses", null);
+    if (stored && typeof stored === "object" && !Array.isArray(stored)) {
+      runtime.outreachStatuses = stored;
+      return runtime.outreachStatuses;
+    }
+  }
+  return runtime.outreachStatuses || {};
+}
+
+async function persistOutreachStatuses(env, statuses) {
+  runtime.outreachStatuses = statuses && typeof statuses === "object" ? statuses : {};
+  await putStateJson(env, "outreach_statuses", runtime.outreachStatuses);
+}
+
+function outreachDraftsCsv(drafts) {
+  const fields = ["id", "run_id", "lead_id", "prospect_id", "company", "domain", "prospect_name", "title", "persona", "source", "status", "subject", "body", "cta", "evidence_titles", "evidence_urls", "outreach_angle", "first_step", "approval_note", "updated_at"];
+  return `${fields.join(",")}\n${(drafts || []).map((row) => fields.map((field) => csvCell(Array.isArray(row[field]) ? row[field].join("; ") : row[field])).join(",")).join("\n")}\n`;
+}
+
+async function loadEvalCases(env, run) {
+  if (env?.ICP_STATE?.get) {
+    const stored = await getStateJson(env, "eval_cases", null);
+    if (Array.isArray(stored)) {
+      runtime.evalCases = stored.map((item) => normalizeEvalCase(item)).filter(Boolean);
+      return runtime.evalCases.length ? runtime.evalCases : defaultEvalCases(run);
+    }
+  }
+  if (runtime.evalCases) return runtime.evalCases;
+  return defaultEvalCases(run);
+}
+
+async function saveEvalCase(env, payload) {
+  const item = normalizeEvalCase(payload);
+  const cases = (await loadEvalCases(env, null)).filter((existing) => existing.id !== item.id);
+  cases.push(item);
+  runtime.evalCases = cases.sort((left, right) => String(left.id).localeCompare(String(right.id)));
+  await putStateJson(env, "eval_cases", runtime.evalCases);
+  return item;
+}
+
+function normalizeEvalCase(input) {
+  const type = String(input?.type || "qualification").trim().toLowerCase().replaceAll("-", "_");
+  if (!["qualification", "data_load", "prospect_tree", "research", "outreach"].includes(type)) throw new Error(`Invalid eval case type: ${type}.`);
+  return {
+    id: String(input.id || criteriaHash(JSON.stringify(input || {})).slice(0, 12)),
+    type,
+    domain: normalizeDomain(input.domain || ""),
+    company: String(input.company || "").trim().replace(/\s+/g, " "),
+    expected: input.expected && typeof input.expected === "object" ? input.expected : {},
+    criteria_hash: String(input.criteria_hash || ""),
+    label_source: String(input.label_source || "bootstrap_generated"),
+    rationale: String(input.rationale || ""),
+    created_at: String(input.created_at || nowIso()),
+  };
+}
+
+function defaultEvalCases(run) {
+  const domains = new Set((run?.leads || []).map((lead) => normalizeDomain(lead.score?.company?.domain || "")));
+  const cases = [
+    {
+      id: "case-mojio-tier-a",
+      type: "qualification",
+      domain: "moj.io",
+      company: "Mojio",
+      expected: { tier: "A", hard_gate_failed: false },
+      label_source: "expert_labeled",
+      rationale: "Named ICP example with connected mobility workflow and telematics data.",
+    },
+    {
+      id: "case-automate-tier-a",
+      type: "qualification",
+      domain: "automate.co.za",
+      company: "Automate",
+      expected: { tier: "A", hard_gate_failed: false },
+      label_source: "expert_labeled",
+      rationale: "Named ICP/Volaris example with dealership workflow data.",
+    },
+    {
+      id: "case-servicetitan-tier-a",
+      type: "qualification",
+      domain: "servicetitan.com",
+      company: "ServiceTitan",
+      expected: { tier: "A", hard_gate_failed: false },
+      label_source: "seeded_gold",
+      rationale: "Qualified data-run account with field-service workflow depth.",
+    },
+    {
+      id: "case-ai-native-reject",
+      type: "qualification",
+      domain: "example.com",
+      company: "AI Native Example",
+      expected: { tier: "Reject", hard_gate_failed: true },
+      label_source: "negative_control",
+      rationale: "Seeded reject control for AI-native/too-new companies.",
+    },
+  ].map(normalizeEvalCase);
+  if (!domains.size) return cases;
+  const present = cases.filter((item) => domains.has(item.domain));
+  return present.length ? present : [normalizeEvalCase({
+    id: "case-current-run-data-load",
+    type: "data_load",
+    expected: { min_leads: 1, min_evidence_coverage: 0.8 },
+    label_source: "bootstrap_generated",
+    rationale: "Bootstrap data-load coverage case for the active run.",
+  })];
+}
+
+async function runIcpEval(env, run, lists, caseIds = []) {
+  let cases = await loadEvalCases(env, run);
+  if (caseIds.length) {
+    const selected = new Set(caseIds.map(String));
+    cases = cases.filter((item) => selected.has(item.id));
+  }
+  const leads = (run.leads || []).filter((lead) => lead && typeof lead === "object");
+  const nonRejectLeads = leads.filter((lead) => lead.score?.tier !== "Reject");
+  const domains = leads.map((lead) => normalizeDomain(lead.score?.company?.domain || "")).filter(Boolean);
+  const uniqueDomains = new Set(domains);
+  const duplicateDomains = [...uniqueDomains].filter((domain) => domains.filter((item) => item === domain).length > 1);
+  const prospects = buildRunProspects(run).prospects;
+  const outreachDrafts = await listOutreachDrafts(env, run);
+  const feedback = await listQualityFeedback(env, { runId: run.id, limit: 1000 });
+  const qualificationResults = qualificationCaseResults(cases, leads);
+  const coverage = await sourceCoverage(env, lists);
+  const metrics = {
+    lead_count: leads.length,
+    non_reject_lead_count: nonRejectLeads.length,
+    unique_domain_count: uniqueDomains.size,
+    duplicate_domain_count: duplicateDomains.length,
+    duplicate_domain_rate: ratio(duplicateDomains.length, uniqueDomains.size),
+    required_metadata_completeness: requiredMetadataCompleteness(leads),
+    evidence_coverage: ratio(leads.filter((lead) => (lead.evidence || []).length).length, leads.length),
+    citation_coverage: ratio(leads.filter(leadHasCitableEvidence).length, leads.length),
+    qualification_case_pass_rate: ratio(qualificationResults.filter((item) => item.passed).length, qualificationResults.length),
+    qualification_case_count: qualificationResults.length,
+    prospect_role_coverage: prospectRoleCoverage(nonRejectLeads, prospects),
+    named_contact_rate: ratio(prospects.filter((item) => item.status === "person_found" && item.name).length, prospects.length),
+    contact_detail_rate: ratio(prospects.filter((item) => item.email || item.phone || item.linkedin_url).length, prospects.length),
+    outreach_draft_coverage: outreachDraftCoverage(nonRejectLeads, outreachDrafts),
+    outreach_ready_rate: ratio(outreachSummary(outreachDrafts).ready_count, outreachDrafts.length),
+    operator_feedback_count: feedback.length,
+    operator_positive_rate: ratio(feedback.filter((item) => item.rating === "positive").length, feedback.length),
+    source_count: Number(coverage.source_count || 0),
+    source_scan_count: Number(coverage.scan_count || 0),
+    source_unique_candidate_domains: Number(coverage.unique_candidate_domains || 0),
+  };
+  const checks = evalThresholdChecks(metrics);
+  const failures = evalFailures(leads, duplicateDomains, qualificationResults, checks);
+  const now = nowIso();
+  return {
+    id: `eval-${now.replaceAll(":", "").replaceAll("-", "").slice(0, 15)}-${criteriaHash(run.id).slice(0, 8)}`,
+    run_id: run.id,
+    status: failures.length ? "needs_review" : "passed",
+    created_at: now,
+    case_set_hash: criteriaHash(JSON.stringify(cases)).slice(0, 12),
+    criteria_hash: String(run.criteria?.hash || ""),
+    case_count: cases.length,
+    metrics,
+    checks,
+    case_results: qualificationResults,
+    failures: failures.slice(0, 100),
+    k2_alignment: {
+      system_of_record: "K2 quality/eval/feedback primitives when available",
+      primitives: ["EvalRun", "GoldLabel", "Feedback", "QualityMetrics", "Metadata", "Feeds", "Agents"],
+      native_eval_status: {
+        configured: Boolean(env.K2_API_KEY),
+        base_url: env.K2_BASE_URL || "https://api.knowledge2.ai",
+        reason: "K2 native EvalRun creation is feature-gated/internal in current K2 dev docs; local ICP eval remains canonical for this app slice.",
+      },
+    },
+    oss_adapters: {
+      langfuse: { enabled: false, status: "not_configured", reason: "Optional trace/eval adapter. K2 remains the quality system of record." },
+      phoenix: { enabled: false, status: "not_configured", reason: "Optional OSS observability adapter for traces and LLM judge experiments." },
+    },
+  };
+}
+
+function qualificationCaseResults(cases, leads) {
+  const byDomain = new Map(leads.map((lead) => [normalizeDomain(lead.score?.company?.domain || ""), lead]));
+  return cases.filter((item) => item.type === "qualification").map((item) => {
+    const lead = byDomain.get(item.domain);
+    const expected = item.expected || {};
+    const score = lead?.score || {};
+    let passed = Boolean(lead);
+    if (expected.tier) passed = passed && score.tier === expected.tier;
+    if (expected.hard_gate_failed !== undefined) passed = passed && Boolean(score.hard_gate_failed) === Boolean(expected.hard_gate_failed);
+    return {
+      case_id: item.id,
+      domain: item.domain,
+      company: item.company,
+      passed,
+      expected,
+      actual: {
+        tier: lead ? score.tier || "" : "",
+        hard_gate_failed: lead ? Boolean(score.hard_gate_failed) : null,
+        total_score: lead ? score.total_score : null,
+      },
+      reason: passed ? "matched" : "expected qualification did not match produced lead",
+    };
+  });
+}
+
+function evalThresholdChecks(metrics) {
+  const thresholds = {
+    required_metadata_completeness: 0.85,
+    evidence_coverage: 0.8,
+    qualification_case_pass_rate: 0.9,
+    prospect_role_coverage: 0.8,
+    outreach_draft_coverage: 0.8,
+  };
+  const checks = {};
+  for (const [name, threshold] of Object.entries(thresholds)) {
+    if (name === "qualification_case_pass_rate" && !metrics.qualification_case_count) {
+      checks[name] = { threshold, passed: true, skipped: true, reason: "No qualification cases matched this run." };
+    } else {
+      checks[name] = { threshold, value: Number(metrics[name] || 0), passed: Number(metrics[name] || 0) >= threshold };
+    }
+  }
+  return checks;
+}
+
+function evalFailures(leads, duplicateDomains, qualificationResults, checks) {
+  const failures = [];
+  for (const [metric, check] of Object.entries(checks)) {
+    if (!check.passed) failures.push({ type: "metric_threshold", metric, value: check.value, threshold: check.threshold });
+  }
+  for (const domain of duplicateDomains) failures.push({ type: "duplicate_domain", domain });
+  for (const result of qualificationResults) {
+    if (!result.passed) failures.push({ type: "qualification_case", ...result });
+  }
+  for (const lead of leads) {
+    if (!leadHasCitableEvidence(lead)) failures.push({ type: "missing_citable_evidence", lead_id: lead.id, domain: normalizeDomain(lead.score?.company?.domain || "") });
+  }
+  return failures;
+}
+
+function requiredMetadataCompleteness(leads) {
+  const checks = [
+    (lead) => Boolean(lead.id),
+    (lead) => Boolean(lead.score?.company?.company),
+    (lead) => Boolean(lead.score?.company?.domain),
+    (lead) => Boolean(lead.score?.tier),
+    (lead) => lead.score?.total_score !== undefined,
+    (lead) => Boolean(lead.strategy?.outreach_angle),
+    (lead) => Boolean((lead.strategy?.personas || []).length),
+    (lead) => Boolean(lead.metadata?.criteria_profile || lead.metadata?.qualification),
+    (lead) => Boolean((lead.evidence || []).length),
+  ];
+  if (!leads.length) return 0;
+  let passed = 0;
+  for (const lead of leads) {
+    for (const check of checks) {
+      if (check(lead)) passed += 1;
+    }
+  }
+  return ratio(passed, leads.length * checks.length);
+}
+
+function leadHasCitableEvidence(lead) {
+  return (lead.evidence || []).some((item) => item?.url && (item.text || item.title));
+}
+
+function prospectRoleCoverage(leads, prospects) {
+  if (!leads.length) return 1;
+  const covered = new Set(prospects.filter((item) => item.persona || item.title).map((item) => String(item.lead_id || "")));
+  return ratio(leads.filter((lead) => covered.has(String(lead.id || ""))).length, leads.length);
+}
+
+function outreachDraftCoverage(leads, drafts) {
+  if (!leads.length) return 1;
+  const covered = new Set(drafts.map((item) => String(item.lead_id || "")));
+  return ratio(leads.filter((lead) => covered.has(String(lead.id || ""))).length, leads.length);
+}
+
+function ratio(numerator, denominator) {
+  const bottom = Number(denominator || 0);
+  if (!bottom) return 0;
+  return Math.round((Number(numerator || 0) / bottom) * 10000) / 10000;
+}
+
+async function listEvalRuns(env, { runId = "" } = {}) {
+  if (env?.ICP_STATE?.get) {
+    const stored = await getStateJson(env, "eval_runs", null);
+    if (Array.isArray(stored)) {
+      runtime.evalRuns = stored.filter((item) => item && typeof item === "object");
+    }
+  }
+  const runs = runtime.evalRuns || [];
+  return runId ? runs.filter((item) => item.run_id === runId) : runs;
+}
+
+async function appendEvalRun(env, result) {
+  const runs = await listEvalRuns(env);
+  runs.push(result);
+  runtime.evalRuns = runs.slice(-500);
+  await putStateJson(env, "eval_runs", runtime.evalRuns);
+  return runtime.evalRuns;
+}
+
+function evalSummary(runs) {
+  const ordered = [...(runs || [])].sort((left, right) => String(left.created_at || "").localeCompare(String(right.created_at || "")));
+  const latest = ordered[ordered.length - 1] || null;
+  const status_counts = {};
+  for (const run of ordered) {
+    const status = String(run.status || "unknown");
+    status_counts[status] = (status_counts[status] || 0) + 1;
+  }
+  return {
+    total: ordered.length,
+    status_counts,
+    latest_run: latest,
+    latest_status: latest ? latest.status : "not_run",
+    latest_metrics: latest?.metrics || {},
+    latest_failures: (latest?.failures || []).slice(0, 10),
+  };
+}
+
+function evalRunsCsv(runs) {
+  const fields = ["id", "run_id", "status", "case_set_hash", "criteria_hash", "metric_name", "metric_value", "threshold", "passed"];
+  const lines = [fields.join(",")];
+  for (const run of runs || []) {
+    const metrics = run.metrics || {};
+    const checks = run.checks || {};
+    for (const [name, value] of Object.entries(metrics)) {
+      const check = checks[name] || {};
+      lines.push(fields.map((field) => csvCell({
+        id: run.id,
+        run_id: run.run_id,
+        status: run.status,
+        case_set_hash: run.case_set_hash,
+        criteria_hash: run.criteria_hash,
+        metric_name: name,
+        metric_value: value,
+        threshold: check.threshold ?? "",
+        passed: check.passed ?? "",
+      }[field])).join(","));
+    }
+  }
+  return `${lines.join("\n")}\n`;
+}
+
 function defaultLeadState(runId, domain, company) {
   return { run_id: runId, domain, company, status: "New", note: "", owner: "", tags: [], created_at: "", updated_at: "" };
 }
@@ -1308,6 +1857,7 @@ async function accountDetail(run, accountKey, env) {
   const company = lead.score?.company || {};
   const domain = normalizeDomain(company.domain || "");
   const prospects = buildRunProspects(run).prospects.filter((prospect) => normalizeDomain(prospect.domain || "") === domain || prospect.lead_id === lead.id);
+  const outreachDrafts = await listOutreachDrafts(env, run, { domain });
   const workflow = lead.workflow || defaultLeadState(run.id, domain, company.company || "");
   const criteria = run.criteria || {};
   return {
@@ -1331,6 +1881,8 @@ async function accountDetail(run, accountKey, env) {
     },
     quality_feedback: await listQualityFeedback(env, { runId: run.id, domain, limit: 25 }),
     quality_summary: await qualityFeedbackSummary(env, { runId: run.id, domain }),
+    outreach_drafts: outreachDrafts,
+    outreach_summary: outreachSummary(outreachDrafts),
     audit_events: [],
   };
 }

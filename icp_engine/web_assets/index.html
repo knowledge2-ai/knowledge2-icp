@@ -97,6 +97,7 @@
           <button class="tab" data-view="prospects">Prospects</button>
           <button class="tab" data-view="research">Research</button>
           <button class="tab" data-view="k2">K2</button>
+          <button class="tab" data-view="evals">Evals</button>
           <button class="tab" data-view="setup">Setup</button>
           <button class="tab" data-view="criteria">Criteria</button>
           <button class="tab" data-view="runs">Runs</button>
@@ -231,6 +232,20 @@
             </div>
           </div>
           <section id="k2-panel" class="detail-panel empty">Run research before exporting a K2 manifest.</section>
+        </section>
+
+        <section id="view-evals" class="view">
+          <div class="section-heading evals-heading">
+            <div>
+              <p class="eyebrow">Quality Gates</p>
+              <h2>Loaded Data And Produced Results</h2>
+            </div>
+            <div class="button-row">
+              <button id="run-eval" type="button">Run eval</button>
+              <button id="download-evals" type="button" class="secondary">Download CSV</button>
+            </div>
+          </div>
+          <section id="eval-panel" class="detail-panel empty">Run an eval to validate loaded data, qualification output, prospect trees, and outreach readiness.</section>
         </section>
 
         <section id="view-setup" class="view">

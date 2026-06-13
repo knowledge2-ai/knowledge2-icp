@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from .app_store import AppStore
+from .outreach import summarize_outreach_drafts
 from .prospects import build_run_prospects, prospects_to_csv
 from .research import ResearchPipeline
 
@@ -89,6 +90,22 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
             if parsed.path == "/api/audit-log":
                 self._send_json({"events": app.store.list_audit_events(limit=100)})
                 return
+            if parsed.path == "/api/evals/cases":
+                self._send_json({"cases": app.store.list_eval_cases()})
+                return
+            if parsed.path == "/api/evals/runs.csv":
+                self._send_text(
+                    app.store.eval_runs_csv(),
+                    content_type="text/csv; charset=utf-8",
+                    filename="icp-eval-runs.csv",
+                )
+                return
+            if parsed.path == "/api/evals/runs":
+                self._send_json({"runs": app.store.list_eval_runs(limit=100), "summary": app.store.eval_summary()})
+                return
+            if parsed.path == "/api/evals/summary":
+                self._send_json(app.store.eval_summary())
+                return
             if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/workflow"):
                 run_id = parsed.path.split("/")[3]
                 run = app.store.load_run(run_id)
@@ -156,6 +173,33 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                         "run_id": run_id,
                         "feedback": app.store.list_quality_feedback(run_id=run_id, limit=200),
                         "summary": app.store.quality_feedback_summary(run_id=run_id),
+                    }
+                )
+                return
+            if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/outreach-drafts.csv"):
+                run_id = parsed.path.split("/")[3]
+                run = app.store.load_run(run_id)
+                if not run:
+                    self._send_json({"error": "Run not found."}, status=HTTPStatus.NOT_FOUND)
+                    return
+                self._send_text(
+                    app.store.outreach_drafts_csv(run_id=run_id),
+                    content_type="text/csv; charset=utf-8",
+                    filename=f"{run_id}-outreach-drafts.csv",
+                )
+                return
+            if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/outreach-drafts"):
+                run_id = parsed.path.split("/")[3]
+                run = app.store.load_run(run_id)
+                if not run:
+                    self._send_json({"error": "Run not found."}, status=HTTPStatus.NOT_FOUND)
+                    return
+                drafts = app.store.list_outreach_drafts(run_id=run_id)
+                self._send_json(
+                    {
+                        "run_id": run_id,
+                        "drafts": drafts,
+                        "summary": app.store.outreach_summary(run_id=run_id),
                     }
                 )
                 return
@@ -365,6 +409,26 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                 )
                 self._send_json(answer)
                 return
+            if parsed.path == "/api/evals/cases":
+                payload = self._read_json()
+                try:
+                    case = app.store.save_eval_case(payload)
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_json({"case": case, "cases": app.store.list_eval_cases()})
+                return
+            if parsed.path == "/api/evals/runs":
+                payload = self._read_json()
+                run_id = str(payload.get("run_id") or "")
+                case_ids = payload.get("case_ids") if isinstance(payload.get("case_ids"), list) else None
+                try:
+                    result = app.store.run_eval(run_id, case_ids=[str(item) for item in case_ids] if case_ids else None)
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_json({"eval_run": result, "summary": app.store.eval_summary(run_id=run_id)})
+                return
             if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/lead-state"):
                 run_id = parsed.path.split("/")[3]
                 run = app.store.load_run(run_id)
@@ -418,6 +482,33 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                         "feedback": record,
                         "summary": app.store.quality_feedback_summary(run_id=run_id),
                         "account_summary": app.store.quality_feedback_summary(run_id=run_id, domain=record["domain"]),
+                    }
+                )
+                return
+            if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/outreach-drafts/status"):
+                run_id = parsed.path.split("/")[3]
+                run = app.store.load_run(run_id)
+                if not run:
+                    self._send_json({"error": "Run not found."}, status=HTTPStatus.NOT_FOUND)
+                    return
+                payload = self._read_json()
+                try:
+                    record = app.store.save_outreach_status(
+                        run_id,
+                        str(payload.get("prospect_id") or ""),
+                        domain=str(payload.get("domain") or ""),
+                        company=str(payload.get("company") or ""),
+                        status=str(payload.get("status") or "Approved"),
+                        note=str(payload.get("note") or ""),
+                    )
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_json(
+                    {
+                        "outreach_status": record,
+                        "summary": app.store.outreach_summary(run_id=run_id),
+                        "account_summary": summarize_outreach_drafts(app.store.list_outreach_drafts(run_id=run_id, domain=record["domain"])),
                     }
                 )
                 return

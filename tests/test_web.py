@@ -46,6 +46,7 @@ class WebApiTest(unittest.TestCase):
             try:
                 state = _json_get(f"{base_url}/api/state")
                 self.assertIn("criteria", state)
+                self.assertEqual(state["eval_summary"]["latest_status"], "not_run")
                 original_hash = state["criteria"]["hash"]
 
                 health = _json_get(f"{base_url}/healthz")
@@ -142,6 +143,7 @@ class WebApiTest(unittest.TestCase):
                 self.assertEqual(account["company"]["company"], "Acme Fleet")
                 self.assertEqual(account["workflow"]["status"], "Qualified")
                 self.assertGreaterEqual(len(account["role_groups"]), 1)
+                self.assertGreaterEqual(len(account["outreach_drafts"]), 1)
                 self.assertEqual(account["evidence_timeline"][0]["title"], "About")
                 self.assertIn("lead_state.updated", {item["action"] for item in account["audit_events"]})
 
@@ -167,6 +169,34 @@ class WebApiTest(unittest.TestCase):
                 feedback_csv = _text_get(f"{base_url}/api/runs/{run['id']}/quality-feedback.csv")
                 self.assertIn("run_id,company,domain,dimension,rating", feedback_csv)
                 self.assertIn("Message angle fits the evidence.", feedback_csv)
+
+                outreach_listing = _json_get(f"{base_url}/api/runs/{run['id']}/outreach-drafts")
+                self.assertGreaterEqual(outreach_listing["summary"]["total"], 1)
+                outreach_status = _json_post(
+                    f"{base_url}/api/runs/{run['id']}/outreach-drafts/status",
+                    {
+                        "prospect_id": outreach_listing["drafts"][0]["prospect_id"],
+                        "domain": "acme.example",
+                        "company": "Acme Fleet",
+                        "status": "Approved",
+                        "note": "Approved for first sequence.",
+                    },
+                )
+                self.assertEqual(outreach_status["outreach_status"]["status"], "Approved")
+                self.assertEqual(outreach_status["account_summary"]["status_counts"]["Approved"], 1)
+                outreach_csv = _text_get(f"{base_url}/api/runs/{run['id']}/outreach-drafts.csv")
+                self.assertIn("subject,body,cta", outreach_csv)
+                self.assertIn("Approved for first sequence.", outreach_csv)
+
+                eval_cases = _json_get(f"{base_url}/api/evals/cases")
+                self.assertGreaterEqual(len(eval_cases["cases"]), 1)
+                eval_run = _json_post(f"{base_url}/api/evals/runs", {"run_id": run["id"]})
+                self.assertEqual(eval_run["eval_run"]["run_id"], run["id"])
+                self.assertIn(eval_run["eval_run"]["status"], {"passed", "needs_review"})
+                eval_listing = _json_get(f"{base_url}/api/evals/runs")
+                self.assertEqual(eval_listing["summary"]["total"], 1)
+                eval_csv = _text_get(f"{base_url}/api/evals/runs.csv")
+                self.assertIn("metric_name,metric_value", eval_csv)
 
                 prospects_csv = _text_get(f"{base_url}/api/runs/{run['id']}/prospects.csv")
                 self.assertIn("company,domain", prospects_csv)

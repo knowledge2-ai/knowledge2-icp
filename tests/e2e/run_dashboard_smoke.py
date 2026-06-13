@@ -83,6 +83,8 @@ def main() -> int:
                 expect(page.locator("#prospect-rows .prospect-row").first).to_contain_text("Mojio", timeout=timeout)
                 expect(page.locator("#account-drilldown .account-title")).to_contain_text("Mojio", timeout=timeout)
                 expect(page.locator("#account-drilldown .account-role-tree")).to_contain_text("VP Engineering", timeout=timeout)
+                expect(page.locator("#account-drilldown .outreach-card")).to_contain_text("Outreach Drafts", timeout=timeout)
+                expect(page.locator("#account-drilldown .outreach-draft").first).to_contain_text("AI workflow opportunity map", timeout=timeout)
                 expect(page.locator("#account-drilldown .evidence-timeline")).to_contain_text("Platform", timeout=timeout)
                 expect(page.locator("#account-workflow-form")).to_be_visible(timeout=timeout)
 
@@ -97,6 +99,11 @@ def main() -> int:
                 page.locator("button.tab[data-view='k2']").click()
                 page.locator("#k2-preview").click()
                 expect(page.locator("#k2-panel .manifest-preview")).to_contain_text("source_type", timeout=timeout)
+
+                page.locator("button.tab[data-view='evals']").click()
+                page.locator("#run-eval").click()
+                expect(page.locator("#eval-panel")).to_contain_text("Quality Metrics", timeout=timeout)
+                expect(page.locator("#eval-panel")).to_contain_text("K2 Alignment", timeout=timeout)
 
                 page.locator("button.tab[data-view='setup']").click()
                 expect(page.locator("#setup-grid")).to_contain_text("Discovery query", timeout=timeout)
@@ -137,7 +144,9 @@ def main() -> int:
             _assert(research.get("metadata_used", {}).get("persona_titles"), "Expected metadata_used persona titles.")
             _assert(research.get("citations"), "Expected research citations.")
             _assert(account.get("role_groups"), "Expected account detail role groups.")
+            _assert(account.get("outreach_drafts"), "Expected account detail outreach drafts.")
             _assert(account.get("evidence_timeline"), "Expected account detail evidence timeline.")
+            _assert(state.get("eval_summary", {}).get("latest_status") in {"passed", "needs_review"}, "Expected latest eval status.")
             _assert(not console_errors, f"Browser console errors: {console_errors}")
 
             report = {
