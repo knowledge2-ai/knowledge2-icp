@@ -190,6 +190,7 @@ const runtime = {
   sources: null,
   sourceScans: [],
   providerUsage: [],
+  qualityFeedback: [],
 };
 
 export default {
@@ -387,6 +388,36 @@ async function handleApiRequest(request, env, url) {
       attachWorkflow(run);
       return json({ lead_state: record, status_counts: leadStatusCounts(run) });
     }
+    if (method === "GET" && action === "quality-feedback") {
+      return json({
+        run_id: run.id,
+        feedback: listQualityFeedback({ runId: run.id, limit: 200 }),
+        summary: qualityFeedbackSummary({ runId: run.id }),
+      });
+    }
+    if (method === "GET" && action === "quality-feedback.csv") {
+      return new Response(qualityFeedbackCsv({ runId: run.id }), {
+        headers: {
+          "content-type": "text/csv; charset=utf-8",
+          "cache-control": "no-store",
+          "content-disposition": `attachment; filename="${run.id}-quality-feedback.csv"`,
+        },
+      });
+    }
+    if (method === "POST" && action === "quality-feedback") {
+      const payload = await readJson(request);
+      let record;
+      try {
+        record = saveQualityFeedback(run.id, payload);
+      } catch (error) {
+        return json({ error: error.message || String(error) }, 400);
+      }
+      return json({
+        feedback: record,
+        summary: qualityFeedbackSummary({ runId: run.id }),
+        account_summary: qualityFeedbackSummary({ runId: run.id, domain: record.domain }),
+      });
+    }
     if (method === "GET" && action === "prospects") return json(await buildRunProspectsWithApollo(run, env));
     if (method === "GET" && action === "prospects.csv") {
       const prospects = await buildRunProspectsWithApollo(run, env);
@@ -499,6 +530,7 @@ function currentState(env, lists) {
     source_scans: runtime.sourceScans.slice(-25),
     source_coverage: sourceCoverage(lists),
     provider_controls: providerControls(),
+    quality_feedback_summary: qualityFeedbackSummary(),
     provider_status: providerStatus(env),
     latest_run: loadRun(runs[0]?.id || SEED_RUN_ID, lists),
   };
@@ -1024,6 +1056,92 @@ function saveLeadState(runId, payload) {
   return record;
 }
 
+function saveQualityFeedback(runId, payload) {
+  const domain = normalizeDomain(payload.domain || "");
+  if (!domain) throw new Error("Lead domain is required.");
+  const dimension = normalizeQualityDimension(payload.dimension || "score");
+  const rating = normalizeQualityRating(payload.rating || "positive");
+  const now = nowIso();
+  const record = {
+    id: criteriaHash(`${now}:${runId}:${domain}:${dimension}:${rating}:${runtime.qualityFeedback.length}`).slice(0, 16),
+    run_id: runId,
+    domain,
+    company: String(payload.company || "").trim().replace(/\s+/g, " "),
+    dimension,
+    rating,
+    target_id: String(payload.target_id || ""),
+    target_label: String(payload.target_label || "").trim().replace(/\s+/g, " "),
+    note: String(payload.note || "").trim(),
+    label_source: "operator_feedback",
+    k2_feedback_outcome: qualityFeedbackOutcome(rating),
+    created_at: now,
+  };
+  runtime.qualityFeedback.push(record);
+  runtime.qualityFeedback = runtime.qualityFeedback.slice(-1000);
+  return record;
+}
+
+function listQualityFeedback({ runId = "", domain = "", limit = 100 } = {}) {
+  const domainKey = normalizeDomain(domain);
+  let events = runtime.qualityFeedback;
+  if (runId) events = events.filter((event) => event.run_id === runId);
+  if (domainKey) events = events.filter((event) => normalizeDomain(event.domain || "") === domainKey);
+  return events.slice(-Math.max(1, Math.min(Number(limit) || 100, 1000)));
+}
+
+function qualityFeedbackSummary({ runId = "", domain = "" } = {}) {
+  const events = listQualityFeedback({ runId, domain, limit: 1000 });
+  const ratingCounts = { positive: 0, neutral: 0, negative: 0 };
+  const dimensionCounts = { score: 0, persona: 0, outreach: 0 };
+  for (const event of events) {
+    const rating = normalizeQualityRating(event.rating || "neutral");
+    const dimension = normalizeQualityDimension(event.dimension || "score");
+    ratingCounts[rating] += 1;
+    dimensionCounts[dimension] += 1;
+  }
+  const total = events.length;
+  return {
+    total,
+    rating_counts: ratingCounts,
+    dimension_counts: dimensionCounts,
+    positive_rate: total ? Math.round((ratingCounts.positive / total) * 10000) / 10000 : 0,
+    recent_feedback: events.slice(-25),
+  };
+}
+
+function qualityFeedbackCsv({ runId = "", domain = "" } = {}) {
+  const headers = ["id", "created_at", "run_id", "company", "domain", "dimension", "rating", "target_id", "target_label", "note", "label_source", "k2_feedback_outcome"];
+  const lines = [headers.join(",")];
+  for (const row of listQualityFeedback({ runId, domain, limit: 1000 })) {
+    lines.push(headers.map((header) => csvCell(row[header] || "")).join(","));
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function normalizeQualityDimension(value) {
+  const dimension = String(value || "score").trim().toLowerCase().replaceAll("-", "_").replaceAll(" ", "_") || "score";
+  if (!["score", "persona", "outreach"].includes(dimension)) throw new Error(`Invalid feedback dimension: ${value}.`);
+  return dimension;
+}
+
+function normalizeQualityRating(value) {
+  let rating = String(value || "neutral").trim().toLowerCase().replaceAll("-", "_").replaceAll(" ", "_") || "neutral";
+  if (["good", "yes", "useful", "correct"].includes(rating)) rating = "positive";
+  if (["bad", "no", "wrong", "poor"].includes(rating)) rating = "negative";
+  if (!["positive", "neutral", "negative"].includes(rating)) throw new Error(`Invalid feedback rating: ${value}.`);
+  return rating;
+}
+
+function qualityFeedbackOutcome(rating) {
+  return { positive: "accepted", neutral: "needs_review", negative: "rejected" }[rating] || "needs_review";
+}
+
+function csvCell(value) {
+  const text = String(value ?? "");
+  const escaped = text.replaceAll('"', '""');
+  return /[",\n]/.test(escaped) ? `"${escaped}"` : escaped;
+}
+
 function defaultLeadState(runId, domain, company) {
   return { run_id: runId, domain, company, status: "New", note: "", owner: "", tags: [], created_at: "", updated_at: "" };
 }
@@ -1070,6 +1188,8 @@ function accountDetail(run, accountKey) {
       source: criteria.source || "",
       profile: criteria.profile || lead.metadata?.criteria_profile || {},
     },
+    quality_feedback: listQualityFeedback({ runId: run.id, domain, limit: 25 }),
+    quality_summary: qualityFeedbackSummary({ runId: run.id, domain }),
     audit_events: [],
   };
 }
@@ -1124,6 +1244,7 @@ function runSummary(run) {
     lead_count: leads.length,
     top_score: scores.length ? Math.max(...scores) : 0,
     tier_counts: tierCounts(leads),
+    quality_feedback_counts: qualityFeedbackSummary({ runId: run.id }).rating_counts,
     warnings: (run.warnings || []).slice(0, 5),
   };
 }

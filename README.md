@@ -130,6 +130,20 @@ curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
   http://127.0.0.1:8765/api/runs/<run-id>/workflow
 ```
 
+Operators can also label recommendation quality for score fit, persona fit,
+and outreach usefulness. Feedback appears in account drilldowns, aggregate
+state summaries, and can be exported as CSV for eval or K2 feedback pipelines:
+
+```bash
+curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"domain":"moj.io","dimension":"score","rating":"positive","note":"Strong workflow-data fit"}' \
+  http://127.0.0.1:8765/api/runs/<run-id>/quality-feedback
+
+curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
+  http://127.0.0.1:8765/api/runs/<run-id>/quality-feedback.csv
+```
+
 Health checks:
 
 ```bash

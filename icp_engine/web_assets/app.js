@@ -16,6 +16,7 @@ const state = {
   sources: [],
   sourceScans: [],
   sourceCoverage: {},
+  qualityFeedbackSummary: {},
   activeSourceScan: null,
   criteriaVersions: [],
   criteriaUndoStack: [],
@@ -71,6 +72,7 @@ async function loadState() {
   state.sources = payload.sources || [];
   state.sourceScans = payload.source_scans || [];
   state.sourceCoverage = payload.source_coverage || {};
+  state.qualityFeedbackSummary = payload.quality_feedback_summary || {};
   applySeededDefaults();
   renderSeedSummary();
   renderSetup();
@@ -698,6 +700,7 @@ function renderSummary(run, leads) {
     metric("Leads", leads.length),
     metric("Top score", topScore),
     metric("Tier A", tierCounts.A || 0),
+    metric("Feedback", state.qualityFeedbackSummary.total || 0),
   ].join("");
 }
 
@@ -1021,6 +1024,8 @@ function renderAccountDrilldown(focusLead) {
   root.className = "detail-panel account-drilldown";
   root.innerHTML = accountDetailMarkup(state.currentAccountDetail);
   $("account-workflow-form")?.addEventListener("submit", saveAccountWorkflow);
+  $("account-feedback-form")?.addEventListener("submit", saveAccountQualityFeedback);
+  $("account-feedback-export")?.addEventListener("click", downloadQualityFeedback);
 }
 
 async function ensureAccountDetail(key) {
@@ -1061,6 +1066,8 @@ function accountDetailMarkup(detail) {
   const roleGroups = detail.role_groups || [];
   const evidence = detail.evidence_timeline || [];
   const auditEvents = detail.audit_events || [];
+  const qualitySummary = detail.quality_summary || {};
+  const qualityFeedback = detail.quality_feedback || [];
   return `<div class="account-detail-stack">
     <section class="account-hero">
       <div>
@@ -1121,6 +1128,44 @@ function accountDetailMarkup(detail) {
       <h3>Prospect Role Tree</h3>
       ${roleGroups.length ? roleGroups.map(accountRoleGroupMarkup).join("") : "<p>No prospects or personas available for this account.</p>"}
     </section>
+    <section class="account-card quality-feedback-card">
+      <div class="card-heading-row">
+        <h3>Quality Feedback</h3>
+        <button id="account-feedback-export" type="button" class="secondary small">Export CSV</button>
+      </div>
+      <div class="account-metrics compact">
+        ${metric("Total", qualitySummary.total || 0)}
+        ${metric("Positive", qualitySummary.rating_counts?.positive || 0)}
+        ${metric("Neutral", qualitySummary.rating_counts?.neutral || 0)}
+        ${metric("Negative", qualitySummary.rating_counts?.negative || 0)}
+      </div>
+      <form id="account-feedback-form" class="feedback-form" data-domain="${escapeAttribute(workflow.domain || company.domain || "")}" data-company="${escapeAttribute(company.company || workflow.company || "")}">
+        <label>
+          Dimension
+          <select id="account-feedback-dimension">
+            <option value="score">Score fit</option>
+            <option value="persona">Persona fit</option>
+            <option value="outreach">Outreach angle</option>
+          </select>
+        </label>
+        <label>
+          Rating
+          <select id="account-feedback-rating">
+            <option value="positive">Positive</option>
+            <option value="neutral">Neutral</option>
+            <option value="negative">Negative</option>
+          </select>
+        </label>
+        <label class="feedback-note">
+          Note
+          <textarea id="account-feedback-note" rows="3" placeholder="What should this label teach future scoring or targeting?"></textarea>
+        </label>
+        <button type="submit">Save feedback</button>
+      </form>
+      <div class="feedback-list">
+        ${qualityFeedback.length ? qualityFeedback.slice().reverse().map(accountFeedbackMarkup).join("") : "<p>No quality labels yet.</p>"}
+      </div>
+    </section>
     <section class="account-card evidence-timeline">
       <h3>Evidence Timeline</h3>
       ${evidence.length ? evidence.slice(0, 10).map(accountEvidenceMarkup).join("") : "<p>No evidence captured for this account.</p>"}
@@ -1138,6 +1183,17 @@ function accountDetailMarkup(detail) {
       ${auditEvents.length ? auditEvents.map(accountAuditMarkup).join("") : "<p>No workflow history yet.</p>"}
     </section>
   </div>`;
+}
+
+function accountFeedbackMarkup(item) {
+  return `<article class="feedback-item">
+    <div>
+      <span class="feedback-rating rating-${escapeAttribute(item.rating || "neutral")}">${escapeHtml(item.rating || "neutral")}</span>
+      <strong>${escapeHtml((item.dimension || "score").replaceAll("_", " "))}</strong>
+      <small>${escapeHtml(item.created_at || "")}</small>
+    </div>
+    ${item.note ? `<p>${escapeHtml(item.note)}</p>` : ""}
+  </article>`;
 }
 
 function accountRoleGroupMarkup(group) {
@@ -1197,6 +1253,53 @@ async function saveAccountWorkflow(event) {
   renderLeadDetail((state.currentRun.leads || []).find((item) => item.id === state.selectedLeadId) || null);
   clearAccountDetailState();
   renderAccountDrilldown(currentProspectFocusLead());
+}
+
+async function saveAccountQualityFeedback(event) {
+  event.preventDefault();
+  if (!state.currentRun || !state.currentAccountDetail) return;
+  const form = event.currentTarget;
+  const domain = form.dataset.domain || state.currentAccountDetail.workflow?.domain || state.currentAccountDetail.company?.domain || "";
+  const company = form.dataset.company || state.currentAccountDetail.company?.company || "";
+  const payload = await api(`/api/runs/${state.currentRun.id}/quality-feedback`, {
+    method: "POST",
+    body: JSON.stringify({
+      domain,
+      company,
+      dimension: $("account-feedback-dimension").value,
+      rating: $("account-feedback-rating").value,
+      note: $("account-feedback-note").value,
+    }),
+  });
+  state.qualityFeedbackSummary = payload.summary || state.qualityFeedbackSummary;
+  state.currentAccountDetail.quality_summary = payload.account_summary || state.currentAccountDetail.quality_summary || {};
+  state.currentAccountDetail.quality_feedback = [
+    ...(state.currentAccountDetail.quality_feedback || []),
+    payload.feedback,
+  ].filter(Boolean);
+  $("account-feedback-note").value = "";
+  renderSummary(state.currentRun, state.currentRun.leads || []);
+  renderAccountDrilldown(currentProspectFocusLead());
+}
+
+async function downloadQualityFeedback() {
+  if (!state.currentRun) return;
+  const response = await authFetch(`/api/runs/${encodeURIComponent(state.currentRun.id)}/quality-feedback.csv`, {
+    headers: { Accept: "text/csv" },
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error || `Export failed: ${response.status}`);
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${state.currentRun.id}-quality-feedback.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function accountKey(lead) {

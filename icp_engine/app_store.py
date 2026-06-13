@@ -16,6 +16,8 @@ DEFAULT_STATE_DIR = Path(os.environ.get("ICP_APP_STATE_DIR", "out/app_state"))
 DEFAULT_ICP_PATH = Path(os.environ.get("ICP_CRITERIA_PATH", "icp.md"))
 LEAD_STATUSES = ("New", "Review", "Qualified", "Rejected", "Exported")
 SOURCE_TYPES = ("serp_query", "portfolio_url", "manual_seed", "apollo_query")
+QUALITY_DIMENSIONS = ("score", "persona", "outreach")
+QUALITY_RATINGS = ("positive", "neutral", "negative")
 
 
 def now_iso() -> str:
@@ -41,6 +43,7 @@ class AppStore:
         self.sources_path = self.state_dir / "sources.json"
         self.source_scans_path = self.state_dir / "source_scans.json"
         self.provider_usage_path = self.state_dir / "provider_usage.json"
+        self.quality_feedback_path = self.state_dir / "quality_feedback.json"
         self.runs_dir = self.state_dir / "runs"
         self.index_path = self.state_dir / "runs.json"
 
@@ -430,6 +433,7 @@ class AppStore:
         workflow = lead.get("workflow") if isinstance(lead.get("workflow"), dict) else _default_lead_state(run_id, domain, _lead_company(lead))
         criteria = run.get("criteria", {}) if isinstance(run.get("criteria"), dict) else {}
         criteria_profile = criteria.get("profile") if isinstance(criteria.get("profile"), dict) else metadata.get("criteria_profile", {})
+        quality_feedback = self.list_quality_feedback(run_id=run_id, domain=domain, limit=25)
         return {
             "run_id": run_id,
             "lead_id": lead.get("id"),
@@ -449,8 +453,116 @@ class AppStore:
                 "source": criteria.get("source") or criteria_profile.get("source") or "",
                 "profile": criteria_profile if isinstance(criteria_profile, dict) else {},
             },
+            "quality_feedback": quality_feedback,
+            "quality_summary": self.quality_feedback_summary(run_id=run_id, domain=domain),
             "audit_events": _audit_events_for_account(self.list_audit_events(limit=500), run_id, domain),
         }
+
+    def save_quality_feedback(
+        self,
+        run_id: str,
+        domain: str,
+        *,
+        company: str = "",
+        dimension: str = "score",
+        rating: str = "positive",
+        note: str = "",
+        target_id: str = "",
+        target_label: str = "",
+    ) -> dict[str, Any]:
+        self.ensure()
+        domain_key = _normalize_domain(domain)
+        if not domain_key:
+            raise ValueError("Lead domain is required.")
+        clean_dimension = _normalize_quality_dimension(dimension)
+        clean_rating = _normalize_quality_rating(rating)
+        now = now_iso()
+        events = self.list_quality_feedback(limit=1000)
+        record = {
+            "id": stable_hash(f"{now}:{run_id}:{domain_key}:{clean_dimension}:{clean_rating}:{target_id}:{len(events)}"),
+            "run_id": run_id,
+            "domain": domain_key,
+            "company": " ".join(str(company).strip().split()),
+            "dimension": clean_dimension,
+            "rating": clean_rating,
+            "target_id": str(target_id or ""),
+            "target_label": " ".join(str(target_label).strip().split()),
+            "note": str(note or "").strip(),
+            "label_source": "operator_feedback",
+            "k2_feedback_outcome": _quality_feedback_outcome(clean_rating),
+            "created_at": now,
+        }
+        events.append(record)
+        self.quality_feedback_path.write_text(json.dumps(events[-1000:], indent=2, sort_keys=True), encoding="utf-8")
+        self.append_audit_event(
+            "quality_feedback.created",
+            subject_type="quality_feedback",
+            subject_id=f"{run_id}:{domain_key}:{clean_dimension}",
+            details={
+                "run_id": run_id,
+                "domain": domain_key,
+                "company": record["company"],
+                "dimension": clean_dimension,
+                "rating": clean_rating,
+            },
+        )
+        return record
+
+    def list_quality_feedback(
+        self,
+        *,
+        run_id: str | None = None,
+        domain: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        self.ensure()
+        value = _load_json_file(self.quality_feedback_path, list)
+        events = [item for item in value or [] if isinstance(item, dict)]
+        if run_id:
+            events = [item for item in events if item.get("run_id") == run_id]
+        if domain:
+            domain_key = _normalize_domain(domain)
+            events = [item for item in events if _normalize_domain(str(item.get("domain") or "")) == domain_key]
+        return events[-max(1, min(limit, 1000)) :]
+
+    def quality_feedback_summary(self, *, run_id: str | None = None, domain: str | None = None) -> dict[str, Any]:
+        events = self.list_quality_feedback(run_id=run_id, domain=domain, limit=1000)
+        rating_counts = {rating: 0 for rating in QUALITY_RATINGS}
+        dimension_counts = {dimension: 0 for dimension in QUALITY_DIMENSIONS}
+        for event in events:
+            rating = _normalize_quality_rating(str(event.get("rating") or "neutral"))
+            dimension = _normalize_quality_dimension(str(event.get("dimension") or "score"))
+            rating_counts[rating] += 1
+            dimension_counts[dimension] += 1
+        total = len(events)
+        return {
+            "total": total,
+            "rating_counts": rating_counts,
+            "dimension_counts": dimension_counts,
+            "positive_rate": round(rating_counts["positive"] / total, 4) if total else 0,
+            "recent_feedback": events[-25:],
+        }
+
+    def quality_feedback_csv(self, *, run_id: str | None = None, domain: str | None = None) -> str:
+        rows = self.list_quality_feedback(run_id=run_id, domain=domain, limit=1000)
+        headers = [
+            "id",
+            "created_at",
+            "run_id",
+            "company",
+            "domain",
+            "dimension",
+            "rating",
+            "target_id",
+            "target_label",
+            "note",
+            "label_source",
+            "k2_feedback_outcome",
+        ]
+        lines = [",".join(headers)]
+        for row in rows:
+            lines.append(",".join(_csv_cell(row.get(header, "")) for header in headers))
+        return "\n".join(lines) + "\n"
 
     def list_lead_views(self) -> list[dict[str, Any]]:
         self.ensure()
@@ -658,6 +770,7 @@ class AppStore:
             "source_scans": self.list_source_scans(limit=25),
             "source_coverage": self.source_coverage(),
             "provider_controls": self.provider_usage_summary(),
+            "quality_feedback_summary": self.quality_feedback_summary(),
             "audit_log": self.list_audit_events(limit=25),
             "provider_status": provider_status(),
             "latest_run": latest_run,
@@ -751,6 +864,7 @@ class AppStore:
         return {
             **summary,
             "lead_status_counts": self.lead_status_counts(run_id),
+            "quality_feedback_counts": self.quality_feedback_summary(run_id=run_id).get("rating_counts", {}),
         }
 
     def _criteria_history_with(self, criteria: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1021,6 +1135,38 @@ def _normalize_status(status: str) -> str:
     if normalized not in LEAD_STATUSES:
         raise ValueError(f"Invalid lead status: {status}. Expected one of {', '.join(LEAD_STATUSES)}.")
     return normalized
+
+
+def _normalize_quality_dimension(dimension: str) -> str:
+    normalized = dimension.strip().lower().replace("-", "_").replace(" ", "_") or "score"
+    if normalized not in QUALITY_DIMENSIONS:
+        raise ValueError(f"Invalid feedback dimension: {dimension}. Expected one of {', '.join(QUALITY_DIMENSIONS)}.")
+    return normalized
+
+
+def _normalize_quality_rating(rating: str) -> str:
+    normalized = rating.strip().lower().replace("-", "_").replace(" ", "_") or "neutral"
+    if normalized in {"good", "yes", "useful", "correct"}:
+        normalized = "positive"
+    elif normalized in {"bad", "no", "wrong", "poor"}:
+        normalized = "negative"
+    if normalized not in QUALITY_RATINGS:
+        raise ValueError(f"Invalid feedback rating: {rating}. Expected one of {', '.join(QUALITY_RATINGS)}.")
+    return normalized
+
+
+def _quality_feedback_outcome(rating: str) -> str:
+    return {
+        "positive": "accepted",
+        "neutral": "needs_review",
+        "negative": "rejected",
+    }.get(rating, "needs_review")
+
+
+def _csv_cell(value: Any) -> str:
+    text = str(value if value is not None else "")
+    escaped = text.replace('"', '""')
+    return f'"{escaped}"' if any(char in escaped for char in [",", "\n", '"']) else escaped
 
 
 def _clean_tags(tags: Any) -> list[str]:

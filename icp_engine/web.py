@@ -133,6 +133,32 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                     filename=f"{run_id}-prospects.csv",
                 )
                 return
+            if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/quality-feedback.csv"):
+                run_id = parsed.path.split("/")[3]
+                run = app.store.load_run(run_id)
+                if not run:
+                    self._send_json({"error": "Run not found."}, status=HTTPStatus.NOT_FOUND)
+                    return
+                self._send_text(
+                    app.store.quality_feedback_csv(run_id=run_id),
+                    content_type="text/csv; charset=utf-8",
+                    filename=f"{run_id}-quality-feedback.csv",
+                )
+                return
+            if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/quality-feedback"):
+                run_id = parsed.path.split("/")[3]
+                run = app.store.load_run(run_id)
+                if not run:
+                    self._send_json({"error": "Run not found."}, status=HTTPStatus.NOT_FOUND)
+                    return
+                self._send_json(
+                    {
+                        "run_id": run_id,
+                        "feedback": app.store.list_quality_feedback(run_id=run_id, limit=200),
+                        "summary": app.store.quality_feedback_summary(run_id=run_id),
+                    }
+                )
+                return
             if parsed.path.startswith("/api/runs/") and "/accounts/" in parsed.path:
                 parts = parsed.path.split("/")
                 if len(parts) >= 6:
@@ -363,6 +389,35 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                     {
                         "lead_state": record,
                         "status_counts": app.store.lead_status_counts(run_id, run),
+                    }
+                )
+                return
+            if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/quality-feedback"):
+                run_id = parsed.path.split("/")[3]
+                run = app.store.load_run(run_id)
+                if not run:
+                    self._send_json({"error": "Run not found."}, status=HTTPStatus.NOT_FOUND)
+                    return
+                payload = self._read_json()
+                try:
+                    record = app.store.save_quality_feedback(
+                        run_id,
+                        str(payload.get("domain") or ""),
+                        company=str(payload.get("company") or ""),
+                        dimension=str(payload.get("dimension") or "score"),
+                        rating=str(payload.get("rating") or "positive"),
+                        note=str(payload.get("note") or ""),
+                        target_id=str(payload.get("target_id") or ""),
+                        target_label=str(payload.get("target_label") or ""),
+                    )
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_json(
+                    {
+                        "feedback": record,
+                        "summary": app.store.quality_feedback_summary(run_id=run_id),
+                        "account_summary": app.store.quality_feedback_summary(run_id=run_id, domain=record["domain"]),
                     }
                 )
                 return

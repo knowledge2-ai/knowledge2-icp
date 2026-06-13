@@ -145,6 +145,29 @@ class WebApiTest(unittest.TestCase):
                 self.assertEqual(account["evidence_timeline"][0]["title"], "About")
                 self.assertIn("lead_state.updated", {item["action"] for item in account["audit_events"]})
 
+                feedback = _json_post(
+                    f"{base_url}/api/runs/{run['id']}/quality-feedback",
+                    {
+                        "domain": "acme.example",
+                        "company": "Acme Fleet",
+                        "dimension": "outreach",
+                        "rating": "positive",
+                        "note": "Message angle fits the evidence.",
+                    },
+                )
+                self.assertEqual(feedback["feedback"]["dimension"], "outreach")
+                self.assertEqual(feedback["summary"]["rating_counts"]["positive"], 1)
+
+                feedback_listing = _json_get(f"{base_url}/api/runs/{run['id']}/quality-feedback")
+                self.assertEqual(feedback_listing["summary"]["total"], 1)
+                account_with_feedback = _json_get(f"{base_url}/api/runs/{run['id']}/accounts/acme.example")
+                self.assertEqual(account_with_feedback["quality_summary"]["total"], 1)
+                self.assertEqual(account_with_feedback["quality_feedback"][0]["note"], "Message angle fits the evidence.")
+
+                feedback_csv = _text_get(f"{base_url}/api/runs/{run['id']}/quality-feedback.csv")
+                self.assertIn("run_id,company,domain,dimension,rating", feedback_csv)
+                self.assertIn("Message angle fits the evidence.", feedback_csv)
+
                 prospects_csv = _text_get(f"{base_url}/api/runs/{run['id']}/prospects.csv")
                 self.assertIn("company,domain", prospects_csv)
                 self.assertIn("Acme Fleet", prospects_csv)

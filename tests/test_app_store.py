@@ -27,6 +27,7 @@ class AppStoreTest(unittest.TestCase):
             self.assertIn("ServiceTitan", companies)
             self.assertIn("provider_controls", state)
             self.assertTrue(state["provider_controls"]["policy"]["enabled"])
+            self.assertEqual(state["quality_feedback_summary"]["total"], 0)
             self.assertEqual(state["latest_run"]["id"], "run-seeded-icp")
             self.assertGreaterEqual(len(state["latest_run"]["leads"]), 428)
             self.assertEqual(state["latest_run"]["leads"][0]["score"]["company"]["company"], "ServiceTitan")
@@ -219,6 +220,67 @@ class AppStoreTest(unittest.TestCase):
             self.assertEqual(detail["source_counts"]["website"], 1)
             self.assertIn("lead_state.updated", {item["action"] for item in detail["audit_events"]})
             self.assertIsNone(store.account_detail("run-account", "missing.example"))
+
+    def test_quality_feedback_is_durable_summarized_and_exportable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            run = {
+                "id": "run-feedback",
+                "query": "fleet software",
+                "created_at": "2026-06-11T00:00:00+00:00",
+                "status": "completed",
+                "leads": [
+                    {
+                        "id": "lead-mojio",
+                        "score": {
+                            "company": {"company": "Mojio", "domain": "moj.io"},
+                            "tier": "A",
+                            "total_score": 82,
+                        },
+                    }
+                ],
+            }
+            store.save_run(run)
+
+            score_feedback = store.save_quality_feedback(
+                "run-feedback",
+                "https://www.moj.io/platform",
+                company="Mojio",
+                dimension="score",
+                rating="positive",
+                note="Strong workflow-data fit.",
+            )
+            persona_feedback = store.save_quality_feedback(
+                "run-feedback",
+                "moj.io",
+                company="Mojio",
+                dimension="persona",
+                rating="negative",
+                target_label="VP Engineering",
+                note="Persona should be product owner first.",
+            )
+
+            reloaded = AppStore(Path(tmp))
+            summary = reloaded.quality_feedback_summary(run_id="run-feedback")
+            detail = reloaded.account_detail("run-feedback", "moj.io")
+            csv = reloaded.quality_feedback_csv(run_id="run-feedback")
+
+            self.assertEqual(score_feedback["domain"], "moj.io")
+            self.assertEqual(score_feedback["k2_feedback_outcome"], "accepted")
+            self.assertEqual(persona_feedback["k2_feedback_outcome"], "rejected")
+            self.assertEqual(summary["total"], 2)
+            self.assertEqual(summary["rating_counts"]["positive"], 1)
+            self.assertEqual(summary["rating_counts"]["negative"], 1)
+            self.assertEqual(summary["dimension_counts"]["persona"], 1)
+            self.assertIsNotNone(detail)
+            assert detail is not None
+            self.assertEqual(detail["quality_summary"]["total"], 2)
+            self.assertEqual(len(detail["quality_feedback"]), 2)
+            self.assertIn("Strong workflow-data fit.", csv)
+            self.assertIn("quality_feedback.created", {item["action"] for item in reloaded.list_audit_events(limit=20)})
+
+            with self.assertRaises(ValueError):
+                reloaded.save_quality_feedback("run-feedback", "moj.io", dimension="bad", rating="positive")
 
     def test_sources_and_scan_history_are_durable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

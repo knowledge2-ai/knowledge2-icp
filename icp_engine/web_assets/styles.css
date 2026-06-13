@@ -78,6 +78,12 @@ button.secondary:hover,
   border-color: #b9c7d7;
 }
 
+button.small {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 0.86rem;
+}
+
 textarea,
 input,
 select {
@@ -719,6 +725,10 @@ h1 {
   gap: 8px;
 }
 
+.account-metrics.compact {
+  margin-bottom: 12px;
+}
+
 .account-workflow {
   border-top: 1px solid var(--line);
   padding-top: 14px;
@@ -757,6 +767,18 @@ h1 {
   margin-bottom: 8px;
 }
 
+.card-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.card-heading-row h3 {
+  margin-bottom: 0;
+}
+
 .kv-grid.compact {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
@@ -765,6 +787,69 @@ h1 {
 .evidence-timeline {
   display: grid;
   gap: 10px;
+}
+
+.quality-feedback-card {
+  display: grid;
+  gap: 10px;
+}
+
+.feedback-form {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.8fr) minmax(140px, 0.8fr) minmax(240px, 1.4fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.feedback-form label {
+  display: grid;
+  gap: 5px;
+}
+
+.feedback-list {
+  display: grid;
+  gap: 8px;
+}
+
+.feedback-item {
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px 12px;
+}
+
+.feedback-item > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.feedback-item p {
+  color: var(--muted);
+}
+
+.feedback-rating {
+  border-radius: 999px;
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 3px 8px;
+  text-transform: uppercase;
+}
+
+.rating-positive {
+  background: var(--green);
+}
+
+.rating-neutral {
+  background: var(--blue);
+}
+
+.rating-negative {
+  background: var(--red);
 }
 
 .account-role-group {
@@ -1217,6 +1302,7 @@ h1 {
   .toolbar,
   .account-metrics,
   .workflow-form,
+  .feedback-form,
   .kv-grid.compact,
   .account-prospect-row,
   .source-item,
