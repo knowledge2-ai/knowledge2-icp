@@ -31,6 +31,9 @@ def render_config(
 
     config["account_id"] = selected_account_id
     config.setdefault("vars", {})["ICP_DEPLOYMENT_MODE"] = "seeded-worker"
+    research_corpus_id = os.environ.get("K2_RESEARCH_CORPUS_ID", "").strip()
+    if research_corpus_id:
+        config.setdefault("vars", {})["K2_RESEARCH_CORPUS_ID"] = research_corpus_id
     routes = config.get("routes")
     if not isinstance(routes, list) or not routes:
         raise ConfigError("base wrangler config must contain at least one route")

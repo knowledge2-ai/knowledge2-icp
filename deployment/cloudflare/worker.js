@@ -483,7 +483,7 @@ async function handleApiRequest(request, env, url) {
     if (!guard.allowed) return providerDenied(guard);
     const run = await loadRun(env, String(payload.run_id || ""), lists);
     if (!run) return json({ answer: "Run not found.", citations: [], matched_leads: [] }, 404);
-    return json(localResearchAnswer(run, String(payload.question || "")));
+    return json(await researchAnswer(env, run, String(payload.question || "")));
   }
 
   const accountMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/accounts\/([^/]+)$/);
@@ -1303,7 +1303,7 @@ function providerStatus(env) {
       configured: Boolean(env.K2_API_KEY),
       env: "K2_API_KEY",
       base_url: env.K2_BASE_URL || "https://api.knowledge2.ai",
-      research_corpus_configured: false,
+      research_corpus_configured: Boolean(env.K2_RESEARCH_CORPUS_ID),
     },
     github: { configured: false, env: "GITHUB_TOKEN", public_fallback: true },
     search: {
@@ -3268,6 +3268,90 @@ function csvCell(value) {
   const text = String(value ?? "");
   if (/[",\n]/.test(text)) return `"${text.replaceAll('"', '""')}"`;
   return text;
+}
+
+async function researchAnswer(env, run, question) {
+  if (String(question || "").trim()) {
+    const k2 = await k2ResearchAnswer(env, run, question);
+    if (k2.status === "ok") return k2;
+  }
+  return localResearchAnswer(run, question);
+}
+
+async function k2ResearchAnswer(env, run, question) {
+  const corpusId = String(run.k2?.corpus_id || env.K2_RESEARCH_CORPUS_ID || "").trim();
+  if (!env.K2_API_KEY || !corpusId) return { status: "skipped" };
+  const baseUrl = String(env.K2_BASE_URL || "https://api.knowledge2.ai").replace(/\/+$/, "");
+  try {
+    const payload = await k2Request(baseUrl, env.K2_API_KEY, "POST", `/v1/corpora/${encodeURIComponent(corpusId)}/search:generate`, {
+      query: question,
+      top_k: 8,
+      hybrid: {
+        enabled: true,
+        fusion_mode: "rrf",
+        metadata_sparse_enabled: true,
+        metadata_sparse_weight: 0.20,
+      },
+      return_config: {
+        include_text: true,
+        include_scores: true,
+        include_provenance: true,
+      },
+      generation: {
+        temperature: 0.2,
+        max_tokens: 700,
+      },
+      filters: runMetadataFilter(String(run.id || "")),
+    });
+    return {
+      answer: String(payload.answer || ""),
+      citations: k2Citations(Array.isArray(payload.results) ? payload.results : []),
+      matched_leads: [],
+      provider: "k2",
+      corpus_id: corpusId,
+      model: payload.model,
+      k2: {
+        status: "ok",
+        raw_result_count: Array.isArray(payload.results) ? payload.results.length : 0,
+      },
+    };
+  } catch (error) {
+    return { status: "error", reason: error?.message || String(error) };
+  }
+}
+
+function runMetadataFilter(runId) {
+  const filters = [];
+  if (runId) filters.push({ key: "run_id", op: "==", value: runId });
+  return { condition: "and", filters };
+}
+
+function k2Citations(results) {
+  return results.slice(0, 8).map((item) => {
+    const metadata = mergedK2Metadata(item);
+    return {
+      company: metadata.company || "",
+      domain: metadata.domain || "",
+      url: metadata.source_url || metadata.sourceUri || metadata.url || "",
+      evidence_id: metadata.evidence_id || item.documentId || item.document_id || "",
+      snippet: String(item.text || "").slice(0, 420),
+      score: item.score,
+      source_type: metadata.source_type || "",
+      page_category: metadata.page_category || "",
+      signal_tags: Array.isArray(metadata.signal_tags) ? metadata.signal_tags : [],
+    };
+  });
+}
+
+function mergedK2Metadata(item) {
+  const merged = {};
+  for (const key of ["metadata", "customMetadata", "custom_metadata", "systemMetadata", "system_metadata"]) {
+    if (item[key] && typeof item[key] === "object" && !Array.isArray(item[key])) Object.assign(merged, item[key]);
+  }
+  const system = item.systemMetadata || item.system_metadata || {};
+  const provenance = system.provenance && typeof system.provenance === "object" ? system.provenance : {};
+  Object.assign(merged, Object.fromEntries(Object.entries(provenance).filter(([key]) => merged[key] === undefined)));
+  return merged;
 }
 
 function localResearchAnswer(run, question) {

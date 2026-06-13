@@ -20,6 +20,7 @@ id = "cd071b0deaa54a72906e7dd13f0343d7"
 [vars]
 ICP_DEPLOYMENT_MODE = "seeded-worker"
 K2_BASE_URL = "https://api-dev.knowledge2.ai"
+K2_RESEARCH_CORPUS_ID = ""
 
 [secrets]
 required = ["K2_API_KEY", "APOLLO_API_KEY", "ICP_ADMIN_TOKEN"]

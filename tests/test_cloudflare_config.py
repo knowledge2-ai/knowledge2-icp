@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 import tomllib
 import unittest
@@ -22,6 +23,7 @@ class CloudflareConfigTest(unittest.TestCase):
         self.assertIn("ICP_ADMIN_TOKEN", config["secrets"]["required"])
         self.assertEqual(config["vars"]["ICP_DEPLOYMENT_MODE"], "seeded-worker")
         self.assertEqual(config["vars"]["K2_BASE_URL"], "https://api-dev.knowledge2.ai")
+        self.assertEqual(config["vars"]["K2_RESEARCH_CORPUS_ID"], "")
         self.assertEqual(config["triggers"]["crons"], ["0 9 * * *"])
 
         raw = path.read_text(encoding="utf-8")
@@ -97,6 +99,9 @@ class CloudflareConfigTest(unittest.TestCase):
         self.assertIn("loadExpansionRuns", worker)
         self.assertIn("sourceScheduleDue", worker)
         self.assertIn("expansion_runs", worker)
+        self.assertIn("K2_RESEARCH_CORPUS_ID", worker)
+        self.assertIn("k2ResearchAnswer", worker)
+        self.assertIn("search:generate", worker)
         self.assertIn("replace-with-cloudflare-account-id", raw)
 
         seed = json.loads(Path("icp_engine/web_assets/seed-companies.json").read_text(encoding="utf-8"))
@@ -115,6 +120,7 @@ class CloudflareConfigTest(unittest.TestCase):
         self.assertEqual(config["account_id"], "0" * 32)
         self.assertEqual(config["vars"]["ICP_DEPLOYMENT_MODE"], "seeded-worker")
         self.assertEqual(config["vars"]["K2_BASE_URL"], "https://api-dev.knowledge2.ai")
+        self.assertEqual(config["vars"]["K2_RESEARCH_CORPUS_ID"], "")
         self.assertEqual(config["triggers"]["crons"], ["0 9 * * *"])
         self.assertEqual(config["kv_namespaces"][0]["binding"], "ICP_STATE")
         self.assertEqual(config["routes"][0]["pattern"], "gtm-dev.knowledge2.ai")
@@ -129,6 +135,21 @@ class CloudflareConfigTest(unittest.TestCase):
             renderer.render_config(
                 account_id="cf" + "at_not-an-account-id",
             )
+
+    def test_generated_worker_config_can_include_research_corpus_from_environment(self) -> None:
+        renderer = _load_renderer()
+        old_value = os.environ.get("K2_RESEARCH_CORPUS_ID")
+        os.environ["K2_RESEARCH_CORPUS_ID"] = "corpus-dev-123"
+        try:
+            rendered = renderer.render_config(account_id="0" * 32, route="gtm-dev.knowledge2.ai")
+        finally:
+            if old_value is None:
+                os.environ.pop("K2_RESEARCH_CORPUS_ID", None)
+            else:
+                os.environ["K2_RESEARCH_CORPUS_ID"] = old_value
+
+        config = tomllib.loads(rendered)
+        self.assertEqual(config["vars"]["K2_RESEARCH_CORPUS_ID"], "corpus-dev-123")
 
     def test_deploy_preflight_validates_env_without_printing_secret_values(self) -> None:
         preflight = _load_preflight()
