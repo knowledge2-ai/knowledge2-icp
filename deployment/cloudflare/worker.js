@@ -3271,11 +3271,14 @@ function csvCell(value) {
 }
 
 async function researchAnswer(env, run, question) {
+  let fallbackReason = "";
   if (String(question || "").trim()) {
     const k2 = await k2ResearchAnswer(env, run, question);
     if (k2.status === "ok") return k2;
+    fallbackReason = k2.reason || k2.status || "";
   }
-  return localResearchAnswer(run, question);
+  const local = localResearchAnswer(run, question);
+  return fallbackReason ? { ...local, k2: { status: "fallback", reason: fallbackReason } } : local;
 }
 
 async function k2ResearchAnswer(env, run, question) {
@@ -3577,7 +3580,7 @@ async function k2Request(baseUrl, apiKey, method, path, body, extraHeaders = {})
     headers: {
       accept: "application/json",
       "content-type": "application/json",
-      "user-agent": "Knowledge2ICPWorker/0.1",
+      "user-agent": "Knowledge2ICP/0.1",
       "x-api-key": apiKey,
       ...extraHeaders,
     },
