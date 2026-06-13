@@ -158,8 +158,11 @@ Cloudflare Worker validation:
 wrangler deploy --dry-run --config deployment/cloudflare/wrangler.toml
 ```
 
-The Worker serves the dashboard assets and the seeded dashboard API directly.
-It does not require a local tunnel or a separate `ICP_API_ORIGIN`.
+The Worker serves the dashboard assets and seeded dashboard API directly. It
+uses the `ICP_STATE` KV binding to persist criteria edits, saved sources/scans,
+provider usage, runtime runs, lead workflow states, and quality feedback across
+Worker isolates. It does not require a local tunnel or a separate
+`ICP_API_ORIGIN`.
 
 For a live environment, render an ignored Wrangler config from environment
 variables instead of editing committed placeholders:

@@ -239,9 +239,9 @@ async function handleApiRequest(request, env, url) {
       auth_required: false,
       protected_actions: ["k2_apply_sync"],
       mode: "seeded-worker",
-      run_count: listRuns(lists).length,
+      run_count: (await listRuns(env, lists)).length,
       provider_status: providerStatus(env),
-      provider_controls: providerControls(),
+      provider_controls: await providerControls(env),
     });
   }
 
@@ -250,21 +250,27 @@ async function handleApiRequest(request, env, url) {
   }
 
   if (method === "GET" && url.pathname === "/api/sources") {
-    return json({ sources: loadSources(lists), scans: runtime.sourceScans.slice(-50), coverage: sourceCoverage(lists) });
+    return json({
+      sources: await loadSources(env, lists),
+      scans: (await loadSourceScans(env)).slice(-50),
+      coverage: await sourceCoverage(env, lists),
+    });
   }
 
   if (method === "GET" && url.pathname === "/api/criteria/versions") {
-    return json({ versions: criteriaVersions(), current_hash: currentCriteria().hash });
+    const criteria = await currentCriteria(env);
+    return json({ versions: await criteriaVersions(env), current_hash: criteria.hash });
   }
 
   if (method === "POST" && url.pathname === "/api/criteria") {
     const payload = await readJson(request);
     const markdown = String(payload.markdown || "");
     if (!markdown.trim()) return json({ error: "Criteria markdown is required." }, 400);
-    rememberCriteriaVersion(currentCriteria());
+    await rememberCriteriaVersion(env, await currentCriteria(env));
     runtime.criteria = criteriaPayload(formatCriteriaMarkdown(markdown), "worker-runtime", nowIso());
-    rememberCriteriaVersion(runtime.criteria);
-    return json({ criteria: runtime.criteria, versions: criteriaVersions(), lint: lintCriteriaMarkdown(runtime.criteria.markdown) });
+    await persistCriteria(env, runtime.criteria);
+    await rememberCriteriaVersion(env, runtime.criteria);
+    return json({ criteria: runtime.criteria, versions: await criteriaVersions(env), lint: lintCriteriaMarkdown(runtime.criteria.markdown) });
   }
 
   if (method === "POST" && url.pathname === "/api/criteria/lint") {
@@ -275,17 +281,19 @@ async function handleApiRequest(request, env, url) {
   if (method === "POST" && url.pathname === "/api/criteria/restore") {
     const payload = await readJson(request);
     const id = String(payload.id || payload.hash || "");
-    const selected = criteriaVersions().find((item) => item.id === id || item.hash === id);
+    const selected = (await criteriaVersions(env)).find((item) => item.id === id || item.hash === id);
     if (!selected) return json({ error: "Criteria version not found." }, 404);
     runtime.criteria = criteriaPayload(selected.markdown, "worker-runtime", nowIso());
-    return json({ criteria: runtime.criteria, versions: criteriaVersions(), lint: lintCriteriaMarkdown(runtime.criteria.markdown) });
+    await persistCriteria(env, runtime.criteria);
+    await rememberCriteriaVersion(env, runtime.criteria);
+    return json({ criteria: runtime.criteria, versions: await criteriaVersions(env), lint: lintCriteriaMarkdown(runtime.criteria.markdown) });
   }
 
   if (method === "POST" && url.pathname === "/api/sources") {
     const payload = await readJson(request);
     try {
-      const source = saveSource(payload, lists);
-      return json({ source, sources: loadSources(lists), coverage: sourceCoverage(lists) });
+      const source = await saveSource(env, payload, lists);
+      return json({ source, sources: await loadSources(env, lists), coverage: await sourceCoverage(env, lists) });
     } catch (error) {
       return json({ error: error.message || String(error) }, 400);
     }
@@ -295,10 +303,10 @@ async function handleApiRequest(request, env, url) {
   if (method === "POST" && sourceScanMatch) {
     const payload = await readJson(request);
     const sourceId = decodeURIComponent(sourceScanMatch[1]);
-    const source = loadSources(lists).find((item) => item.id === sourceId);
+    const source = (await loadSources(env, lists)).find((item) => item.id === sourceId);
     if (!source) return json({ error: "Source not found." }, 404);
     const maxCompanies = Number(payload.max_companies || 25);
-    const guard = authorizeProviderAction("source_scan", {
+    const guard = await authorizeProviderAction(env, "source_scan", {
       details: {
         source_id: sourceId,
         source_type: source.type,
@@ -307,13 +315,13 @@ async function handleApiRequest(request, env, url) {
     });
     if (!guard.allowed) return providerDenied(guard);
     const result = await scanSource(source, maxCompanies, lists, env);
-    const scan = recordSourceScan(source, result.candidates, result.warnings, result.status);
-    return json({ source: loadSources(lists).find((item) => item.id === sourceId) || source, scan, candidates: result.candidates, warnings: result.warnings, coverage: sourceCoverage(lists) });
+    const scan = await recordSourceScan(env, source, result.candidates, result.warnings, result.status, lists);
+    return json({ source: (await loadSources(env, lists)).find((item) => item.id === sourceId) || source, scan, candidates: result.candidates, warnings: result.warnings, coverage: await sourceCoverage(env, lists) });
   }
 
   if (method === "POST" && url.pathname === "/api/search") {
     const payload = await readJson(request);
-    const guard = authorizeProviderAction("search", {
+    const guard = await authorizeProviderAction(env, "search", {
       details: { max_companies: Number(payload.max_companies || 10) },
     });
     if (!guard.allowed) return providerDenied(guard);
@@ -325,7 +333,7 @@ async function handleApiRequest(request, env, url) {
     const payload = await readJson(request);
     const maxCompanies = Number(payload.max_companies || 8);
     const maxPages = Number(payload.max_pages || 8);
-    let guard = authorizeProviderAction("run", {
+    let guard = await authorizeProviderAction(env, "run", {
       details: {
         max_companies: maxCompanies,
         max_pages: maxPages,
@@ -334,37 +342,37 @@ async function handleApiRequest(request, env, url) {
     });
     if (!guard.allowed) return providerDenied(guard);
     if (!Array.isArray(payload.candidates) && String(payload.query || "").trim()) {
-      guard = authorizeProviderAction("search", {
+      guard = await authorizeProviderAction(env, "search", {
         details: { max_companies: maxCompanies, source: "run" },
       });
       if (!guard.allowed) return providerDenied(guard);
     }
     if (Boolean(payload.use_apollo)) {
-      guard = authorizeProviderAction("apollo_enrichment", {
+      guard = await authorizeProviderAction(env, "apollo_enrichment", {
         amount: maxCompanies,
         details: { max_companies: maxCompanies },
       });
       if (!guard.allowed) return providerDenied(guard);
     }
     const run = await createRuntimeRun(payload, lists, env);
-    runtime.runs.set(run.id, run);
+    await saveRun(env, run);
     return json(run);
   }
 
   if (method === "POST" && url.pathname === "/api/research") {
     const payload = await readJson(request);
-    const guard = authorizeProviderAction("research", {
+    const guard = await authorizeProviderAction(env, "research", {
       details: { run_id: String(payload.run_id || "") },
     });
     if (!guard.allowed) return providerDenied(guard);
-    const run = loadRun(String(payload.run_id || ""), lists);
+    const run = await loadRun(env, String(payload.run_id || ""), lists);
     if (!run) return json({ answer: "Run not found.", citations: [], matched_leads: [] }, 404);
     return json(localResearchAnswer(run, String(payload.question || "")));
   }
 
   const accountMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/accounts\/([^/]+)$/);
   if (method === "GET" && accountMatch) {
-    const run = loadRun(accountMatch[1], lists);
+    const run = await loadRun(env, accountMatch[1], lists);
     if (!run) return json({ error: "Run not found." }, 404);
     const detail = await accountDetail(run, decodeURIComponent(accountMatch[2]), env);
     if (!detail) return json({ error: "Account not found." }, 404);
@@ -373,7 +381,7 @@ async function handleApiRequest(request, env, url) {
 
   const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)(?:\/([^/]+))?$/);
   if (runMatch) {
-    const run = loadRun(runMatch[1], lists);
+    const run = await loadRun(env, runMatch[1], lists);
     if (!run) return json({ error: "Run not found." }, 404);
     const action = runMatch[2] || "";
     if (method === "GET" && !action) return json(run);
@@ -381,12 +389,12 @@ async function handleApiRequest(request, env, url) {
       const payload = await readJson(request);
       let record;
       try {
-        record = saveLeadState(run.id, payload);
+        record = await saveLeadState(env, run.id, payload);
       } catch (error) {
         return json({ error: error.message || String(error) }, 400);
       }
-      attachWorkflow(run);
-      return json({ lead_state: record, status_counts: leadStatusCounts(run) });
+      const hydrated = await attachWorkflow(env, run);
+      return json({ lead_state: record, status_counts: leadStatusCounts(hydrated) });
     }
     if (method === "GET" && action === "quality-feedback") {
       return json({
@@ -437,7 +445,7 @@ async function handleApiRequest(request, env, url) {
       const payload = await readJson(request);
       const apply = Boolean(payload.apply);
       if (!apply) {
-        const guard = authorizeProviderAction("k2_dry_run", {
+        const guard = await authorizeProviderAction(env, "k2_dry_run", {
           details: { run_id: run.id, apply },
         });
         if (!guard.allowed) return providerDenied(guard);
@@ -457,7 +465,7 @@ async function handleApiRequest(request, env, url) {
       if (!auth.authorized) {
         return unauthorized("K2 apply token required.");
       }
-      const guard = authorizeProviderAction("k2_apply", {
+      const guard = await authorizeProviderAction(env, "k2_apply", {
         details: { run_id: run.id, apply },
       });
       if (!guard.allowed) return providerDenied(guard);
@@ -467,7 +475,7 @@ async function handleApiRequest(request, env, url) {
       });
       if (result.status === "uploaded") {
         run.k2 = result;
-        runtime.runs.set(run.id, run);
+        await saveRun(env, run);
       }
       return json(result, result.status === "error" ? 400 : 200);
     }
@@ -518,28 +526,36 @@ function normalizeSeedAccounts(accounts) {
 }
 
 async function currentState(env, lists) {
-  const runs = listRuns(lists);
+  const runs = await listRuns(env, lists);
   for (const run of runs) {
     run.quality_feedback_counts = (await qualityFeedbackSummary(env, { runId: run.id })).rating_counts;
   }
+  const criteria = await currentCriteria(env);
   return {
-    criteria: currentCriteria(),
-    criteria_versions: criteriaVersions(),
+    criteria,
+    criteria_versions: await criteriaVersions(env),
     prompts: clone(SEED_PROMPTS),
     settings: clone(SEED_SETTINGS),
     lists: clone(lists),
     runs,
-    sources: loadSources(lists),
-    source_scans: runtime.sourceScans.slice(-25),
-    source_coverage: sourceCoverage(lists),
-    provider_controls: providerControls(),
+    sources: await loadSources(env, lists),
+    source_scans: (await loadSourceScans(env)).slice(-25),
+    source_coverage: await sourceCoverage(env, lists),
+    provider_controls: await providerControls(env),
     quality_feedback_summary: await qualityFeedbackSummary(env),
     provider_status: providerStatus(env),
-    latest_run: loadRun(runs[0]?.id || SEED_RUN_ID, lists),
+    latest_run: await loadRun(env, runs[0]?.id || SEED_RUN_ID, lists),
   };
 }
 
-function loadSources(lists) {
+async function loadSources(env, lists) {
+  if (env?.ICP_STATE?.get) {
+    const stored = await getStateJson(env, "sources", null);
+    if (Array.isArray(stored)) {
+      runtime.sources = stored.map((item) => sourceRecord(item));
+      return runtime.sources;
+    }
+  }
   if (!runtime.sources) runtime.sources = defaultSources(lists);
   return runtime.sources;
 }
@@ -598,7 +614,7 @@ function sourceRecord(input) {
   };
 }
 
-function saveSource(payload, lists) {
+async function saveSource(env, payload, lists) {
   const source = sourceRecord({
     id: payload.id ? String(payload.id) : "",
     name: String(payload.name || ""),
@@ -611,9 +627,10 @@ function saveSource(payload, lists) {
   });
   if (!source.name) throw new Error("Source name is required.");
   if (!source.value) throw new Error("Source value is required.");
-  const sources = loadSources(lists).filter((item) => item.id !== source.id);
+  const sources = (await loadSources(env, lists)).filter((item) => item.id !== source.id);
   sources.push(source);
   runtime.sources = sources.sort((left, right) => String(left.name).localeCompare(String(right.name)));
+  await putStateJson(env, "sources", runtime.sources);
   return source;
 }
 
@@ -635,7 +652,7 @@ async function scanSource(source, maxCompanies, lists, env) {
   };
 }
 
-function recordSourceScan(source, candidates, warnings, status) {
+async function recordSourceScan(env, source, candidates, warnings, status, lists) {
   const now = nowIso();
   const scan = {
     id: criteriaHash(`${now}:${source.id}:${candidates.length}:${warnings.length}`).slice(0, 16),
@@ -650,18 +667,33 @@ function recordSourceScan(source, candidates, warnings, status) {
     warnings: warnings.slice(0, 20),
     candidates: candidates.slice(0, 100),
   };
+  runtime.sourceScans = await loadSourceScans(env);
   runtime.sourceScans.push(scan);
   runtime.sourceScans = runtime.sourceScans.slice(-500);
-  runtime.sources = loadSources({}).map((item) => item.id === source.id
+  runtime.sources = (await loadSources(env, lists)).map((item) => item.id === source.id
     ? { ...item, last_scan_at: now, last_status: status, last_candidate_count: candidates.length, last_warning_count: warnings.length, updated_at: now }
     : item);
+  await putStateJson(env, "source_scans", runtime.sourceScans);
+  await putStateJson(env, "sources", runtime.sources);
   return scan;
 }
 
-function sourceCoverage(lists) {
-  const sources = loadSources(lists);
+async function loadSourceScans(env) {
+  if (env?.ICP_STATE?.get) {
+    const stored = await getStateJson(env, "source_scans", null);
+    if (Array.isArray(stored)) {
+      runtime.sourceScans = stored.filter((item) => item && typeof item === "object");
+      return runtime.sourceScans;
+    }
+  }
+  return runtime.sourceScans;
+}
+
+async function sourceCoverage(env, lists) {
+  const sources = await loadSources(env, lists);
+  const scans = await loadSourceScans(env);
   const domains = new Set();
-  for (const scan of runtime.sourceScans) {
+  for (const scan of scans) {
     for (const candidate of scan.candidates || []) {
       if (candidate.domain) domains.add(candidate.domain);
     }
@@ -671,10 +703,10 @@ function sourceCoverage(lists) {
     enabled_count: sources.filter((item) => item.enabled).length,
     source_type_counts: countByKey(sources, "type"),
     source_group_counts: countByKey(sources, "source_group"),
-    scan_count: runtime.sourceScans.length,
-    candidate_count: runtime.sourceScans.reduce((sum, scan) => sum + Number(scan.candidate_count || 0), 0),
+    scan_count: scans.length,
+    candidate_count: scans.reduce((sum, scan) => sum + Number(scan.candidate_count || 0), 0),
     unique_candidate_domains: domains.size,
-    latest_scan: runtime.sourceScans[runtime.sourceScans.length - 1] || null,
+    latest_scan: scans[scans.length - 1] || null,
   };
 }
 
@@ -707,12 +739,13 @@ function countByKey(items, key) {
   }, {});
 }
 
-function providerControls() {
+async function providerControls(env) {
+  const events = await loadProviderUsage(env);
   const today = nowIso().slice(0, 10);
-  const allowed = runtime.providerUsage.filter(
+  const allowed = events.filter(
     (event) => event.created_at.startsWith(today) && event.status === "allowed",
   );
-  const denied = runtime.providerUsage.filter(
+  const denied = events.filter(
     (event) => event.created_at.startsWith(today) && event.status === "denied",
   );
   return {
@@ -720,18 +753,19 @@ function providerControls() {
     today,
     allowed_counts: providerAmountsByAction(allowed),
     denied_counts: providerAmountsByAction(denied),
-    recent_events: runtime.providerUsage.slice(-25),
+    recent_events: events.slice(-25),
   };
 }
 
-function authorizeProviderAction(action, options = {}) {
+async function authorizeProviderAction(env, action, options = {}) {
   const cleanAction = normalizeProviderAction(action);
   const requestedAmount = Number(options.amount || 1);
   const amount = Number.isFinite(requestedAmount) ? Math.max(1, requestedAmount) : 1;
   const details = options.details && typeof options.details === "object" ? options.details : {};
   const policy = SEED_SETTINGS.provider_limits || {};
   if (!policy.enabled) {
-    const event = recordProviderUsage(
+    const event = await recordProviderUsage(
+      env,
       cleanAction,
       "allowed",
       amount,
@@ -740,16 +774,17 @@ function authorizeProviderAction(action, options = {}) {
     );
     return { allowed: true, action: cleanAction, event, policy };
   }
-  const denial = providerActionDenial(cleanAction, amount, details, policy);
+  const denial = await providerActionDenial(env, cleanAction, amount, details, policy);
   if (denial) {
-    const event = recordProviderUsage(cleanAction, "denied", amount, denial.reason, details);
+    const event = await recordProviderUsage(env, cleanAction, "denied", amount, denial.reason, details);
     return { allowed: false, action: cleanAction, event, policy, ...denial };
   }
-  const event = recordProviderUsage(cleanAction, "allowed", amount, "", details);
+  const event = await recordProviderUsage(env, cleanAction, "allowed", amount, "", details);
   return { allowed: true, action: cleanAction, event, policy };
 }
 
-function providerActionDenial(action, amount, details, policy) {
+async function providerActionDenial(env, action, amount, details, policy) {
+  const events = await loadProviderUsage(env);
   const perRun = policy.per_run || {};
   const maxCompanies = Number(details.max_companies || 0);
   const maxPages = Number(details.max_pages || 0);
@@ -772,7 +807,7 @@ function providerActionDenial(action, amount, details, policy) {
   const dailyLimit = Number((policy.daily || {})[action] || 0);
   if (dailyLimit) {
     const usage = providerActionAmount(
-      runtime.providerUsage.filter(
+      events.filter(
         (event) =>
           event.status === "allowed" &&
           event.action === action &&
@@ -791,7 +826,7 @@ function providerActionDenial(action, amount, details, policy) {
   const rateLimit = Number((policy.rate_per_minute || {})[action] || 0);
   if (rateLimit) {
     const usage = providerActionAmount(
-      runtime.providerUsage.filter(
+      events.filter(
         (event) =>
           event.status === "allowed" &&
           event.action === action &&
@@ -810,10 +845,11 @@ function providerActionDenial(action, amount, details, policy) {
   return null;
 }
 
-function recordProviderUsage(action, status, amount, reason, details) {
+async function recordProviderUsage(env, action, status, amount, reason, details) {
   const now = nowIso();
+  const events = await loadProviderUsage(env);
   const event = {
-    id: criteriaHash(`${now}:${action}:${status}:${runtime.providerUsage.length}`).slice(0, 16),
+    id: criteriaHash(`${now}:${action}:${status}:${events.length}`).slice(0, 16),
     created_at: now,
     action,
     status,
@@ -821,9 +857,21 @@ function recordProviderUsage(action, status, amount, reason, details) {
     reason,
     details: details || {},
   };
-  runtime.providerUsage.push(event);
-  runtime.providerUsage = runtime.providerUsage.slice(-1000);
+  events.push(event);
+  runtime.providerUsage = events.slice(-1000);
+  await putStateJson(env, "provider_usage", runtime.providerUsage);
   return event;
+}
+
+async function loadProviderUsage(env) {
+  if (env?.ICP_STATE?.get) {
+    const stored = await getStateJson(env, "provider_usage", null);
+    if (Array.isArray(stored)) {
+      runtime.providerUsage = stored.filter((item) => item && typeof item === "object");
+      return runtime.providerUsage;
+    }
+  }
+  return runtime.providerUsage;
 }
 
 function providerDenied(guard) {
@@ -880,7 +928,14 @@ function providerStatus(env) {
   };
 }
 
-function currentCriteria() {
+async function currentCriteria(env) {
+  if (env?.ICP_STATE?.get) {
+    const stored = await getStateJson(env, "criteria", null);
+    if (stored && typeof stored === "object" && stored.markdown) {
+      runtime.criteria = criteriaPayload(String(stored.markdown), String(stored.source || "worker-kv"), String(stored.updated_at || nowIso()));
+      return runtime.criteria;
+    }
+  }
   return runtime.criteria || criteriaPayload(SEED_CRITERIA_MARKDOWN, "icp.md");
 }
 
@@ -894,12 +949,23 @@ function criteriaPayload(markdown, source, updatedAt = SEED_CREATED_AT) {
   };
 }
 
-function criteriaVersions() {
-  rememberCriteriaVersion(currentCriteria());
+async function persistCriteria(env, criteria) {
+  runtime.criteria = criteria;
+  await putStateJson(env, "criteria", criteria);
+}
+
+async function criteriaVersions(env) {
+  await rememberCriteriaVersion(env, await currentCriteria(env));
   return runtime.criteriaVersions.slice(-50);
 }
 
-function rememberCriteriaVersion(criteria) {
+async function rememberCriteriaVersion(env, criteria) {
+  if (env?.ICP_STATE?.get) {
+    const stored = await getStateJson(env, "criteria_versions", null);
+    if (Array.isArray(stored)) {
+      runtime.criteriaVersions = stored.filter((item) => item && typeof item === "object" && item.markdown);
+    }
+  }
   const version = {
     id: criteria.hash,
     hash: criteria.hash,
@@ -910,6 +976,7 @@ function rememberCriteriaVersion(criteria) {
   runtime.criteriaVersions = runtime.criteriaVersions.filter((item) => item.hash !== version.hash);
   runtime.criteriaVersions.push(version);
   runtime.criteriaVersions = runtime.criteriaVersions.slice(-50);
+  await putStateJson(env, "criteria_versions", runtime.criteriaVersions);
 }
 
 function formatCriteriaMarkdown(markdown) {
@@ -1009,22 +1076,42 @@ function nowIso() {
   return new Date().toISOString().replace(/\.\d{3}Z$/, "+00:00");
 }
 
-function listRuns(lists) {
-  const summaries = Array.from(runtime.runs.values()).map(runSummary);
+async function loadRuntimeRuns(env) {
+  if (env?.ICP_STATE?.get) {
+    const stored = await getStateJson(env, "runs", null);
+    if (Array.isArray(stored)) {
+      runtime.runs = new Map(stored.filter((item) => item && item.id).map((item) => [item.id, item]));
+    }
+  }
+  return runtime.runs;
+}
+
+async function saveRun(env, run) {
+  const runs = await loadRuntimeRuns(env);
+  runs.set(run.id, clone(run));
+  runtime.runs = runs;
+  await putStateJson(env, "runs", Array.from(runs.values()).slice(-100));
+  return run;
+}
+
+async function listRuns(env, lists) {
+  const runs = await loadRuntimeRuns(env);
+  const summaries = Array.from(runs.values()).map(runSummary);
   if (!runtime.runs.has(SEED_RUN_ID)) {
     summaries.push(runSummary(seedRun(lists)));
   }
   return summaries.sort((left, right) => String(right.created_at || "").localeCompare(String(left.created_at || "")));
 }
 
-function loadRun(runId, lists) {
-  if (runtime.runs.has(runId)) return attachWorkflow(clone(runtime.runs.get(runId)));
-  if (runId === SEED_RUN_ID) return attachWorkflow(seedRun(lists));
+async function loadRun(env, runId, lists) {
+  const runs = await loadRuntimeRuns(env);
+  if (runs.has(runId)) return attachWorkflow(env, clone(runs.get(runId)));
+  if (runId === SEED_RUN_ID) return attachWorkflow(env, seedRun(lists));
   return null;
 }
 
-function attachWorkflow(run) {
-  const states = runtime.leadStates.get(run.id) || new Map();
+async function attachWorkflow(env, run) {
+  const states = await loadLeadStates(env, run.id);
   for (const lead of run.leads || []) {
     const domain = normalizeDomain(lead.score?.company?.domain || "");
     lead.workflow = states.get(domain) || defaultLeadState(run.id, domain, lead.score?.company?.company || "");
@@ -1037,10 +1124,33 @@ function attachWorkflow(run) {
   return run;
 }
 
-function saveLeadState(runId, payload) {
+async function loadLeadStates(env, runId) {
+  if (env?.ICP_STATE?.get) {
+    const stored = await getStateJson(env, "lead_states", null);
+    if (stored && typeof stored === "object") {
+      runtime.leadStates = new Map(
+        Object.entries(stored).map(([itemRunId, runStates]) => [
+          itemRunId,
+          new Map(Object.entries(runStates || {})),
+        ]),
+      );
+    }
+  }
+  return runtime.leadStates.get(runId) || new Map();
+}
+
+async function persistLeadStates(env) {
+  const payload = {};
+  for (const [runId, states] of runtime.leadStates.entries()) {
+    payload[runId] = Object.fromEntries(states.entries());
+  }
+  await putStateJson(env, "lead_states", payload);
+}
+
+async function saveLeadState(env, runId, payload) {
   const domain = normalizeDomain(payload.domain || "");
   if (!domain) throw new Error("Lead domain is required.");
-  const runStates = runtime.leadStates.get(runId) || new Map();
+  const runStates = await loadLeadStates(env, runId);
   const existing = runStates.get(domain) || {};
   const now = nowIso();
   const record = {
@@ -1056,6 +1166,7 @@ function saveLeadState(runId, payload) {
   };
   runStates.set(domain, record);
   runtime.leadStates.set(runId, runStates);
+  await persistLeadStates(env);
   return record;
 }
 
@@ -1122,15 +1233,27 @@ async function qualityFeedbackCsv(env, { runId = "", domain = "" } = {}) {
   return `${lines.join("\n")}\n`;
 }
 
+async function getStateJson(env, key, fallback) {
+  if (!env?.ICP_STATE?.get) return fallback;
+  try {
+    const stored = await env.ICP_STATE.get(key, "json");
+    return stored === null || stored === undefined ? fallback : stored;
+  } catch {
+    return fallback;
+  }
+}
+
+async function putStateJson(env, key, value) {
+  if (env?.ICP_STATE?.put) {
+    await env.ICP_STATE.put(key, JSON.stringify(value));
+  }
+}
+
 async function loadQualityFeedback(env) {
   if (env?.ICP_STATE?.get) {
-    try {
-      const stored = await env.ICP_STATE.get("quality_feedback", "json");
-      if (Array.isArray(stored)) {
-        runtime.qualityFeedback = stored.filter((item) => item && typeof item === "object");
-        return runtime.qualityFeedback;
-      }
-    } catch {
+    const stored = await getStateJson(env, "quality_feedback", null);
+    if (Array.isArray(stored)) {
+      runtime.qualityFeedback = stored.filter((item) => item && typeof item === "object");
       return runtime.qualityFeedback;
     }
   }
@@ -1139,9 +1262,7 @@ async function loadQualityFeedback(env) {
 
 async function persistQualityFeedback(env, events) {
   runtime.qualityFeedback = Array.isArray(events) ? events : [];
-  if (env?.ICP_STATE?.put) {
-    await env.ICP_STATE.put("quality_feedback", JSON.stringify(runtime.qualityFeedback));
-  }
+  await putStateJson(env, "quality_feedback", runtime.qualityFeedback);
 }
 
 function normalizeQualityDimension(value) {
@@ -1496,15 +1617,16 @@ async function createRuntimeRun(payload, lists, env = {}) {
   const runId = `run-worker-${Date.now().toString(36)}`;
   const leads = candidates.slice(0, Number(payload.max_companies || 8)).map((candidate) => leadFromCandidate(runId, candidate, lists));
   leads.sort((left, right) => Number(right.score.total_score || 0) - Number(left.score.total_score || 0));
+  const criteria = await currentCriteria(env);
   const run = {
     id: runId,
     query: String(payload.query || ""),
     created_at: new Date().toISOString().replace(/\.\d{3}Z$/, "+00:00"),
     status: "completed",
     criteria: {
-      hash: currentCriteria().hash,
-      source: currentCriteria().source,
-      updated_at: currentCriteria().updated_at,
+      hash: criteria.hash,
+      source: criteria.source,
+      updated_at: criteria.updated_at,
       profile: seededCriteriaProfile(lists),
     },
     warnings: candidates.length ? discoveryWarnings : ["No selected candidates were provided for this run.", ...discoveryWarnings],

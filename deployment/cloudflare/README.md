@@ -7,7 +7,8 @@ dashboard.
 
 - Static dashboard assets are uploaded from `../../icp_engine/web_assets`.
 - `/healthz` returns public edge liveness metadata.
-- `/api/*` requests are served by the Worker from committed seed defaults.
+- `/api/*` requests are served by the Worker from committed seed defaults plus
+  the `ICP_STATE` KV namespace for mutable dashboard state.
 - Read-only dashboard data, search, run creation, criteria edits, research,
   prospects, CSV export, and K2 dry-runs work without a token.
 - Search expands from the committed seed pack through `SERPER_API_KEY` /
@@ -15,6 +16,8 @@ dashboard.
   `APOLLO_API_KEY` is configured.
 - K2 apply sync requires `ICP_ADMIN_TOKEN` and `Authorization: Bearer <token>`.
 - Secrets are declared by name only in `wrangler.toml`.
+- Criteria edits, saved sources/scans, provider usage, runtime runs, lead
+  workflow states, and quality feedback are persisted in KV.
 - The K2 tab can dry-run manifest export without K2. With `K2_API_KEY`
   configured, `Apply sync` uploads the generated seed/runtime manifest to K2.
 
