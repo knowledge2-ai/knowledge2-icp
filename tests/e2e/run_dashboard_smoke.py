@@ -11,7 +11,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -181,6 +181,8 @@ def main() -> int:
                 page.locator("#criteria-redo").click()
                 expect(page.locator("#criteria-markdown")).to_have_value("# Smoke ICP\n- Gate\n", timeout=timeout)
 
+                mobile_screenshots = _capture_mobile_screenshots(page, artifact_dir, expect=expect, timeout=timeout)
+
                 context.close()
                 browser.close()
 
@@ -203,15 +205,18 @@ def main() -> int:
             _assert(account.get("outreach_drafts"), "Expected account detail outreach drafts.")
             _assert(account.get("evidence_timeline"), "Expected account detail evidence timeline.")
             _assert(state.get("eval_summary", {}).get("latest_status") in {"passed", "needs_review"}, "Expected latest eval status.")
+            provider_failure = _expect_provider_failure(base_url)
             _assert(not console_errors, f"Browser console errors: {console_errors}")
 
             report = {
                 "status": "passed",
                 "base_url": base_url,
                 "run_id": run["id"],
-                "validations": ["ui", "api", "console"],
+                "validations": ["ui", "api", "console", "mobile-screenshots", "provider-failure"],
                 "matched_leads": research.get("matched_leads", []),
                 "citation_count": len(research.get("citations", [])),
+                "mobile_screenshots": mobile_screenshots,
+                "provider_failure": provider_failure.get("error", ""),
             }
             (artifact_dir / "dashboard-smoke-report.json").write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
             print(f"E2E smoke passed: {artifact_dir / 'dashboard-smoke-report.json'}")
@@ -385,6 +390,39 @@ def _fake_evidence(company: CompanyInput, cache_dir: Path) -> tuple[list[Evidenc
         ],
         [],
     )
+
+
+def _capture_mobile_screenshots(page: Any, artifact_dir: Path, *, expect: Any, timeout: int) -> list[str]:
+    page.set_viewport_size({"width": 390, "height": 844})
+    screenshots: list[str] = []
+    for view in ("leads", "prospects", "k2", "criteria"):
+        page.locator(f"button.tab[data-view='{view}']").click()
+        expect(page.locator(f"#view-{view}")).to_be_visible(timeout=timeout)
+        path = artifact_dir / f"mobile-{view}.png"
+        page.screenshot(path=str(path), full_page=True)
+        screenshots.append(str(path.relative_to(ROOT)))
+    return screenshots
+
+
+def _expect_provider_failure(base_url: str) -> dict[str, Any]:
+    _post_json(
+        f"{base_url}/api/settings",
+        {
+            "provider_limits": {
+                "daily": {"search": 100},
+                "rate_per_minute": {"search": 100},
+                "per_run": {"max_companies": 1},
+            }
+        },
+    )
+    try:
+        _post_json(f"{base_url}/api/search", {"query": "fleet workflow software", "max_companies": 3})
+    except HTTPError as exc:
+        payload = json.loads(exc.read().decode("utf-8"))
+        _assert(exc.code == 429, f"Expected provider failure 429, got {exc.code}.")
+        _assert(payload.get("provider_control"), "Expected provider failure to include provider_control.")
+        return payload
+    raise AssertionError("Expected provider budget failure for /api/search.")
 
 
 def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None = None) -> dict[str, Any]:

@@ -34,6 +34,8 @@ mutating live state.
 | TC-005 | smoke | P1 | Criteria editor renders active markdown | TC-001 server state initialized | UI criteria textarea is populated |
 | TC-006 | smoke | P1 | Setup tab renders seeded prompts/settings/lists | TC-001 server state initialized | UI setup grid includes discovery prompt, seeded account list, deployment mode; API state includes prompts/settings/lists |
 | TC-007 | smoke | P0 | Live Worker requires API auth and creates a short-lived browser session | Deployed Worker is reachable; `ICP_ADMIN_TOKEN` is set | UI unauthenticated state shows token required; saving admin token creates session; raw token is absent from localStorage; authenticated API state, K2 workspace health, and K2 PipelineSpec dry-run load |
+| TC-008 | visual | P1 | Mobile screenshots render core tabs | TC-001 desktop smoke has completed | Screenshots are written for Leads, Prospects, K2, and Criteria at a mobile viewport |
+| TC-009 | failure | P1 | Provider budget denial is visible | TC-001 server state initialized | `/api/search` returns 429 with `provider_control` details when the search daily budget is set to zero |
 
 ## Runner
 
@@ -45,8 +47,10 @@ make e2e-smoke
 
 The runner starts `python3 -m icp_engine.web` on the configured local port,
 seeds deterministic evidence through the Python application layer, exercises the
-browser with Playwright, validates `/api/state` and `/api/research`, and writes
-a JSON report to `out/e2e/dashboard-smoke-report.json`.
+browser with Playwright, validates `/api/state` and `/api/research`, captures
+mobile screenshots in `out/e2e/mobile-*.png`, verifies a provider-budget
+failure path, and writes a JSON report to
+`out/e2e/dashboard-smoke-report.json`.
 
 Run the live auth smoke against the deployed Worker:
 
