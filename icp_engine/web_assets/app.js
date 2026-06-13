@@ -1407,10 +1407,19 @@ function workspaceStatusSection(title, rows) {
     <div class="workspace-status-list">
       ${rows.map((row) => {
         const statusClass = ["found", "active"].includes(row.status) ? "ok-tag" : row.status === "expected" ? "" : "warn-tag";
+        const health = row.health || {};
+        const healthClass = health.status === "ready" || health.status === "summary" ? "ok-tag" : health.status ? "warn-tag" : "";
+        const healthLine = title === "Corpora" && health.status
+          ? `<small class="workspace-health">
+              <span class="status-pill ${healthClass}">${escapeHtml(health.status)}</span>
+              ${escapeHtml(`${health.total_documents ?? 0} docs · ${health.total_chunks ?? 0} chunks · ${health.field_count ?? 0} fields`)}
+            </small>`
+          : "";
         return `<div class="workspace-status-row">
           <div>
             <strong>${escapeHtml(row.name || "")}</strong>
             <small>${escapeHtml(row.description || "")}</small>
+            ${healthLine}
           </div>
           <span class="status-pill ${statusClass}">${escapeHtml(row.status || "")}</span>
           <code>${escapeHtml(row.id || "not created")}</code>

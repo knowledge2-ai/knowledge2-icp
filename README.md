@@ -94,7 +94,9 @@ The K2 tab also exposes `GET /api/k2-workspace`, a read-only status view for
 the configured project, corpora, agents, feeds, PipelineSpec, and research
 corpus. With `K2_API_KEY`/`K2_DEV_TOKEN` it reads live K2 state; without
 credentials it falls back to the latest bootstrap summary or expected
-workspace blueprint.
+workspace blueprint. When credentials are available, corpus rows include K2
+metadata health: document count, chunk count, metadata field count, and
+readiness.
 
 Prospect exports are available from the dashboard Prospects tab or API:
 

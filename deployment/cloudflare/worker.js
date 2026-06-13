@@ -3714,6 +3714,7 @@ async function k2WorkspaceStatus(env) {
       k2Request(baseUrl, env.K2_API_KEY, "GET", `/v1/pipeline-specs?project_id=${projectId}&limit=100&offset=0`),
     ]);
     status.corpora = workspaceRows(K2_WORKSPACE_CORPORA, listFromPayload(corporaPayload, "corpora"));
+    await attachWorkerCorpusHealth(status.corpora, baseUrl, env.K2_API_KEY);
     status.agents = workspaceRows(K2_WORKSPACE_AGENTS, listFromPayload(agentsPayload, "agents"), "status");
     status.feeds = workspaceRows(K2_WORKSPACE_FEEDS, listFromPayload(feedsPayload, "feeds"));
     status.pipeline_spec = rowFromRecord(
@@ -3739,11 +3740,64 @@ function blueprintRow(blueprint) {
     id: "",
     status: "expected",
     description: blueprint.description || "",
+    health: corpusHealth({ status: "not_configured" }),
   };
 }
 
 function workspaceRows(blueprints, records, statusKey) {
   return blueprints.map((blueprint) => rowFromRecord(blueprint, findByName(records, blueprint.name), statusKey));
+}
+
+async function attachWorkerCorpusHealth(rows, baseUrl, apiKey) {
+  await Promise.all((rows || []).map(async (row) => {
+    const corpusId = String(row.id || "");
+    if (!corpusId || ["missing", "unknown"].includes(row.status)) {
+      row.health = corpusHealth({ status: "missing" });
+      return;
+    }
+    try {
+      const metadata = await k2Request(baseUrl, apiKey, "GET", `/v1/corpora/${encodeURIComponent(corpusId)}/metadata/discover?include=top_values`);
+      row.health = metadataHealth(metadata);
+    } catch (error) {
+      row.health = corpusHealth({
+        status: "error",
+        warning: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }));
+}
+
+function metadataHealth(metadata) {
+  const fields = Array.isArray(metadata?.fields) ? metadata.fields : [];
+  const totalDocuments = numberValue(metadata?.total_documents ?? metadata?.totalDocuments);
+  const totalChunks = numberValue(metadata?.total_chunks ?? metadata?.totalChunks);
+  const status = totalDocuments > 0 && fields.length ? "ready" : totalDocuments === 0 ? "empty" : "metadata_pending";
+  return corpusHealth({
+    status,
+    total_documents: totalDocuments,
+    total_chunks: totalChunks,
+    field_count: fields.length,
+    sample_fields: fields
+      .slice(0, 8)
+      .map((field) => String(field?.key || field?.name || ""))
+      .filter(Boolean),
+  });
+}
+
+function corpusHealth({
+  status,
+  total_documents = 0,
+  total_chunks = 0,
+  field_count = 0,
+  sample_fields = [],
+  warning = "",
+}) {
+  return { status, total_documents, total_chunks, field_count, sample_fields, warning };
+}
+
+function numberValue(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? Math.trunc(number) : 0;
 }
 
 function rowFromRecord(blueprint, record, statusKey) {

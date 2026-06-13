@@ -1247,6 +1247,14 @@ h1 {
   font-size: 0.78rem;
 }
 
+.workspace-health {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
 .inline-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);

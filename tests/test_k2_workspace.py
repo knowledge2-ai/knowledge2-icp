@@ -38,6 +38,17 @@ class FakeWorkspaceClient:
     def list_corpora(self, project_id: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         return list(self.corpora.values())[offset : offset + limit]
 
+    def discover_metadata(self, corpus_id: str, *, refresh: bool = False, include: str | None = None) -> dict[str, Any]:
+        return {
+            "total_documents": 12,
+            "total_chunks": 24,
+            "fields": [
+                {"key": "company"},
+                {"key": "domain"},
+                {"key": "criteria_hash"},
+            ],
+        }
+
     def list_agents(self, project_id: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         return list(self.agents.values())[offset : offset + limit]
 
@@ -139,6 +150,8 @@ class K2WorkspaceTest(unittest.TestCase):
         self.assertEqual(status["source"], "k2_api")
         self.assertEqual(status["project"]["status"], "found")
         self.assertTrue(all(item["status"] == "found" for item in status["corpora"]))
+        self.assertTrue(all(item["health"]["status"] == "ready" for item in status["corpora"]))
+        self.assertTrue(all(item["health"]["total_documents"] == 12 for item in status["corpora"]))
         self.assertTrue(all(item["status"] == "active" for item in status["agents"]))
         self.assertTrue(all(item["status"] == "found" for item in status["feeds"]))
         self.assertEqual(status["pipeline_spec"]["status"], "found")

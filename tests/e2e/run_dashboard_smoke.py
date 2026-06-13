@@ -115,6 +115,7 @@ def main() -> int:
                 page.locator("#k2-workspace-status").click()
                 expect(page.locator("#k2-panel")).to_contain_text("K2 Workspace", timeout=timeout)
                 expect(page.locator("#k2-panel")).to_contain_text("ICP Source Corpus", timeout=timeout)
+                expect(page.locator("#k2-panel")).to_contain_text("docs", timeout=timeout)
                 page.locator("#k2-preview").click()
                 expect(page.locator("#k2-panel .manifest-preview")).to_contain_text("source_type", timeout=timeout)
 

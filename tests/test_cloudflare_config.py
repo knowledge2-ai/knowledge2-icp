@@ -109,6 +109,8 @@ class CloudflareConfigTest(unittest.TestCase):
         self.assertIn("K2_WORKSPACE_CORPORA", worker)
         self.assertIn('url.pathname === "/api/k2-workspace"', worker)
         self.assertIn("k2WorkspaceStatus", worker)
+        self.assertIn("attachWorkerCorpusHealth", worker)
+        self.assertIn("metadata/discover?include=top_values", worker)
         self.assertIn("k2ResearchAnswer", worker)
         self.assertIn("search:generate", worker)
         self.assertIn("replace-with-cloudflare-account-id", raw)

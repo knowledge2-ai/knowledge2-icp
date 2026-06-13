@@ -23,6 +23,8 @@ class WorkspaceStatusClient(Protocol):
 
     def list_pipeline_specs(self, project_id: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]: ...
 
+    def discover_metadata(self, corpus_id: str, *, refresh: bool = False, include: str | None = None) -> dict[str, Any]: ...
+
 
 def build_k2_workspace_status(
     *,
@@ -108,6 +110,7 @@ def _live_status(
         return result
 
     result["corpora"] = _rows_from_records(_corpus_blueprints(), client.list_corpora(project_id, limit=100, offset=0))
+    _attach_corpus_health(result["corpora"], client)
     result["agents"] = _rows_from_records(_agent_blueprints(), client.list_agents(project_id, limit=100, offset=0), status_key="status")
     result["feeds"] = _rows_from_records(_feed_blueprints(), client.list_feeds(project_id, limit=100, offset=0))
     result["pipeline_spec"] = _record_row(
@@ -144,6 +147,7 @@ def _summary_status(
         ),
         "warnings": ["K2 credentials are not configured; showing the latest bootstrap summary."],
     }
+    _attach_summary_corpus_health(result["corpora"], summary.get("corpora"))
     result["warnings"].extend(_missing_warnings(result))
     return result
 
@@ -204,6 +208,72 @@ def _rows_from_mapping(
     return [_record_row(blueprint, mapping.get(blueprint["key"]), status_key=status_key) for blueprint in blueprints]
 
 
+def _attach_corpus_health(rows: list[dict[str, Any]], client: WorkspaceStatusClient) -> None:
+    for row in rows:
+        corpus_id = str(row.get("id") or "")
+        if not corpus_id or row.get("status") in {"missing", "unknown"}:
+            row["health"] = _corpus_health(status="missing")
+            continue
+        try:
+            metadata = client.discover_metadata(corpus_id, refresh=False, include="top_values")
+        except K2ApiError as exc:
+            row["health"] = _corpus_health(status="error", warning=str(exc))
+            continue
+        row["health"] = _metadata_health(metadata)
+
+
+def _attach_summary_corpus_health(rows: list[dict[str, Any]], records: Any) -> None:
+    mapping = records if isinstance(records, dict) else {}
+    for row in rows:
+        record = mapping.get(row.get("key")) if isinstance(mapping, dict) else {}
+        documents_planned = record.get("documents_planned") if isinstance(record, dict) else None
+        row["health"] = _corpus_health(
+            status="summary",
+            total_documents=int(documents_planned or 0),
+            warning="" if documents_planned else "No document count in bootstrap summary.",
+        )
+
+
+def _metadata_health(metadata: dict[str, Any]) -> dict[str, Any]:
+    fields = metadata.get("fields") if isinstance(metadata.get("fields"), list) else []
+    total_documents = _int_value(metadata.get("total_documents") or metadata.get("totalDocuments"))
+    total_chunks = _int_value(metadata.get("total_chunks") or metadata.get("totalChunks"))
+    status = "ready" if total_documents > 0 and fields else "empty" if total_documents == 0 else "metadata_pending"
+    return _corpus_health(
+        status=status,
+        total_documents=total_documents,
+        total_chunks=total_chunks,
+        field_count=len(fields),
+        sample_fields=[str(field.get("key") or field.get("name") or "") for field in fields[:8] if isinstance(field, dict)],
+    )
+
+
+def _corpus_health(
+    *,
+    status: str,
+    total_documents: int = 0,
+    total_chunks: int = 0,
+    field_count: int = 0,
+    sample_fields: list[str] | None = None,
+    warning: str = "",
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "total_documents": total_documents,
+        "total_chunks": total_chunks,
+        "field_count": field_count,
+        "sample_fields": sample_fields or [],
+        "warning": warning,
+    }
+
+
+def _int_value(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _record_row(
     blueprint: dict[str, Any],
     record: Any,
@@ -228,6 +298,7 @@ def _expected_row(blueprint: dict[str, Any]) -> dict[str, Any]:
         "id": "",
         "status": "expected",
         "description": str(blueprint.get("description") or ""),
+        "health": _corpus_health(status="not_configured"),
     }
 
 
