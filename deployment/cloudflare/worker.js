@@ -246,7 +246,7 @@ async function handleApiRequest(request, env, url) {
   }
 
   if (method === "GET" && url.pathname === "/api/state") {
-    return json(currentState(env, lists));
+    return json(await currentState(env, lists));
   }
 
   if (method === "GET" && url.pathname === "/api/sources") {
@@ -366,7 +366,7 @@ async function handleApiRequest(request, env, url) {
   if (method === "GET" && accountMatch) {
     const run = loadRun(accountMatch[1], lists);
     if (!run) return json({ error: "Run not found." }, 404);
-    const detail = accountDetail(run, decodeURIComponent(accountMatch[2]));
+    const detail = await accountDetail(run, decodeURIComponent(accountMatch[2]), env);
     if (!detail) return json({ error: "Account not found." }, 404);
     return json(detail);
   }
@@ -391,12 +391,12 @@ async function handleApiRequest(request, env, url) {
     if (method === "GET" && action === "quality-feedback") {
       return json({
         run_id: run.id,
-        feedback: listQualityFeedback({ runId: run.id, limit: 200 }),
-        summary: qualityFeedbackSummary({ runId: run.id }),
+        feedback: await listQualityFeedback(env, { runId: run.id, limit: 200 }),
+        summary: await qualityFeedbackSummary(env, { runId: run.id }),
       });
     }
     if (method === "GET" && action === "quality-feedback.csv") {
-      return new Response(qualityFeedbackCsv({ runId: run.id }), {
+      return new Response(await qualityFeedbackCsv(env, { runId: run.id }), {
         headers: {
           "content-type": "text/csv; charset=utf-8",
           "cache-control": "no-store",
@@ -408,14 +408,14 @@ async function handleApiRequest(request, env, url) {
       const payload = await readJson(request);
       let record;
       try {
-        record = saveQualityFeedback(run.id, payload);
+        record = await saveQualityFeedback(env, run.id, payload);
       } catch (error) {
         return json({ error: error.message || String(error) }, 400);
       }
       return json({
         feedback: record,
-        summary: qualityFeedbackSummary({ runId: run.id }),
-        account_summary: qualityFeedbackSummary({ runId: run.id, domain: record.domain }),
+        summary: await qualityFeedbackSummary(env, { runId: run.id }),
+        account_summary: await qualityFeedbackSummary(env, { runId: run.id, domain: record.domain }),
       });
     }
     if (method === "GET" && action === "prospects") return json(await buildRunProspectsWithApollo(run, env));
@@ -517,8 +517,11 @@ function normalizeSeedAccounts(accounts) {
     .filter((account) => account.company && account.domain);
 }
 
-function currentState(env, lists) {
+async function currentState(env, lists) {
   const runs = listRuns(lists);
+  for (const run of runs) {
+    run.quality_feedback_counts = (await qualityFeedbackSummary(env, { runId: run.id })).rating_counts;
+  }
   return {
     criteria: currentCriteria(),
     criteria_versions: criteriaVersions(),
@@ -530,7 +533,7 @@ function currentState(env, lists) {
     source_scans: runtime.sourceScans.slice(-25),
     source_coverage: sourceCoverage(lists),
     provider_controls: providerControls(),
-    quality_feedback_summary: qualityFeedbackSummary(),
+    quality_feedback_summary: await qualityFeedbackSummary(env),
     provider_status: providerStatus(env),
     latest_run: loadRun(runs[0]?.id || SEED_RUN_ID, lists),
   };
@@ -1056,14 +1059,15 @@ function saveLeadState(runId, payload) {
   return record;
 }
 
-function saveQualityFeedback(runId, payload) {
+async function saveQualityFeedback(env, runId, payload) {
   const domain = normalizeDomain(payload.domain || "");
   if (!domain) throw new Error("Lead domain is required.");
   const dimension = normalizeQualityDimension(payload.dimension || "score");
   const rating = normalizeQualityRating(payload.rating || "positive");
   const now = nowIso();
+  const events = await loadQualityFeedback(env);
   const record = {
-    id: criteriaHash(`${now}:${runId}:${domain}:${dimension}:${rating}:${runtime.qualityFeedback.length}`).slice(0, 16),
+    id: criteriaHash(`${now}:${runId}:${domain}:${dimension}:${rating}:${events.length}`).slice(0, 16),
     run_id: runId,
     domain,
     company: String(payload.company || "").trim().replace(/\s+/g, " "),
@@ -1076,21 +1080,21 @@ function saveQualityFeedback(runId, payload) {
     k2_feedback_outcome: qualityFeedbackOutcome(rating),
     created_at: now,
   };
-  runtime.qualityFeedback.push(record);
-  runtime.qualityFeedback = runtime.qualityFeedback.slice(-1000);
+  events.push(record);
+  await persistQualityFeedback(env, events.slice(-1000));
   return record;
 }
 
-function listQualityFeedback({ runId = "", domain = "", limit = 100 } = {}) {
+async function listQualityFeedback(env, { runId = "", domain = "", limit = 100 } = {}) {
   const domainKey = normalizeDomain(domain);
-  let events = runtime.qualityFeedback;
+  let events = await loadQualityFeedback(env);
   if (runId) events = events.filter((event) => event.run_id === runId);
   if (domainKey) events = events.filter((event) => normalizeDomain(event.domain || "") === domainKey);
   return events.slice(-Math.max(1, Math.min(Number(limit) || 100, 1000)));
 }
 
-function qualityFeedbackSummary({ runId = "", domain = "" } = {}) {
-  const events = listQualityFeedback({ runId, domain, limit: 1000 });
+async function qualityFeedbackSummary(env, { runId = "", domain = "" } = {}) {
+  const events = await listQualityFeedback(env, { runId, domain, limit: 1000 });
   const ratingCounts = { positive: 0, neutral: 0, negative: 0 };
   const dimensionCounts = { score: 0, persona: 0, outreach: 0 };
   for (const event of events) {
@@ -1109,13 +1113,35 @@ function qualityFeedbackSummary({ runId = "", domain = "" } = {}) {
   };
 }
 
-function qualityFeedbackCsv({ runId = "", domain = "" } = {}) {
+async function qualityFeedbackCsv(env, { runId = "", domain = "" } = {}) {
   const headers = ["id", "created_at", "run_id", "company", "domain", "dimension", "rating", "target_id", "target_label", "note", "label_source", "k2_feedback_outcome"];
   const lines = [headers.join(",")];
-  for (const row of listQualityFeedback({ runId, domain, limit: 1000 })) {
+  for (const row of await listQualityFeedback(env, { runId, domain, limit: 1000 })) {
     lines.push(headers.map((header) => csvCell(row[header] || "")).join(","));
   }
   return `${lines.join("\n")}\n`;
+}
+
+async function loadQualityFeedback(env) {
+  if (env?.ICP_STATE?.get) {
+    try {
+      const stored = await env.ICP_STATE.get("quality_feedback", "json");
+      if (Array.isArray(stored)) {
+        runtime.qualityFeedback = stored.filter((item) => item && typeof item === "object");
+        return runtime.qualityFeedback;
+      }
+    } catch {
+      return runtime.qualityFeedback;
+    }
+  }
+  return runtime.qualityFeedback;
+}
+
+async function persistQualityFeedback(env, events) {
+  runtime.qualityFeedback = Array.isArray(events) ? events : [];
+  if (env?.ICP_STATE?.put) {
+    await env.ICP_STATE.put("quality_feedback", JSON.stringify(runtime.qualityFeedback));
+  }
 }
 
 function normalizeQualityDimension(value) {
@@ -1155,7 +1181,7 @@ function leadStatusCounts(run) {
   return counts;
 }
 
-function accountDetail(run, accountKey) {
+async function accountDetail(run, accountKey, env) {
   const lead = findLead(run, accountKey);
   if (!lead) return null;
   const company = lead.score?.company || {};
@@ -1182,8 +1208,8 @@ function accountDetail(run, accountKey) {
       source: criteria.source || "",
       profile: criteria.profile || lead.metadata?.criteria_profile || {},
     },
-    quality_feedback: listQualityFeedback({ runId: run.id, domain, limit: 25 }),
-    quality_summary: qualityFeedbackSummary({ runId: run.id, domain }),
+    quality_feedback: await listQualityFeedback(env, { runId: run.id, domain, limit: 25 }),
+    quality_summary: await qualityFeedbackSummary(env, { runId: run.id, domain }),
     audit_events: [],
   };
 }
@@ -1238,7 +1264,6 @@ function runSummary(run) {
     lead_count: leads.length,
     top_score: scores.length ? Math.max(...scores) : 0,
     tier_counts: tierCounts(leads),
-    quality_feedback_counts: qualityFeedbackSummary({ runId: run.id }).rating_counts,
     warnings: (run.warnings || []).slice(0, 5),
   };
 }

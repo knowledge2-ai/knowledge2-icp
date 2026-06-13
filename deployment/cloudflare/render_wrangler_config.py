@@ -128,6 +128,15 @@ def _to_toml(config: dict[str, object]) -> str:
         lines.append("]")
         lines.append("")
 
+    kv_namespaces = config.get("kv_namespaces", [])
+    if isinstance(kv_namespaces, list):
+        for namespace in kv_namespaces:
+            if isinstance(namespace, dict):
+                lines.append("[[kv_namespaces]]")
+                lines.append(f"binding = {_quote(str(namespace.get('binding', '')))}")
+                lines.append(f"id = {_quote(str(namespace.get('id', '')))}")
+                lines.append("")
+
     vars_config = config.get("vars", {})
     if isinstance(vars_config, dict):
         lines.append("[vars]")
