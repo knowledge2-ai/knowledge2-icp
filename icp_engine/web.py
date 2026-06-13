@@ -74,6 +74,28 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
             if parsed.path == "/api/criteria/versions":
                 self._send_json({"versions": app.store.list_criteria_versions(), "current_hash": app.store.load_criteria().get("hash")})
                 return
+            if parsed.path == "/api/lead-views":
+                self._send_json({"views": app.store.list_lead_views()})
+                return
+            if parsed.path == "/api/audit-log":
+                self._send_json({"events": app.store.list_audit_events(limit=100)})
+                return
+            if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/workflow"):
+                run_id = parsed.path.split("/")[3]
+                run = app.store.load_run(run_id)
+                if not run:
+                    self._send_json({"error": "Run not found."}, status=HTTPStatus.NOT_FOUND)
+                    return
+                self._send_json(
+                    {
+                        "run_id": run_id,
+                        "lead_statuses": run.get("workflow", {}).get("lead_statuses", []),
+                        "status_counts": run.get("workflow", {}).get("status_counts", {}),
+                        "lead_states": list(app.store.load_lead_states(run_id).values()),
+                        "saved_views": app.store.list_lead_views(),
+                    }
+                )
+                return
             if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/k2-manifest"):
                 run_id = parsed.path.split("/")[3]
                 run = app.store.load_run(run_id)
@@ -138,6 +160,20 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                     return
                 self._send_json({"criteria": criteria, "versions": app.store.list_criteria_versions(), "lint": app.store.lint_criteria(criteria["markdown"])})
                 return
+            if parsed.path == "/api/lead-views":
+                payload = self._read_json()
+                try:
+                    view = app.store.save_lead_view(
+                        str(payload.get("name") or ""),
+                        filters=payload.get("filters") if isinstance(payload.get("filters"), dict) else {},
+                        sort=payload.get("sort") if isinstance(payload.get("sort"), dict) else None,
+                        page_size=int(payload.get("page_size") or 50),
+                    )
+                except (TypeError, ValueError) as exc:
+                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_json({"view": view, "views": app.store.list_lead_views()})
+                return
             if parsed.path == "/api/search":
                 payload = self._read_json()
                 candidates, warnings = app.pipeline.discover(
@@ -190,6 +226,58 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                     question=str(payload.get("question", "")),
                 )
                 self._send_json(answer)
+                return
+            if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/lead-state"):
+                run_id = parsed.path.split("/")[3]
+                run = app.store.load_run(run_id)
+                if not run:
+                    self._send_json({"error": "Run not found."}, status=HTTPStatus.NOT_FOUND)
+                    return
+                payload = self._read_json()
+                try:
+                    record = app.store.save_lead_state(
+                        run_id,
+                        str(payload.get("domain") or ""),
+                        company=str(payload.get("company") or ""),
+                        status=str(payload.get("status") or "Review"),
+                        note=str(payload.get("note") or ""),
+                        owner=str(payload.get("owner") or ""),
+                        tags=payload.get("tags") if isinstance(payload.get("tags"), list) else None,
+                    )
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_json(
+                    {
+                        "lead_state": record,
+                        "status_counts": app.store.lead_status_counts(run_id, run),
+                    }
+                )
+                return
+            if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/lead-state/bulk"):
+                run_id = parsed.path.split("/")[3]
+                run = app.store.load_run(run_id)
+                if not run:
+                    self._send_json({"error": "Run not found."}, status=HTTPStatus.NOT_FOUND)
+                    return
+                payload = self._read_json()
+                domains = payload.get("domains")
+                if not isinstance(domains, list):
+                    self._send_json({"error": "domains must be a list."}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                try:
+                    result = app.store.bulk_update_lead_states(
+                        run_id,
+                        [str(domain) for domain in domains],
+                        status=str(payload.get("status") or "Review"),
+                        note=str(payload.get("note") or ""),
+                        owner=str(payload.get("owner") or ""),
+                        tags=payload.get("tags") if isinstance(payload.get("tags"), list) else None,
+                    )
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_json(result)
                 return
             if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/k2-export"):
                 run_id = parsed.path.split("/")[3]

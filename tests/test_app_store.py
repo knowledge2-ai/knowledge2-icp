@@ -81,6 +81,73 @@ class AppStoreTest(unittest.TestCase):
             self.assertEqual(store.list_runs()[0]["top_score"], 81)
             self.assertEqual(store.state()["latest_run"]["id"], "run-123")
 
+    def test_lead_workflow_state_views_and_audit_log_are_durable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            run = {
+                "id": "run-workflow",
+                "query": "fleet software",
+                "created_at": "2026-06-11T00:00:00+00:00",
+                "status": "completed",
+                "warnings": [],
+                "leads": [
+                    {
+                        "score": {
+                            "company": {"company": "Mojio", "domain": "moj.io"},
+                            "tier": "A",
+                            "total_score": 82,
+                        }
+                    },
+                    {
+                        "score": {
+                            "company": {"company": "Fleetio", "domain": "fleetio.com"},
+                            "tier": "C",
+                            "total_score": 47,
+                        }
+                    },
+                ],
+            }
+            store.save_run(run)
+
+            mojio = store.save_lead_state(
+                "run-workflow",
+                "https://www.moj.io/platform",
+                company="Mojio",
+                status="qualified",
+                note="High-fit fleet data workflow.",
+                owner="Anton",
+                tags=["fleet", "tier-a", "fleet"],
+            )
+            bulk = store.bulk_update_lead_states(
+                "run-workflow",
+                ["fleetio.com"],
+                status="rejected",
+                note="Below threshold",
+            )
+            view = store.save_lead_view(
+                "Tier A Review",
+                filters={"status": ["Qualified"], "tier": ["A"]},
+                sort={"field": "score", "direction": "desc"},
+                page_size=25,
+            )
+
+            reloaded = AppStore(Path(tmp))
+            hydrated = reloaded.load_run("run-workflow")
+
+            self.assertEqual(mojio["domain"], "moj.io")
+            self.assertEqual(mojio["status"], "Qualified")
+            self.assertEqual(mojio["tags"], ["fleet", "tier-a"])
+            self.assertEqual(bulk["updated_count"], 1)
+            self.assertEqual(view["name"], "Tier A Review")
+            self.assertEqual(hydrated["workflow"]["status_counts"]["Qualified"], 1)
+            self.assertEqual(hydrated["workflow"]["status_counts"]["Rejected"], 1)
+            self.assertEqual(hydrated["leads"][0]["workflow"]["status"], "Qualified")
+            self.assertEqual(reloaded.state()["runs"][0]["lead_status_counts"]["Rejected"], 1)
+            self.assertGreaterEqual(len(reloaded.list_audit_events()), 3)
+
+            with self.assertRaises(ValueError):
+                reloaded.save_lead_state("run-workflow", "moj.io", status="not-a-status")
+
 
 if __name__ == "__main__":
     unittest.main()

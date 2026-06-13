@@ -84,6 +84,39 @@ class WebApiTest(unittest.TestCase):
                 self.assertEqual(run["status"], "completed")
                 self.assertEqual(len(run["leads"]), 1)
 
+                lead_state = _json_post(
+                    f"{base_url}/api/runs/{run['id']}/lead-state",
+                    {
+                        "domain": "acme.example",
+                        "company": "Acme Fleet",
+                        "status": "Qualified",
+                        "note": "Ready for outreach.",
+                        "owner": "research",
+                        "tags": ["fleet", "apollo"],
+                    },
+                )
+                self.assertEqual(lead_state["lead_state"]["status"], "Qualified")
+                self.assertEqual(lead_state["status_counts"]["Qualified"], 1)
+
+                workflow = _json_get(f"{base_url}/api/runs/{run['id']}/workflow")
+                self.assertEqual(workflow["status_counts"]["Qualified"], 1)
+                self.assertEqual(workflow["lead_states"][0]["domain"], "acme.example")
+
+                view = _json_post(
+                    f"{base_url}/api/lead-views",
+                    {
+                        "name": "Qualified A Accounts",
+                        "filters": {"status": ["Qualified"], "tier": ["A"]},
+                        "sort": {"field": "score", "direction": "desc"},
+                        "page_size": 25,
+                    },
+                )
+                self.assertEqual(view["view"]["name"], "Qualified A Accounts")
+                self.assertEqual(_json_get(f"{base_url}/api/lead-views")["views"][0]["page_size"], 25)
+
+                audit = _json_get(f"{base_url}/api/audit-log")
+                self.assertIn("lead_state.updated", {item["action"] for item in audit["events"]})
+
                 prospects = _json_get(f"{base_url}/api/runs/{run['id']}/prospects")
                 self.assertGreaterEqual(prospects["prospect_count"], 1)
                 self.assertIn("prospects", prospects)

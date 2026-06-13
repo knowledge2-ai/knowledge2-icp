@@ -92,6 +92,21 @@ curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
   http://127.0.0.1:8765/api/runs/<run-id>/prospects.csv
 ```
 
+Lead workflow state is stored under `out/app_state` and survives server
+restarts. API clients can mark leads as `New`, `Review`, `Qualified`,
+`Rejected`, or `Exported`, bulk update lead status, save filtered lead views,
+and read the audit log:
+
+```bash
+curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"domain":"moj.io","status":"Qualified","note":"Ready for outreach"}' \
+  http://127.0.0.1:8765/api/runs/<run-id>/lead-state
+
+curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
+  http://127.0.0.1:8765/api/runs/<run-id>/workflow
+```
+
 Health checks:
 
 ```bash
