@@ -107,6 +107,17 @@ make e2e-smoke
 The smoke runner starts its own isolated local server and writes a report to
 `out/e2e/dashboard-smoke-report.json`; it does not use live provider secrets.
 
+Live Worker auth smoke validation:
+
+```bash
+export ICP_ADMIN_TOKEN=<dashboard-admin-token>
+export ICP_E2E_LIVE_BASE_URL=https://gtm-dev.knowledge2.ai
+make e2e-live-auth
+```
+
+The live runner validates unauthenticated API blocking, browser session creation,
+authenticated `/api/state`, and K2 workspace health without mutating live state.
+
 Deployment preflight:
 
 ```bash

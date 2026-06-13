@@ -29,6 +29,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run the Agentic GTM dashboard browser smoke test.")
     parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST), help="Path to e2e.manifest.json.")
     parser.add_argument("--headed", action="store_true", help="Run Chromium headed for debugging.")
+    parser.add_argument("--live-base-url", default=os.environ.get("ICP_E2E_LIVE_BASE_URL", ""), help="Run against a deployed dashboard instead of starting a local server.")
+    parser.add_argument("--admin-token-env", default="ICP_ADMIN_TOKEN", help="Environment variable containing the admin token for live auth smoke.")
     args = parser.parse_args()
 
     manifest = _load_manifest(Path(args.manifest))
@@ -44,6 +46,20 @@ def main() -> int:
     base_url = f"http://{host}:{port}"
     artifact_dir = ROOT / str(manifest.get("validation", {}).get("artifactDir") or "out/e2e")
     artifact_dir.mkdir(parents=True, exist_ok=True)
+    if args.live_base_url:
+        admin_token = os.environ.get(args.admin_token_env, "")
+        if not admin_token:
+            print(f"{args.admin_token_env} is required for --live-base-url.", file=sys.stderr)
+            return 2
+        return _run_live_auth_smoke(
+            manifest,
+            args.live_base_url.rstrip("/"),
+            admin_token,
+            artifact_dir,
+            headed=args.headed,
+            expect=expect,
+            sync_playwright=sync_playwright,
+        )
 
     with tempfile.TemporaryDirectory(prefix="knowledge2-icp-e2e-") as state_dir:
         process = _start_server(host, port, Path(state_dir))
@@ -198,6 +214,80 @@ def main() -> int:
                 process.kill()
 
 
+def _run_live_auth_smoke(
+    manifest: dict[str, Any],
+    base_url: str,
+    admin_token: str,
+    artifact_dir: Path,
+    *,
+    headed: bool,
+    expect: Any,
+    sync_playwright: Any,
+) -> int:
+    timeout = int(manifest.get("execution", {}).get("timeoutMs") or 10000)
+    console_errors: list[str] = []
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=not headed and bool(manifest.get("execution", {}).get("headless", True)))
+        context = browser.new_context(viewport=manifest.get("execution", {}).get("viewport") or {"width": 1440, "height": 980})
+        page = context.new_page()
+        page.on("console", lambda message: console_errors.append(message.text) if message.type == "error" else None)
+
+        page.goto(base_url, wait_until="domcontentloaded", timeout=timeout)
+        expect(page.get_by_role("heading", name="Lead Discovery Dashboard")).to_be_visible(timeout=timeout)
+        expect(page.locator("#auth-status")).to_contain_text("Admin session", timeout=timeout)
+        expect(page.locator("#run-status")).to_contain_text("API token required", timeout=timeout)
+
+        page.locator("#admin-token").fill(admin_token)
+        page.locator("#save-admin-token").click()
+        expect(page.locator("#auth-status")).to_contain_text("Admin session active", timeout=timeout)
+        expect(page.locator("#lead-rows .lead-row").filter(has_text="Mojio").first).to_contain_text("Mojio", timeout=timeout)
+
+        session_token = page.evaluate("localStorage.getItem('knowledge2.icp.sessionToken')")
+        legacy_token = page.evaluate("localStorage.getItem('knowledge2.icp.adminToken')")
+        _assert(bool(session_token), "Expected browser session token in localStorage.")
+        _assert(not legacy_token, "Expected raw legacy admin token to be absent from localStorage.")
+
+        page.locator("button.tab[data-view='k2']").click()
+        page.locator("#k2-workspace-status").click()
+        expect(page.locator("#k2-panel")).to_contain_text("K2 Workspace", timeout=timeout)
+        expect(page.locator("#k2-panel")).to_contain_text("ICP Source Corpus", timeout=timeout)
+        expect(page.locator("#k2-panel")).to_contain_text("docs", timeout=timeout)
+
+        context.close()
+        browser.close()
+
+    headers = {"Authorization": f"Bearer {session_token}", "User-Agent": "Mozilla/5.0 Knowledge2ICPE2E/1.0"}
+    health = _json_get(f"{base_url}/api/health", headers={"User-Agent": headers["User-Agent"]})
+    state = _json_get(f"{base_url}/api/state", headers=headers)
+    workspace = _json_get(f"{base_url}/api/k2-workspace", headers=headers)
+    _assert(health.get("auth_required") is True, "Expected live /api/health to require auth.")
+    _assert(health.get("authenticated") is False, "Expected public live /api/health request to be unauthenticated.")
+    _assert(state.get("lists", {}).get("account_universe"), "Expected live state account universe.")
+    _assert(workspace.get("source") == "k2_api", "Expected live K2 workspace status from K2 API.")
+    _assert(workspace.get("project", {}).get("status") == "found", "Expected live K2 project to be found.")
+    corpus_counts = {
+        item.get("key"): item.get("health", {}).get("total_documents")
+        for item in workspace.get("corpora", [])
+    }
+    _assert(corpus_counts and all((count or 0) > 0 for count in corpus_counts.values()), "Expected live K2 corpus document counts.")
+    unexpected_console_errors = [message for message in console_errors if "status of 401" not in message]
+    _assert(not unexpected_console_errors, f"Browser console errors: {unexpected_console_errors}")
+
+    report = {
+        "status": "passed",
+        "base_url": base_url,
+        "validations": ["ui", "api", "storage", "k2"],
+        "account_count": len(state.get("lists", {}).get("account_universe", [])),
+        "k2_source": workspace.get("source"),
+        "k2_project_status": workspace.get("project", {}).get("status"),
+        "corpus_counts": corpus_counts,
+    }
+    report_path = artifact_dir / "dashboard-live-auth-report.json"
+    report_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+    print(f"Live auth E2E smoke passed: {report_path}")
+    return 0
+
+
 def _load_manifest(path: Path) -> dict[str, Any]:
     with path.open(encoding="utf-8") as handle:
         return json.load(handle)
@@ -280,15 +370,16 @@ def _fake_evidence(company: CompanyInput, cache_dir: Path) -> tuple[list[Evidenc
     )
 
 
-def _post_json(url: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None = None) -> dict[str, Any]:
     body = json.dumps(payload).encode("utf-8")
-    request = Request(url, data=body, method="POST", headers={"Content-Type": "application/json"})
+    request_headers = {"Content-Type": "application/json", **(headers or {})}
+    request = Request(url, data=body, method="POST", headers=request_headers)
     with urlopen(request, timeout=10) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
-def _json_get(url: str) -> dict[str, Any]:
-    request = Request(url)
+def _json_get(url: str, headers: dict[str, str] | None = None) -> dict[str, Any]:
+    request = Request(url, headers=headers or {})
     with urlopen(request, timeout=10) as response:
         return json.loads(response.read().decode("utf-8"))
 

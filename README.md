@@ -309,6 +309,7 @@ With deployment environment variables exported, also run:
 
 ```bash
 make cloudflare-preflight
+make e2e-live-auth
 ```
 
 ## Docs

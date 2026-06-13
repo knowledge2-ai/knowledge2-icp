@@ -68,6 +68,8 @@ and can trigger external provider usage.
 - [ ] Run `make cloudflare-preflight`.
 - [ ] Run `wrangler deploy --dry-run --config deployment/cloudflare/wrangler.generated.toml`.
 - [ ] Check Worker `/healthz` and authenticated `/api/state`.
+- [ ] Run `make e2e-live-auth` with `ICP_ADMIN_TOKEN` and
+  `ICP_E2E_LIVE_BASE_URL` exported.
 - [ ] Run K2 sync dry-run from the K2 tab before any apply upload.
 
 ## Knowledge2 Backend Contract
