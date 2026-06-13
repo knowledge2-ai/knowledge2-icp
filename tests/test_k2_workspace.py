@@ -12,7 +12,7 @@ from icp_engine.k2_workspace import (
     build_seeded_workspace_documents,
     build_pipeline_topology,
 )
-from icp_engine.k2_workspace_status import build_k2_workspace_status
+from icp_engine.k2_workspace_status import build_k2_workspace_status, run_k2_pipeline_action
 
 
 class FakeWorkspaceClient:
@@ -22,6 +22,7 @@ class FakeWorkspaceClient:
         self.agents: dict[str, dict[str, Any]] = {}
         self.feeds: dict[str, dict[str, Any]] = {}
         self.pipeline_specs: dict[str, dict[str, Any]] = {}
+        self.pipeline_actions: list[dict[str, Any]] = []
 
     def ensure_project(self, name: str) -> dict[str, Any]:
         return self.projects.setdefault(name, {"id": "project-1", "name": name})
@@ -100,6 +101,22 @@ class FakeWorkspaceClient:
             },
         )
 
+    def dry_run_pipeline_spec(self, pipeline_spec_id: str, *, sample_input: dict[str, Any] | None = None) -> dict[str, Any]:
+        self.pipeline_actions.append({"action": "dry_run", "id": pipeline_spec_id, "sample_input": sample_input})
+        return {"valid": True, "issues": [], "simulated_nodes": []}
+
+    def apply_pipeline_spec(self, pipeline_spec_id: str, *, activate_entities: bool = True) -> dict[str, Any]:
+        self.pipeline_actions.append({"action": "apply", "id": pipeline_spec_id, "activate_entities": activate_entities})
+        return {"created_agent_ids": [], "updated_agent_ids": [], "activate_entities": activate_entities}
+
+    def trigger_pipeline_spec(self, pipeline_spec_id: str) -> dict[str, Any]:
+        self.pipeline_actions.append({"action": "trigger", "id": pipeline_spec_id})
+        return {"pipeline_run_id": "pipeline-run-1", "child_run_ids": ["job-1"]}
+
+    def backfill_pipeline_spec(self, pipeline_spec_id: str, *, start_from: str) -> dict[str, Any]:
+        self.pipeline_actions.append({"action": "backfill", "id": pipeline_spec_id, "start_from": start_from})
+        return {"pipeline_run_id": "pipeline-run-2", "start_from": start_from, "layers": []}
+
 
 class K2WorkspaceTest(unittest.TestCase):
     def test_seeded_workspace_documents_split_into_expected_corpora(self) -> None:
@@ -174,6 +191,34 @@ class K2WorkspaceTest(unittest.TestCase):
         self.assertEqual(len(topology["feeds"]), len(FEEDS))
         self.assertEqual(topology["metadata"]["purpose"], "scheduled-reactive-icp-expansion")
         self.assertIn("portfolio-expansion", topology["metadata"]["query_profiles"])
+
+    def test_pipeline_action_dispatches_against_workspace_spec(self) -> None:
+        client = FakeWorkspaceClient()
+        project = client.ensure_project("Knowledge2 ICP GTM Test")
+        client.ensure_pipeline_spec(
+            project_id=project["id"],
+            name="ICP Expansion Pipeline",
+            topology={"metadata": {"purpose": "test"}},
+            description="K2-native ICP expansion graph.",
+        )
+
+        dry_run = run_k2_pipeline_action("dry-run", client=client, project_name="Knowledge2 ICP GTM Test")
+        applied = run_k2_pipeline_action("apply", client=client, project_name="Knowledge2 ICP GTM Test", activate_entities=False)
+        triggered = run_k2_pipeline_action("trigger", client=client, project_name="Knowledge2 ICP GTM Test")
+        backfilled = run_k2_pipeline_action(
+            "backfill",
+            client=client,
+            project_name="Knowledge2 ICP GTM Test",
+            start_from="2026-05-01T00:00:00Z",
+        )
+
+        self.assertEqual(dry_run["action"], "dry_run")
+        self.assertTrue(dry_run["result"]["valid"])
+        self.assertFalse(applied["result"]["activate_entities"])
+        self.assertEqual(triggered["result"]["pipeline_run_id"], "pipeline-run-1")
+        self.assertEqual(backfilled["backfill_start_from"], "2026-05-01T00:00:00Z")
+        self.assertEqual([item["action"] for item in client.pipeline_actions], ["dry_run", "apply", "trigger", "backfill"])
+        self.assertTrue(all(item["id"] == "pipeline-1" for item in client.pipeline_actions))
 
 
 if __name__ == "__main__":

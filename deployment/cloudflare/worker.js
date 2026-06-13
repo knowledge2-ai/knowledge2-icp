@@ -394,6 +394,10 @@ async function handleApiRequest(request, env, url) {
     return json(await k2WorkspaceStatus(env));
   }
 
+  if (method === "POST" && url.pathname === "/api/k2-workspace/pipeline") {
+    return k2WorkspacePipelineAction(env, await readJson(request));
+  }
+
   if (method === "GET" && url.pathname === "/api/sources") {
     return json({
       sources: await loadSources(env, lists),
@@ -3751,6 +3755,79 @@ async function k2WorkspaceStatus(env) {
     status.warnings.push(`K2 API status lookup failed: ${error instanceof Error ? error.message : String(error)}`);
   }
   return status;
+}
+
+async function k2WorkspacePipelineAction(env, payload = {}) {
+  const action = String(payload.action || "").trim().toLowerCase().replaceAll("-", "_");
+  if (!["dry_run", "apply", "trigger", "backfill"].includes(action)) {
+    return json({ error: "Unsupported K2 pipeline action. Use dry_run, apply, trigger, or backfill." }, 400);
+  }
+  if (!env.K2_API_KEY) {
+    return json({ error: "K2_API_KEY is not configured; pipeline actions require live K2 credentials." }, 503);
+  }
+
+  const baseUrl = env.K2_BASE_URL || "https://api.knowledge2.ai";
+  const projectName = String(env.K2_ICP_PROJECT_NAME || K2_WORKSPACE_PROJECT_DEFAULT);
+  try {
+    const { project, pipelineSpec } = await findWorkspacePipelineSpec(baseUrl, env.K2_API_KEY, projectName);
+    if (!project?.id) return json({ error: `K2 project '${projectName}' was not found.` }, 404);
+    if (!pipelineSpec?.id) return json({ error: `K2 pipeline spec '${K2_WORKSPACE_PIPELINE_NAME}' was not found.` }, 404);
+
+    const pipelineSpecId = encodeURIComponent(pipelineSpec.id);
+    let result = {};
+    let backfillStartFrom = "";
+    if (action === "dry_run") {
+      const body = payload.sample_input && typeof payload.sample_input === "object" ? { sample_input: payload.sample_input } : undefined;
+      result = await k2Request(baseUrl, env.K2_API_KEY, "POST", `/v1/pipeline-specs/${pipelineSpecId}/dry-run`, body);
+    } else if (action === "apply") {
+      result = await k2Request(baseUrl, env.K2_API_KEY, "POST", `/v1/pipeline-specs/${pipelineSpecId}/apply`, {
+        activate_entities: payload.activate_entities !== false,
+      });
+    } else if (action === "trigger") {
+      result = await k2Request(baseUrl, env.K2_API_KEY, "POST", `/v1/pipeline-specs/${pipelineSpecId}/trigger`);
+    } else {
+      backfillStartFrom = String(payload.start_from || defaultPipelineBackfillStartFrom());
+      result = await k2Request(baseUrl, env.K2_API_KEY, "POST", `/v1/pipeline-specs/${pipelineSpecId}/backfill`, {
+        start_from: backfillStartFrom,
+      });
+    }
+
+    const response = {
+      status: "ok",
+      action,
+      project: rowFromRecord({ key: "project", name: projectName, description: "" }, project),
+      pipeline_spec: rowFromRecord(
+        { key: "pipeline_spec", name: K2_WORKSPACE_PIPELINE_NAME, description: "K2-native ICP expansion graph." },
+        pipelineSpec,
+      ),
+      result,
+      workspace: await k2WorkspaceStatus(env),
+    };
+    if (backfillStartFrom) response.backfill_start_from = backfillStartFrom;
+    return json(response);
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : String(error) }, 502);
+  }
+}
+
+async function findWorkspacePipelineSpec(baseUrl, apiKey, projectName) {
+  const projectPayload = await k2Request(baseUrl, apiKey, "GET", "/v1/projects?limit=100&offset=0");
+  const project = findByName(listFromPayload(projectPayload, "projects"), projectName);
+  if (!project?.id) return { project, pipelineSpec: null };
+  const pipelinePayload = await k2Request(
+    baseUrl,
+    apiKey,
+    "GET",
+    `/v1/pipeline-specs?project_id=${encodeURIComponent(project.id)}&limit=100&offset=0`,
+  );
+  return {
+    project,
+    pipelineSpec: findByName(listFromPayload(pipelinePayload, "pipeline_specs", "pipelineSpecs"), K2_WORKSPACE_PIPELINE_NAME),
+  };
+}
+
+function defaultPipelineBackfillStartFrom() {
+  return new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 }
 
 function blueprintRows(blueprints) {

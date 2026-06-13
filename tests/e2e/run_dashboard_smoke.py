@@ -262,6 +262,9 @@ def _run_live_auth_smoke(
         expect(page.locator("#k2-panel")).to_contain_text("K2 Workspace", timeout=timeout)
         expect(page.locator("#k2-panel")).to_contain_text("ICP Source Corpus", timeout=timeout)
         expect(page.locator("#k2-panel")).to_contain_text("docs", timeout=timeout)
+        page.locator("#k2-pipeline-dry-run").click()
+        expect(page.locator("#k2-panel")).to_contain_text("Pipeline Action Result", timeout=max(timeout, 30000))
+        expect(page.locator("#k2-panel")).to_contain_text("dry_run", timeout=timeout)
 
         context.close()
         browser.close()
@@ -275,6 +278,9 @@ def _run_live_auth_smoke(
     _assert(state.get("lists", {}).get("account_universe"), "Expected live state account universe.")
     _assert(workspace.get("source") == "k2_api", "Expected live K2 workspace status from K2 API.")
     _assert(workspace.get("project", {}).get("status") == "found", "Expected live K2 project to be found.")
+    pipeline_action = _post_json(f"{base_url}/api/k2-workspace/pipeline", {"action": "dry_run"}, headers=headers)
+    _assert(pipeline_action.get("status") == "ok", "Expected live K2 pipeline dry-run to succeed.")
+    _assert(pipeline_action.get("pipeline_spec", {}).get("status") == "found", "Expected live K2 pipeline spec to be found.")
     corpus_counts = {
         item.get("key"): item.get("health", {}).get("total_documents")
         for item in workspace.get("corpora", [])
@@ -287,6 +293,7 @@ def _run_live_auth_smoke(
         "status": "passed",
         "base_url": base_url,
         "validations": ["ui", "api", "storage", "k2"],
+        "k2_pipeline_action": pipeline_action.get("action"),
         "account_count": len(state.get("lists", {}).get("account_universe", [])),
         "k2_source": workspace.get("source"),
         "k2_project_status": workspace.get("project", {}).get("status"),

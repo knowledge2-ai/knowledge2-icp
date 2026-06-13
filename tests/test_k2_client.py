@@ -25,7 +25,8 @@ class K2ClientTest(unittest.TestCase):
                 self.end_headers()
 
             def do_POST(self) -> None:
-                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0")) or 0).decode("utf-8"))
+                raw = self.rfile.read(int(self.headers.get("Content-Length", "0")) or 0)
+                body = json.loads(raw.decode("utf-8")) if raw else {}
                 calls.append({"method": "POST", "path": self.path, "body": body, "api_key": self.headers.get("X-API-Key")})
                 if self.path == "/v1/corpora":
                     self._json({"id": "c1", "name": body["name"], "project_id": body["project_id"]})
@@ -35,6 +36,18 @@ class K2ClientTest(unittest.TestCase):
                     return
                 if self.path == "/v1/corpora/c1/search:generate":
                     self._json({"answer": "K2 answer", "model": "test-model", "body": body, "results": []})
+                    return
+                if self.path == "/v1/pipeline-specs/pipe-1/dry-run":
+                    self._json({"valid": True, "issues": [], "simulated_nodes": []})
+                    return
+                if self.path == "/v1/pipeline-specs/pipe-1/apply":
+                    self._json({"created_agent_ids": [], "updated_agent_ids": [], "activate_entities": body.get("activate_entities")})
+                    return
+                if self.path == "/v1/pipeline-specs/pipe-1/trigger":
+                    self._json({"pipeline_run_id": "pipeline-run-1", "child_run_ids": ["job-1"]})
+                    return
+                if self.path == "/v1/pipeline-specs/pipe-1/backfill":
+                    self._json({"pipeline_run_id": "pipeline-run-2", "start_from": body.get("start_from"), "layers": []})
                     return
                 self.send_response(404)
                 self.end_headers()
@@ -59,18 +72,30 @@ class K2ClientTest(unittest.TestCase):
             corpus = client.ensure_corpus(project["id"], "Corpus", "Description")
             upload = client.upload_documents(corpus["id"], [{"sourceUri": "inline://one", "rawText": "Hello", "metadata": {}}])
             answer = client.generate_answer(corpus["id"], "Which company?", filters={"condition": "and", "filters": []})
+            dry_run = client.dry_run_pipeline_spec("pipe-1")
+            applied = client.apply_pipeline_spec("pipe-1", activate_entities=False)
+            triggered = client.trigger_pipeline_spec("pipe-1")
+            backfilled = client.backfill_pipeline_spec("pipe-1", start_from="2026-05-01T00:00:00Z")
 
             self.assertEqual(project["id"], "p1")
             self.assertEqual(corpus["id"], "c1")
             self.assertEqual(upload["count"], 1)
             self.assertEqual(answer["answer"], "K2 answer")
+            self.assertTrue(dry_run["valid"])
+            self.assertFalse(applied["activate_entities"])
+            self.assertEqual(triggered["pipeline_run_id"], "pipeline-run-1")
+            self.assertEqual(backfilled["start_from"], "2026-05-01T00:00:00Z")
             self.assertTrue(all(call["api_key"] == "test-key" for call in calls))
-            upload_call = calls[-2]
+            upload_call = next(call for call in calls if call["path"] == "/v1/corpora/c1/documents:batch")
             self.assertEqual(upload_call["body"]["documents"][0]["source_uri"], "inline://one")
-            generate_call = calls[-1]
+            generate_call = next(call for call in calls if call["path"] == "/v1/corpora/c1/search:generate")
             self.assertEqual(generate_call["body"]["top_k"], 8)
             self.assertEqual(generate_call["body"]["hybrid"]["fusion_mode"], "rrf")
             self.assertEqual(generate_call["body"]["filters"]["condition"], "and")
+            apply_call = next(call for call in calls if call["path"] == "/v1/pipeline-specs/pipe-1/apply")
+            self.assertEqual(apply_call["body"]["activate_entities"], False)
+            backfill_call = next(call for call in calls if call["path"] == "/v1/pipeline-specs/pipe-1/backfill")
+            self.assertEqual(backfill_call["body"]["start_from"], "2026-05-01T00:00:00Z")
         finally:
             server.shutdown()
             server.server_close()

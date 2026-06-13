@@ -12,7 +12,7 @@ single page:
 | Leads | `button.tab[data-view='leads']`, `#lead-rows` | Lead list and detail inspection |
 | Prospects | `button.tab[data-view='prospects']`, `/api/runs/:id/prospects` | Persona/Apollo reach-out targets |
 | Research | `button.tab[data-view='research']`, `/api/research` | Natural-language run research |
-| K2 | `button.tab[data-view='k2']`, `/api/runs/:id/k2-manifest`, `/api/k2-workspace` | Manifest preview/export/sync and workspace health |
+| K2 | `button.tab[data-view='k2']`, `/api/runs/:id/k2-manifest`, `/api/k2-workspace`, `/api/k2-workspace/pipeline` | Manifest preview/export/sync, workspace health, and PipelineSpec dry-run/apply/trigger/backfill controls |
 | Setup | `button.tab[data-view='setup']`, `/api/state` | Seeded prompts, settings, account lists, and verticals |
 | Criteria | `button.tab[data-view='criteria']`, `/api/criteria` | ICP markdown configuration |
 
@@ -33,7 +33,7 @@ mutating live state.
 | TC-004 | smoke | P1 | K2 manifest preview renders metadata payload | TC-001 seed run exists | UI manifest preview includes document metadata |
 | TC-005 | smoke | P1 | Criteria editor renders active markdown | TC-001 server state initialized | UI criteria textarea is populated |
 | TC-006 | smoke | P1 | Setup tab renders seeded prompts/settings/lists | TC-001 server state initialized | UI setup grid includes discovery prompt, seeded account list, deployment mode; API state includes prompts/settings/lists |
-| TC-007 | smoke | P0 | Live Worker requires API auth and creates a short-lived browser session | Deployed Worker is reachable; `ICP_ADMIN_TOKEN` is set | UI unauthenticated state shows token required; saving admin token creates session; raw token is absent from localStorage; authenticated API state and K2 workspace health load |
+| TC-007 | smoke | P0 | Live Worker requires API auth and creates a short-lived browser session | Deployed Worker is reachable; `ICP_ADMIN_TOKEN` is set | UI unauthenticated state shows token required; saving admin token creates session; raw token is absent from localStorage; authenticated API state, K2 workspace health, and K2 PipelineSpec dry-run load |
 
 ## Runner
 
@@ -58,5 +58,5 @@ make e2e-live-auth
 
 The live runner opens the deployed dashboard, confirms unauthenticated API access
 is blocked, creates a short-lived browser session through the UI, validates
-session storage, reads `/api/state`, checks K2 workspace health, and writes
-`out/e2e/dashboard-live-auth-report.json`.
+session storage, reads `/api/state`, checks K2 workspace health, runs a safe K2
+PipelineSpec dry-run, and writes `out/e2e/dashboard-live-auth-report.json`.

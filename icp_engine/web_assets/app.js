@@ -20,6 +20,8 @@ const state = {
   qualityFeedbackSummary: {},
   evalSummary: {},
   workspaceState: {},
+  currentK2WorkspaceStatus: null,
+  currentK2PipelineAction: null,
   leadViews: [],
   selectedLeadIds: new Set(),
   leadPage: 1,
@@ -1420,12 +1422,20 @@ function renderK2SyncResult(result) {
   </div>`;
 }
 
-function renderK2WorkspaceStatus(status) {
+function renderK2PipelineActionResult(result) {
+  renderK2WorkspaceStatus(result.workspace || state.currentK2WorkspaceStatus || {}, result);
+}
+
+function renderK2WorkspaceStatus(status, actionResult = null) {
   const root = $("k2-panel");
   if (!root) return;
+  status = status || {};
+  state.currentK2WorkspaceStatus = status;
+  if (actionResult) state.currentK2PipelineAction = actionResult;
   root.className = "detail-panel";
   const warnings = status.warnings || [];
   root.innerHTML = `<div class="detail-stack">
+    ${actionResult ? k2PipelineActionMarkup(actionResult) : ""}
     <div class="detail-section">
       <h2>K2 Workspace</h2>
       <div class="kv-grid">
@@ -1442,6 +1452,26 @@ function renderK2WorkspaceStatus(status) {
     ${workspaceStatusSection("Agents", status.agents || [])}
     ${workspaceStatusSection("Feeds", status.feeds || [])}
     ${workspaceStatusSection("Pipeline", status.pipeline_spec ? [status.pipeline_spec] : [])}
+  </div>`;
+}
+
+function k2PipelineActionMarkup(actionResult) {
+  const result = actionResult.result || {};
+  const childRunIds = Array.isArray(result.child_run_ids || result.childRunIds) ? (result.child_run_ids || result.childRunIds) : [];
+  return `<div class="detail-section">
+    <h2>Pipeline Action Result</h2>
+    <div class="kv-grid">
+      ${kv("Action", actionResult.action || "")}
+      ${kv("Status", actionResult.status || "")}
+      ${kv("Pipeline", actionResult.pipeline_spec?.name || "")}
+      ${kv("Pipeline status", actionResult.pipeline_spec?.status || "")}
+      ${kv("Run", result.pipeline_run_id || result.pipelineRunId || result.run_id || "")}
+      ${kv("Child jobs", childRunIds.length || result.child_run_count || 0)}
+      ${kv("Valid", typeof result.valid === "boolean" ? (result.valid ? "yes" : "no") : "n/a")}
+      ${kv("Backfill from", actionResult.backfill_start_from || "")}
+    </div>
+    ${actionResult.error ? `<p class="muted">${escapeHtml(actionResult.error)}</p>` : ""}
+    <pre class="manifest-preview">${escapeHtml(JSON.stringify(result, null, 2))}</pre>
   </div>`;
 }
 
@@ -2579,6 +2609,34 @@ function researchProviderLabel(payload) {
   return "Local stored-evidence research";
 }
 
+async function runK2PipelineAction(action, buttonId) {
+  const confirmations = {
+    apply: "Apply the K2 PipelineSpec now? This can create or update K2 agents, feeds, and subscriptions.",
+    trigger: "Trigger the K2 PipelineSpec now? This can enqueue K2 feed and agent jobs.",
+    backfill: "Backfill the K2 PipelineSpec for the last 30 days? This can enqueue multiple K2 jobs.",
+  };
+  if (confirmations[action] && !window.confirm(confirmations[action])) return;
+  const button = $(buttonId);
+  if (button) button.disabled = true;
+  try {
+    const result = await api("/api/k2-workspace/pipeline", {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    });
+    renderK2PipelineActionResult(result);
+  } catch (error) {
+    renderK2PipelineActionResult({
+      status: "error",
+      action,
+      error: error.message,
+      result: { error: error.message },
+      workspace: state.currentK2WorkspaceStatus || { warnings: [error.message] },
+    });
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 $("k2-preview").addEventListener("click", async () => {
   if (!state.currentRun) return;
   state.currentManifest = await api(`/api/runs/${state.currentRun.id}/k2-manifest`);
@@ -2589,6 +2647,11 @@ $("k2-workspace-status").addEventListener("click", async () => {
   const status = await api("/api/k2-workspace");
   renderK2WorkspaceStatus(status);
 });
+
+$("k2-pipeline-dry-run").addEventListener("click", () => runK2PipelineAction("dry_run", "k2-pipeline-dry-run"));
+$("k2-pipeline-apply").addEventListener("click", () => runK2PipelineAction("apply", "k2-pipeline-apply"));
+$("k2-pipeline-trigger").addEventListener("click", () => runK2PipelineAction("trigger", "k2-pipeline-trigger"));
+$("k2-pipeline-backfill").addEventListener("click", () => runK2PipelineAction("backfill", "k2-pipeline-backfill"));
 
 $("k2-export").addEventListener("click", async () => {
   if (!state.currentRun) return;

@@ -17,7 +17,8 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from .app_store import AppStore
-from .k2_workspace_status import build_k2_workspace_status
+from .k2_client import K2ApiError
+from .k2_workspace_status import build_k2_workspace_status, run_k2_pipeline_action
 from .outreach import summarize_outreach_drafts
 from .prospects import build_run_prospects, prospects_to_csv
 from .research import ResearchPipeline
@@ -547,6 +548,26 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                     return
                 self._send_json({"eval_run": result, "summary": app.store.eval_summary(run_id=run_id)})
                 return
+            if parsed.path == "/api/k2-workspace/pipeline":
+                payload = self._read_json()
+                try:
+                    result = run_k2_pipeline_action(
+                        str(payload.get("action") or ""),
+                        sample_input=payload.get("sample_input") if isinstance(payload.get("sample_input"), dict) else None,
+                        activate_entities=bool(payload.get("activate_entities", True)),
+                        start_from=str(payload.get("start_from") or "") or None,
+                    )
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                except K2ApiError as exc:
+                    body = {"error": str(exc)}
+                    if exc.body:
+                        body["detail"] = exc.body[:1000]
+                    self._send_json(body, status=_http_status_from_k2_error(exc))
+                    return
+                self._send_json(result)
+                return
             if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/lead-state"):
                 run_id = parsed.path.split("/")[3]
                 run = app.store.load_run(run_id)
@@ -839,6 +860,13 @@ def _health_payload(app: GTMApp, *, detailed: bool) -> dict[str, Any]:
             }
         )
     return payload
+
+
+def _http_status_from_k2_error(exc: K2ApiError) -> HTTPStatus:
+    try:
+        return HTTPStatus(exc.status_code or HTTPStatus.BAD_GATEWAY)
+    except ValueError:
+        return HTTPStatus.BAD_GATEWAY
 
 
 def _create_session_token(secret: str, now: int) -> str:

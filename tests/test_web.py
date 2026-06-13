@@ -5,6 +5,7 @@ import tempfile
 import threading
 import unittest
 from http.server import ThreadingHTTPServer
+from unittest.mock import patch
 from urllib.error import HTTPError
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -34,6 +35,35 @@ def fake_evidence(company: CompanyInput, cache_dir: Path) -> tuple[list[Evidence
 
 
 class WebApiTest(unittest.TestCase):
+    def test_k2_workspace_pipeline_endpoint_dispatches_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = GTMApp(store=AppStore(Path(tmp)))
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_port}"
+            try:
+                with patch(
+                    "icp_engine.web.run_k2_pipeline_action",
+                    return_value={
+                        "status": "ok",
+                        "action": "dry_run",
+                        "pipeline_spec": {"id": "pipeline-1", "name": "ICP Expansion Pipeline", "status": "found"},
+                        "result": {"valid": True},
+                        "workspace": {"source": "k2_api"},
+                    },
+                ) as mocked:
+                    result = _json_post(f"{base_url}/api/k2-workspace/pipeline", {"action": "dry_run"})
+
+                self.assertEqual(result["action"], "dry_run")
+                self.assertTrue(result["result"]["valid"])
+                mocked.assert_called_once()
+                self.assertEqual(mocked.call_args.args[0], "dry_run")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
     def test_state_criteria_and_run_endpoints(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = AppStore(Path(tmp))

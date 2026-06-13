@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -24,6 +25,16 @@ class WorkspaceStatusClient(Protocol):
     def list_pipeline_specs(self, project_id: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]: ...
 
     def discover_metadata(self, corpus_id: str, *, refresh: bool = False, include: str | None = None) -> dict[str, Any]: ...
+
+
+class PipelineActionClient(WorkspaceStatusClient, Protocol):
+    def dry_run_pipeline_spec(self, pipeline_spec_id: str, *, sample_input: dict[str, Any] | None = None) -> dict[str, Any]: ...
+
+    def apply_pipeline_spec(self, pipeline_spec_id: str, *, activate_entities: bool = True) -> dict[str, Any]: ...
+
+    def trigger_pipeline_spec(self, pipeline_spec_id: str) -> dict[str, Any]: ...
+
+    def backfill_pipeline_spec(self, pipeline_spec_id: str, *, start_from: str) -> dict[str, Any]: ...
 
 
 def build_k2_workspace_status(
@@ -82,6 +93,82 @@ def build_k2_workspace_status(
 
     status["warnings"].append("K2_API_KEY or K2_DEV_TOKEN is not configured; showing expected workspace blueprint.")
     return status
+
+
+def run_k2_pipeline_action(
+    action: str,
+    *,
+    client: PipelineActionClient | None = None,
+    env: dict[str, str] | None = None,
+    project_name: str | None = None,
+    summary_path: Path | None = None,
+    sample_input: dict[str, Any] | None = None,
+    activate_entities: bool = True,
+    start_from: str | None = None,
+) -> dict[str, Any]:
+    normalized_action = action.strip().lower().replace("-", "_")
+    if normalized_action not in {"dry_run", "apply", "trigger", "backfill"}:
+        raise ValueError("Unsupported K2 pipeline action. Use dry_run, apply, trigger, or backfill.")
+
+    env_values = env if env is not None else os.environ
+    selected_summary_path = summary_path or Path(env_values.get("K2_ICP_WORKSPACE_SUMMARY") or DEFAULT_SUMMARY_PATH)
+    summary = _load_summary(selected_summary_path)
+    selected_project_name = (
+        project_name
+        or env_values.get("K2_ICP_PROJECT_NAME")
+        or str(summary.get("project", {}).get("name") or "")
+        or DEFAULT_PROJECT_NAME
+    )
+    base_url = env_values.get("K2_BASE_URL") or "https://api.knowledge2.ai"
+    api_key = (env_values.get("K2_API_KEY") or env_values.get("K2_DEV_TOKEN") or "").strip()
+
+    if client is None:
+        if not api_key:
+            raise K2ApiError(
+                "K2_API_KEY or K2_DEV_TOKEN is not configured; pipeline actions require live K2 credentials.",
+                status_code=503,
+            )
+        client = K2RestClient(api_key=api_key, base_url=base_url)
+
+    project = _find_by_name(client.list_projects(limit=100, offset=0), selected_project_name)
+    project_id = _record_id(project)
+    if not project_id:
+        raise K2ApiError(f"K2 project '{selected_project_name}' was not found.", status_code=404)
+
+    spec = _find_by_name(client.list_pipeline_specs(project_id, limit=100, offset=0), PIPELINE_SPEC_NAME)
+    spec_id = _record_id(spec)
+    if not spec_id:
+        raise K2ApiError(f"K2 pipeline spec '{PIPELINE_SPEC_NAME}' was not found.", status_code=404)
+
+    backfill_start_from = start_from or _default_backfill_start_from()
+    if normalized_action == "dry_run":
+        result = client.dry_run_pipeline_spec(spec_id, sample_input=sample_input)
+    elif normalized_action == "apply":
+        result = client.apply_pipeline_spec(spec_id, activate_entities=activate_entities)
+    elif normalized_action == "trigger":
+        result = client.trigger_pipeline_spec(spec_id)
+    else:
+        result = client.backfill_pipeline_spec(spec_id, start_from=backfill_start_from)
+
+    payload: dict[str, Any] = {
+        "status": "ok",
+        "action": normalized_action,
+        "project": _record_row({"key": "project", "name": selected_project_name, "description": ""}, project),
+        "pipeline_spec": _record_row(
+            {"key": "pipeline_spec", "name": PIPELINE_SPEC_NAME, "description": "K2-native ICP expansion graph."},
+            spec,
+        ),
+        "result": result,
+        "workspace": build_k2_workspace_status(
+            client=client,
+            env=dict(env_values),
+            project_name=selected_project_name,
+            summary_path=selected_summary_path,
+        ),
+    }
+    if normalized_action == "backfill":
+        payload["backfill_start_from"] = backfill_start_from
+    return payload
 
 
 def _live_status(
@@ -329,3 +416,8 @@ def _missing_warnings(status: dict[str, Any]) -> list[str]:
     if isinstance(pipeline, dict) and pipeline.get("status") in {"missing", "unknown"}:
         warnings.append(f"Missing K2 pipeline spec: {pipeline.get('name')}")
     return warnings
+
+
+def _default_backfill_start_from() -> str:
+    value = datetime.now(timezone.utc) - timedelta(days=30)
+    return value.replace(microsecond=0).isoformat().replace("+00:00", "Z")

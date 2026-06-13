@@ -113,6 +113,9 @@ Cloudflare Worker endpoints mirror the dashboard-critical subset:
   configured and seeded persona targets as fallback.
 - `GET /api/k2-workspace`: reports the configured K2 project, corpora, agents,
   feeds, PipelineSpec, research corpus, and missing-resource warnings.
+- `POST /api/k2-workspace/pipeline`: runs the configured PipelineSpec
+  `dry_run`, `apply`, `trigger`, or 30-day `backfill` action. The dashboard UI
+  confirms mutating actions before dispatch.
 - `GET /api/runs/{run_id}/k2-manifest`: returns K2-ready metadata documents.
 - `POST /api/runs/{run_id}/k2-sync`: dry-runs or uploads to K2 when
   `K2_API_KEY` is configured and `apply=true`.

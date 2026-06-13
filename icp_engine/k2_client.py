@@ -284,6 +284,36 @@ class K2RestClient:
             description=description,
         )
 
+    def dry_run_pipeline_spec(
+        self,
+        pipeline_spec_id: str,
+        *,
+        sample_input: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        body = {"sample_input": sample_input} if sample_input is not None else None
+        payload = self._request("POST", f"/v1/pipeline-specs/{pipeline_spec_id}/dry-run", body=body)
+        return _dict_payload(payload)
+
+    def apply_pipeline_spec(self, pipeline_spec_id: str, *, activate_entities: bool = True) -> dict[str, Any]:
+        payload = self._request(
+            "POST",
+            f"/v1/pipeline-specs/{pipeline_spec_id}/apply",
+            body={"activate_entities": activate_entities},
+        )
+        return _dict_payload(payload)
+
+    def trigger_pipeline_spec(self, pipeline_spec_id: str) -> dict[str, Any]:
+        payload = self._request("POST", f"/v1/pipeline-specs/{pipeline_spec_id}/trigger")
+        return _dict_payload(payload)
+
+    def backfill_pipeline_spec(self, pipeline_spec_id: str, *, start_from: str) -> dict[str, Any]:
+        payload = self._request(
+            "POST",
+            f"/v1/pipeline-specs/{pipeline_spec_id}/backfill",
+            body={"start_from": start_from},
+        )
+        return _dict_payload(payload)
+
     def generate_answer(
         self,
         corpus_id: str,

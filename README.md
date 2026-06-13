@@ -96,7 +96,9 @@ corpus. With `K2_API_KEY`/`K2_DEV_TOKEN` it reads live K2 state; without
 credentials it falls back to the latest bootstrap summary or expected
 workspace blueprint. When credentials are available, corpus rows include K2
 metadata health: document count, chunk count, metadata field count, and
-readiness.
+readiness. The same tab can call `POST /api/k2-workspace/pipeline` for
+PipelineSpec `dry_run`, `apply`, `trigger`, and 30-day `backfill` actions; the
+UI confirms mutating actions before dispatch.
 
 Prospect exports are available from the dashboard Prospects tab or API:
 
