@@ -112,6 +112,9 @@ def main() -> int:
                 expect(page.locator("#research-answer")).to_contain_text("Citations", timeout=timeout)
 
                 page.locator("button.tab[data-view='k2']").click()
+                page.locator("#k2-workspace-status").click()
+                expect(page.locator("#k2-panel")).to_contain_text("K2 Workspace", timeout=timeout)
+                expect(page.locator("#k2-panel")).to_contain_text("ICP Source Corpus", timeout=timeout)
                 page.locator("#k2-preview").click()
                 expect(page.locator("#k2-panel .manifest-preview")).to_contain_text("source_type", timeout=timeout)
 

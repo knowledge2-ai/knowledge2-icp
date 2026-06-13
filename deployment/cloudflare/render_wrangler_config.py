@@ -31,6 +31,9 @@ def render_config(
 
     config["account_id"] = selected_account_id
     config.setdefault("vars", {})["ICP_DEPLOYMENT_MODE"] = "seeded-worker"
+    project_name = os.environ.get("K2_ICP_PROJECT_NAME", "").strip()
+    if project_name:
+        config.setdefault("vars", {})["K2_ICP_PROJECT_NAME"] = project_name
     research_corpus_id = os.environ.get("K2_RESEARCH_CORPUS_ID", "").strip()
     if research_corpus_id:
         config.setdefault("vars", {})["K2_RESEARCH_CORPUS_ID"] = research_corpus_id

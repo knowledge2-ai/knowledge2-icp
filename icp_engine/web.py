@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from .app_store import AppStore
+from .k2_workspace_status import build_k2_workspace_status
 from .outreach import summarize_outreach_drafts
 from .prospects import build_run_prospects, prospects_to_csv
 from .research import ResearchPipeline
@@ -112,6 +113,9 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                 return
             if parsed.path == "/api/evals/summary":
                 self._send_json(app.store.eval_summary())
+                return
+            if parsed.path == "/api/k2-workspace":
+                self._send_json(build_k2_workspace_status())
                 return
             if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/workflow"):
                 run_id = parsed.path.split("/")[3]

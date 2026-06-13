@@ -12,6 +12,7 @@ from icp_engine.k2_workspace import (
     build_seeded_workspace_documents,
     build_pipeline_topology,
 )
+from icp_engine.k2_workspace_status import build_k2_workspace_status
 
 
 class FakeWorkspaceClient:
@@ -25,14 +26,20 @@ class FakeWorkspaceClient:
     def ensure_project(self, name: str) -> dict[str, Any]:
         return self.projects.setdefault(name, {"id": "project-1", "name": name})
 
+    def list_projects(self, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+        return list(self.projects.values())[offset : offset + limit]
+
     def ensure_corpus(self, project_id: str, name: str, description: str = "") -> dict[str, Any]:
         return self.corpora.setdefault(
             name,
             {"id": f"corpus-{len(self.corpora) + 1}", "name": name, "project_id": project_id, "description": description},
         )
 
-    def list_agents(self, project_id: str) -> list[dict[str, Any]]:
-        return list(self.agents.values())
+    def list_corpora(self, project_id: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+        return list(self.corpora.values())[offset : offset + limit]
+
+    def list_agents(self, project_id: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+        return list(self.agents.values())[offset : offset + limit]
 
     def ensure_agent(self, *, project_id: str, name: str, **kwargs: Any) -> dict[str, Any]:
         return self.agents.setdefault(
@@ -53,8 +60,8 @@ class FakeWorkspaceClient:
                 return agent
         raise AssertionError(f"Unknown agent: {agent_id}")
 
-    def list_feeds(self, project_id: str) -> list[dict[str, Any]]:
-        return list(self.feeds.values())
+    def list_feeds(self, project_id: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+        return list(self.feeds.values())[offset : offset + limit]
 
     def ensure_feed(self, *, project_id: str, name: str, **kwargs: Any) -> dict[str, Any]:
         return self.feeds.setdefault(
@@ -67,8 +74,8 @@ class FakeWorkspaceClient:
             },
         )
 
-    def list_pipeline_specs(self, project_id: str) -> list[dict[str, Any]]:
-        return list(self.pipeline_specs.values())
+    def list_pipeline_specs(self, project_id: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+        return list(self.pipeline_specs.values())[offset : offset + limit]
 
     def ensure_pipeline_spec(self, *, project_id: str, name: str, topology: dict[str, Any], description: str = "") -> dict[str, Any]:
         return self.pipeline_specs.setdefault(
@@ -112,6 +119,11 @@ class K2WorkspaceTest(unittest.TestCase):
             )
 
             summary = provisioner.ensure_workspace(apply_primitives=True)
+            status = build_k2_workspace_status(
+                client=client,
+                project_name="Knowledge2 ICP GTM Test",
+                summary_path=Path(tmp) / "missing.json",
+            )
 
         self.assertEqual(summary["project"]["id"], "project-1")
         self.assertEqual(set(summary["corpora"]), {"source", "candidate", "evidence", "prospect", "criteria"})
@@ -124,6 +136,12 @@ class K2WorkspaceTest(unittest.TestCase):
         self.assertEqual(prospect_feed["target_corpus_id"], summary["corpora"]["prospect"]["id"])
         self.assertTrue(prospect_feed["persistent"])
         self.assertTrue(prospect_feed["reactive"])
+        self.assertEqual(status["source"], "k2_api")
+        self.assertEqual(status["project"]["status"], "found")
+        self.assertTrue(all(item["status"] == "found" for item in status["corpora"]))
+        self.assertTrue(all(item["status"] == "active" for item in status["agents"]))
+        self.assertTrue(all(item["status"] == "found" for item in status["feeds"]))
+        self.assertEqual(status["pipeline_spec"]["status"], "found")
 
     def test_pipeline_topology_references_existing_entities(self) -> None:
         corpora = {

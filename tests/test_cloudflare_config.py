@@ -23,6 +23,7 @@ class CloudflareConfigTest(unittest.TestCase):
         self.assertIn("ICP_ADMIN_TOKEN", config["secrets"]["required"])
         self.assertEqual(config["vars"]["ICP_DEPLOYMENT_MODE"], "seeded-worker")
         self.assertEqual(config["vars"]["K2_BASE_URL"], "https://api-dev.knowledge2.ai")
+        self.assertEqual(config["vars"]["K2_ICP_PROJECT_NAME"], "Knowledge2 ICP GTM Dev")
         self.assertEqual(config["vars"]["K2_RESEARCH_CORPUS_ID"], "")
         self.assertEqual(config["triggers"]["crons"], ["0 9 * * *"])
 
@@ -100,6 +101,10 @@ class CloudflareConfigTest(unittest.TestCase):
         self.assertIn("sourceScheduleDue", worker)
         self.assertIn("expansion_runs", worker)
         self.assertIn("K2_RESEARCH_CORPUS_ID", worker)
+        self.assertIn("K2_ICP_PROJECT_NAME", worker)
+        self.assertIn("K2_WORKSPACE_CORPORA", worker)
+        self.assertIn('url.pathname === "/api/k2-workspace"', worker)
+        self.assertIn("k2WorkspaceStatus", worker)
         self.assertIn("k2ResearchAnswer", worker)
         self.assertIn("search:generate", worker)
         self.assertIn("replace-with-cloudflare-account-id", raw)
@@ -120,6 +125,7 @@ class CloudflareConfigTest(unittest.TestCase):
         self.assertEqual(config["account_id"], "0" * 32)
         self.assertEqual(config["vars"]["ICP_DEPLOYMENT_MODE"], "seeded-worker")
         self.assertEqual(config["vars"]["K2_BASE_URL"], "https://api-dev.knowledge2.ai")
+        self.assertEqual(config["vars"]["K2_ICP_PROJECT_NAME"], "Knowledge2 ICP GTM Dev")
         self.assertEqual(config["vars"]["K2_RESEARCH_CORPUS_ID"], "")
         self.assertEqual(config["triggers"]["crons"], ["0 9 * * *"])
         self.assertEqual(config["kv_namespaces"][0]["binding"], "ICP_STATE")
@@ -150,6 +156,21 @@ class CloudflareConfigTest(unittest.TestCase):
 
         config = tomllib.loads(rendered)
         self.assertEqual(config["vars"]["K2_RESEARCH_CORPUS_ID"], "corpus-dev-123")
+
+    def test_generated_worker_config_can_include_workspace_project_from_environment(self) -> None:
+        renderer = _load_renderer()
+        old_value = os.environ.get("K2_ICP_PROJECT_NAME")
+        os.environ["K2_ICP_PROJECT_NAME"] = "Knowledge2 ICP GTM Sandbox"
+        try:
+            rendered = renderer.render_config(account_id="0" * 32, route="gtm-dev.knowledge2.ai")
+        finally:
+            if old_value is None:
+                os.environ.pop("K2_ICP_PROJECT_NAME", None)
+            else:
+                os.environ["K2_ICP_PROJECT_NAME"] = old_value
+
+        config = tomllib.loads(rendered)
+        self.assertEqual(config["vars"]["K2_ICP_PROJECT_NAME"], "Knowledge2 ICP GTM Sandbox")
 
     def test_deploy_preflight_validates_env_without_printing_secret_values(self) -> None:
         preflight = _load_preflight()

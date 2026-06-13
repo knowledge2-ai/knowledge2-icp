@@ -85,6 +85,12 @@ sync applies and stores a `corpus_id` on the run, or when `K2_RESEARCH_CORPUS_ID
 is configured, research requests use K2 generation with a `run_id` metadata
 filter and fall back to local evidence search when K2 is unavailable.
 
+The K2 tab also exposes `GET /api/k2-workspace`, a read-only status view for
+the configured project, corpora, agents, feeds, PipelineSpec, and research
+corpus. With `K2_API_KEY`/`K2_DEV_TOKEN` it reads live K2 state; without
+credentials it falls back to the latest bootstrap summary or expected
+workspace blueprint.
+
 Prospect exports are available from the dashboard Prospects tab or API:
 
 ```bash

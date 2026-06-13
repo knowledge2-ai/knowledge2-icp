@@ -1,6 +1,29 @@
 const SEED_CREATED_AT = "2026-06-12T00:00:00+00:00";
 const SEED_RUN_ID = "run-seeded-icp";
 const MAX_APOLLO_ENRICH_LEADS = 12;
+const K2_WORKSPACE_PROJECT_DEFAULT = "Knowledge2 ICP GTM Dev";
+const K2_WORKSPACE_PIPELINE_NAME = "ICP Expansion Pipeline";
+const K2_WORKSPACE_CORPORA = [
+  { key: "source", name: "ICP Source Corpus", description: "Portfolio pages, source lists, SERP results, company pages, and provider payload summaries." },
+  { key: "candidate", name: "ICP Candidate Corpus", description: "Normalized account records for K2-fit ICP candidates." },
+  { key: "evidence", name: "ICP Evidence Corpus", description: "Scoring evidence, score components, hard gates, rationale, and citations." },
+  { key: "prospect", name: "ICP Prospect Corpus", description: "Persona targets, Apollo people, contact confidence, and outreach readiness records." },
+  { key: "criteria", name: "ICP Criteria Corpus", description: "Criteria markdown, prompt versions, settings, lists, accepted/rejected examples, and query profile hints." },
+];
+const K2_WORKSPACE_AGENTS = [
+  { key: "source_discovery", name: "ICP Source Discovery Agent", description: "Extract normalized company/domain candidates from source pages and list payloads." },
+  { key: "qualification", name: "ICP Company Qualification Agent", description: "Score candidate accounts against the K2 incumbent-software ICP." },
+  { key: "evidence_gap", name: "ICP Evidence Gap Agent", description: "Find missing source coverage and recommend the next scrape/search/enrichment action." },
+  { key: "prospect_role", name: "ICP Prospect Role Agent", description: "Normalize prospect/persona records into a role tree with outreach readiness." },
+  { key: "criteria_refinement", name: "ICP Criteria Refinement Agent", description: "Review accepted/rejected/exported outcomes and propose criteria/query-profile updates." },
+  { key: "outreach", name: "ICP Outreach Draft Agent", description: "Draft evidence-backed outreach variants for approved prospects." },
+];
+const K2_WORKSPACE_FEEDS = [
+  { key: "source_to_candidate", name: "ICP Source-to-Candidate Feed", description: "Reactive extraction of normalized candidate accounts when new source documents land." },
+  { key: "daily_source_sweep", name: "ICP Daily Source Sweep Feed", description: "Daily source-corpus sweep to keep the candidate corpus growing from existing source material." },
+  { key: "candidate_to_evidence", name: "ICP Candidate Qualification Feed", description: "Reactive qualification of candidate accounts into scored evidence records." },
+  { key: "prospect_expansion", name: "ICP Prospect Expansion Feed", description: "Reactive normalization of prospect records and fallback personas into a role tree." },
+];
 const BLOCKED_DISCOVERY_HOSTS = new Set([
   "bing.com",
   "capterra.com",
@@ -331,6 +354,10 @@ async function handleApiRequest(request, env, url) {
 
   if (method === "GET" && url.pathname === "/api/evals/summary") {
     return json(evalSummary(await listEvalRuns(env)));
+  }
+
+  if (method === "GET" && url.pathname === "/api/k2-workspace") {
+    return json(await k2WorkspaceStatus(env));
   }
 
   if (method === "GET" && url.pathname === "/api/sources") {
@@ -1303,6 +1330,7 @@ function providerStatus(env) {
       configured: Boolean(env.K2_API_KEY),
       env: "K2_API_KEY",
       base_url: env.K2_BASE_URL || "https://api.knowledge2.ai",
+      workspace_project_name: env.K2_ICP_PROJECT_NAME || K2_WORKSPACE_PROJECT_DEFAULT,
       research_corpus_configured: Boolean(env.K2_RESEARCH_CORPUS_ID),
     },
     github: { configured: false, env: "GITHUB_TOKEN", public_fallback: true },
@@ -3555,6 +3583,114 @@ async function uploadToK2(env, run, { projectName, corpusName }) {
       document_count: buildUploadDocuments(run).length,
     };
   }
+}
+
+async function k2WorkspaceStatus(env) {
+  const baseUrl = env.K2_BASE_URL || "https://api.knowledge2.ai";
+  const projectName = String(env.K2_ICP_PROJECT_NAME || K2_WORKSPACE_PROJECT_DEFAULT);
+  const status = {
+    configured: Boolean(env.K2_API_KEY),
+    source: "blueprint",
+    base_url: baseUrl,
+    project_name: projectName,
+    project: { key: "project", name: projectName, id: "", status: "expected", description: "" },
+    corpora: blueprintRows(K2_WORKSPACE_CORPORA),
+    agents: blueprintRows(K2_WORKSPACE_AGENTS),
+    feeds: blueprintRows(K2_WORKSPACE_FEEDS),
+    pipeline_spec: blueprintRow({ key: "pipeline_spec", name: K2_WORKSPACE_PIPELINE_NAME, description: "K2-native ICP expansion graph." }),
+    research_corpus_id: String(env.K2_RESEARCH_CORPUS_ID || ""),
+    research_corpus_configured: Boolean(env.K2_RESEARCH_CORPUS_ID),
+    warnings: [],
+  };
+  if (!env.K2_API_KEY) {
+    status.warnings.push("K2_API_KEY is not configured; showing expected workspace blueprint.");
+    return status;
+  }
+
+  try {
+    const projectPayload = await k2Request(baseUrl, env.K2_API_KEY, "GET", "/v1/projects?limit=100&offset=0");
+    const project = findByName(listFromPayload(projectPayload, "projects"), projectName);
+    status.source = "k2_api";
+    status.project = rowFromRecord({ key: "project", name: projectName, description: "" }, project);
+    if (!project?.id) {
+      status.warnings.push(`K2 project '${projectName}' was not found.`);
+      return status;
+    }
+    const projectId = encodeURIComponent(project.id);
+    const [corporaPayload, agentsPayload, feedsPayload, pipelinePayload] = await Promise.all([
+      k2Request(baseUrl, env.K2_API_KEY, "GET", `/v1/corpora?project_id=${projectId}&limit=100&offset=0`),
+      k2Request(baseUrl, env.K2_API_KEY, "GET", `/v1/agents?project_id=${projectId}&limit=100&offset=0`),
+      k2Request(baseUrl, env.K2_API_KEY, "GET", `/v1/feeds?project_id=${projectId}&limit=100&offset=0`),
+      k2Request(baseUrl, env.K2_API_KEY, "GET", `/v1/pipeline-specs?project_id=${projectId}&limit=100&offset=0`),
+    ]);
+    status.corpora = workspaceRows(K2_WORKSPACE_CORPORA, listFromPayload(corporaPayload, "corpora"));
+    status.agents = workspaceRows(K2_WORKSPACE_AGENTS, listFromPayload(agentsPayload, "agents"), "status");
+    status.feeds = workspaceRows(K2_WORKSPACE_FEEDS, listFromPayload(feedsPayload, "feeds"));
+    status.pipeline_spec = rowFromRecord(
+      { key: "pipeline_spec", name: K2_WORKSPACE_PIPELINE_NAME, description: "K2-native ICP expansion graph." },
+      findByName(listFromPayload(pipelinePayload, "pipeline_specs", "pipelineSpecs"), K2_WORKSPACE_PIPELINE_NAME),
+    );
+    status.warnings.push(...workspaceMissingWarnings(status));
+  } catch (error) {
+    status.source = "error";
+    status.warnings.push(`K2 API status lookup failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return status;
+}
+
+function blueprintRows(blueprints) {
+  return blueprints.map(blueprintRow);
+}
+
+function blueprintRow(blueprint) {
+  return {
+    key: blueprint.key || "",
+    name: blueprint.name || "",
+    id: "",
+    status: "expected",
+    description: blueprint.description || "",
+  };
+}
+
+function workspaceRows(blueprints, records, statusKey) {
+  return blueprints.map((blueprint) => rowFromRecord(blueprint, findByName(records, blueprint.name), statusKey));
+}
+
+function rowFromRecord(blueprint, record, statusKey) {
+  if (!record?.id) {
+    return { ...blueprintRow(blueprint), status: "missing" };
+  }
+  return {
+    key: blueprint.key || "",
+    name: record.name || blueprint.name || "",
+    id: record.id || "",
+    status: statusKey ? String(record[statusKey] || "found") : "found",
+    description: record.description || blueprint.description || "",
+  };
+}
+
+function findByName(records, name) {
+  return (records || []).find((record) => record?.name === name) || null;
+}
+
+function listFromPayload(payload, ...keys) {
+  for (const key of keys) {
+    if (Array.isArray(payload?.[key])) return payload[key];
+  }
+  return [];
+}
+
+function workspaceMissingWarnings(status) {
+  const warnings = [];
+  for (const [group, rows] of Object.entries({ corpora: status.corpora, agents: status.agents, feeds: status.feeds })) {
+    for (const row of rows || []) {
+      if (["missing", "unknown"].includes(row.status)) warnings.push(`Missing K2 ${group.slice(0, -1)}: ${row.name}`);
+    }
+  }
+  if (["missing", "unknown"].includes(status.pipeline_spec?.status)) {
+    warnings.push(`Missing K2 pipeline spec: ${status.pipeline_spec.name}`);
+  }
+  return warnings;
 }
 
 async function ensureK2Project(baseUrl, apiKey, name) {

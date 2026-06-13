@@ -1343,6 +1343,50 @@ function renderK2SyncResult(result) {
   </div>`;
 }
 
+function renderK2WorkspaceStatus(status) {
+  const root = $("k2-panel");
+  if (!root) return;
+  root.className = "detail-panel";
+  const warnings = status.warnings || [];
+  root.innerHTML = `<div class="detail-stack">
+    <div class="detail-section">
+      <h2>K2 Workspace</h2>
+      <div class="kv-grid">
+        ${kv("Project", status.project?.name || status.project_name || "")}
+        ${kv("Project status", status.project?.status || "")}
+        ${kv("Source", status.source || "")}
+        ${kv("K2 configured", status.configured ? "yes" : "no")}
+        ${kv("Research corpus", status.research_corpus_id || "not configured")}
+        ${kv("Base URL", status.base_url || "")}
+      </div>
+      ${warnings.length ? `<div class="eval-checks">${warnings.map((warning) => `<span class="status-pill warn-tag">${escapeHtml(warning)}</span>`).join("")}</div>` : ""}
+    </div>
+    ${workspaceStatusSection("Corpora", status.corpora || [])}
+    ${workspaceStatusSection("Agents", status.agents || [])}
+    ${workspaceStatusSection("Feeds", status.feeds || [])}
+    ${workspaceStatusSection("Pipeline", status.pipeline_spec ? [status.pipeline_spec] : [])}
+  </div>`;
+}
+
+function workspaceStatusSection(title, rows) {
+  return `<div class="detail-section">
+    <h2>${escapeHtml(title)}</h2>
+    <div class="workspace-status-list">
+      ${rows.map((row) => {
+        const statusClass = ["found", "active"].includes(row.status) ? "ok-tag" : row.status === "expected" ? "" : "warn-tag";
+        return `<div class="workspace-status-row">
+          <div>
+            <strong>${escapeHtml(row.name || "")}</strong>
+            <small>${escapeHtml(row.description || "")}</small>
+          </div>
+          <span class="status-pill ${statusClass}">${escapeHtml(row.status || "")}</span>
+          <code>${escapeHtml(row.id || "not created")}</code>
+        </div>`;
+      }).join("") || "<p>No K2 workspace records returned.</p>"}
+    </div>
+  </div>`;
+}
+
 function renderEvalPanel(summary = state.evalSummary) {
   const root = $("eval-panel");
   if (!root) return;
@@ -2444,6 +2488,11 @@ $("k2-preview").addEventListener("click", async () => {
   if (!state.currentRun) return;
   state.currentManifest = await api(`/api/runs/${state.currentRun.id}/k2-manifest`);
   renderK2Panel(state.currentManifest);
+});
+
+$("k2-workspace-status").addEventListener("click", async () => {
+  const status = await api("/api/k2-workspace");
+  renderK2WorkspaceStatus(status);
 });
 
 $("k2-export").addEventListener("click", async () => {

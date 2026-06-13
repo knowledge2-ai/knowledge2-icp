@@ -106,6 +106,8 @@ Cloudflare Worker endpoints mirror the dashboard-critical subset:
 - `POST /api/runs`: creates an isolate-local run from selected candidates.
 - `GET /api/runs/{run_id}/prospects(.csv)`: returns Apollo people when
   configured and seeded persona targets as fallback.
+- `GET /api/k2-workspace`: reports the configured K2 project, corpora, agents,
+  feeds, PipelineSpec, research corpus, and missing-resource warnings.
 - `GET /api/runs/{run_id}/k2-manifest`: returns K2-ready metadata documents.
 - `POST /api/runs/{run_id}/k2-sync`: dry-runs or uploads to K2 when
   `K2_API_KEY` is configured and `apply=true`.

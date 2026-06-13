@@ -1220,6 +1220,33 @@ h1 {
   line-height: 1.45;
 }
 
+.workspace-status-list {
+  display: grid;
+  gap: 8px;
+}
+
+.workspace-status-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(80px, auto) minmax(0, 1.4fr);
+  gap: 10px;
+  align-items: center;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.workspace-status-row small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.workspace-status-row code {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .inline-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -1546,6 +1573,7 @@ h1 {
   .criteria-impact-row,
   .expansion-header,
   .expansion-run,
+  .workspace-status-row,
   .account-metrics,
   .workflow-form,
   .feedback-form,

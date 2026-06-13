@@ -58,6 +58,12 @@ class WebApiTest(unittest.TestCase):
                 self.assertIn("provider_status", readiness)
                 self.assertIn("provider_controls", readiness)
 
+                workspace = _json_get(f"{base_url}/api/k2-workspace")
+                self.assertIn(workspace["source"], {"blueprint", "summary"})
+                self.assertIn("corpora", workspace)
+                self.assertGreaterEqual(len(workspace["corpora"]), 5)
+                self.assertFalse(workspace["configured"])
+
                 settings = _json_post(
                     f"{base_url}/api/settings",
                     {
