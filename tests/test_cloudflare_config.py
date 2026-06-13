@@ -81,6 +81,11 @@ class CloudflareConfigTest(unittest.TestCase):
         self.assertIn('action === "quality-feedback"', worker)
         self.assertIn("formatCriteriaMarkdown", worker)
         self.assertIn("lintCriteriaMarkdown", worker)
+        self.assertIn('url.pathname === "/api/settings"', worker)
+        self.assertIn("loadSettings", worker)
+        self.assertIn("saveSettings", worker)
+        self.assertIn("normalizeSettingsPayload", worker)
+        self.assertIn("mergeProviderLimits", worker)
         self.assertIn("replace-with-cloudflare-account-id", raw)
 
         seed = json.loads(Path("icp_engine/web_assets/seed-companies.json").read_text(encoding="utf-8"))

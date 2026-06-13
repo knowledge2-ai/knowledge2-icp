@@ -166,7 +166,6 @@ function renderSeedSummary() {
 function renderSetup() {
   const root = $("setup-grid");
   if (!root) return;
-  const settings = Object.entries(state.settings || {});
   const accounts = state.lists.account_universe || [];
   const verticals = state.lists.priority_verticals || [];
   root.innerHTML = `
@@ -182,9 +181,7 @@ function renderSetup() {
     </section>
     <section class="setup-section">
       <h3>Settings</h3>
-      <div class="settings-grid">
-        ${settings.map(([key, value]) => `${kv(key.replaceAll("_", " "), formatSettingValue(value))}`).join("")}
-      </div>
+      ${settingsEditorMarkup()}
     </section>
     <section class="setup-section">
       <h3>Account List</h3>
@@ -201,6 +198,149 @@ function renderSetup() {
       <h3>Priority Verticals</h3>
       <div class="tag-list">${verticals.map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join("")}</div>
     </section>`;
+  bindSettingsControls();
+}
+
+function settingsEditorMarkup() {
+  const settings = state.settings || {};
+  const limits = settings.provider_limits || {};
+  return `<form id="settings-form" class="settings-editor">
+    <label>
+      Default query
+      <textarea id="settings-default-query" rows="3">${escapeHtml(settings.default_query || "")}</textarea>
+    </label>
+    <div class="inline-grid">
+      ${settingsNumberInput("settings-max-companies", "Max companies", settings.max_companies || 50, 1, 1000)}
+      ${settingsNumberInput("settings-max-pages", "Max pages", settings.max_pages || 6, 0, 100)}
+      ${settingsNumberInput("settings-tier-a", "Tier A", settings.tier_a_threshold || 75, 0, 100)}
+      ${settingsNumberInput("settings-tier-b", "Tier B", settings.tier_b_threshold || 60, 0, 100)}
+    </div>
+    <label>
+      Employee range
+      <input id="settings-employee-range" value="${escapeAttribute(settings.employee_range || "")}" />
+    </label>
+    <div class="settings-toggle-grid">
+      ${settingsCheckbox("settings-fetch", "Fetch evidence", settings.fetch_website_evidence)}
+      ${settingsCheckbox("settings-github", "GitHub metadata", settings.include_github_metadata)}
+      ${settingsCheckbox("settings-apollo", "Apollo enrichment", settings.use_apollo_enrichment)}
+      ${settingsCheckbox("settings-serp", "SERP discovery", settings.use_serp_discovery)}
+      ${settingsCheckbox("settings-provider-limits", "Provider limits", limits.enabled !== false)}
+    </div>
+    <div class="settings-limit-grid">
+      ${settingsLimitInput("daily", "search", "Daily search")}
+      ${settingsLimitInput("daily", "source_scan", "Daily scans")}
+      ${settingsLimitInput("daily", "run", "Daily runs")}
+      ${settingsLimitInput("daily", "apollo_enrichment", "Daily Apollo")}
+      ${settingsLimitInput("daily", "research", "Daily research")}
+      ${settingsLimitInput("rate_per_minute", "search", "Search/min")}
+      ${settingsLimitInput("rate_per_minute", "run", "Runs/min")}
+      ${settingsLimitInput("rate_per_minute", "research", "Research/min")}
+      ${settingsLimitInput("per_run", "max_companies", "Run companies")}
+      ${settingsLimitInput("per_run", "max_pages", "Run pages")}
+    </div>
+    <div class="settings-meta">
+      ${kv("Deployment mode", settings.deployment_mode || "local")}
+    </div>
+    <div class="button-row">
+      <button id="settings-save" type="submit">Save settings</button>
+      <button id="settings-apply-discover" type="button" class="secondary">Apply to Discover</button>
+    </div>
+    <p id="settings-status" class="muted"></p>
+  </form>`;
+}
+
+function settingsNumberInput(id, label, value, min, max) {
+  return `<label>
+    ${escapeHtml(label)}
+    <input id="${escapeAttribute(id)}" type="number" min="${escapeAttribute(min)}" max="${escapeAttribute(max)}" value="${escapeAttribute(value)}" />
+  </label>`;
+}
+
+function settingsCheckbox(id, label, checked) {
+  return `<label class="check-row">
+    <input id="${escapeAttribute(id)}" type="checkbox"${checked ? " checked" : ""} />
+    ${escapeHtml(label)}
+  </label>`;
+}
+
+function settingsLimitInput(group, key, label) {
+  const value = state.settings?.provider_limits?.[group]?.[key] ?? 0;
+  return settingsNumberInput(`settings-limit-${group}-${key}`, label, value, 0, 100000);
+}
+
+function bindSettingsControls() {
+  const form = $("settings-form");
+  if (!form) return;
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await saveSettings();
+  });
+  $("settings-apply-discover").addEventListener("click", applySettingsToDiscovery);
+}
+
+async function saveSettings() {
+  const button = $("settings-save");
+  button.disabled = true;
+  $("settings-status").textContent = "Saving settings...";
+  try {
+    const payload = await api("/api/settings", {
+      method: "POST",
+      body: JSON.stringify(settingsPayloadFromForm()),
+    });
+    state.settings = payload.settings || state.settings;
+    renderSeedSummary();
+    renderSetup();
+    $("settings-status").textContent = "Settings saved.";
+  } catch (error) {
+    $("settings-status").textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function settingsPayloadFromForm() {
+  const daily = {};
+  const ratePerMinute = {};
+  const perRun = {};
+  for (const key of ["search", "source_scan", "run", "apollo_enrichment", "research"]) {
+    daily[key] = Number($(`settings-limit-daily-${key}`).value || 0);
+  }
+  for (const key of ["search", "run", "research"]) {
+    ratePerMinute[key] = Number($(`settings-limit-rate_per_minute-${key}`).value || 0);
+  }
+  for (const key of ["max_companies", "max_pages"]) {
+    perRun[key] = Number($(`settings-limit-per_run-${key}`).value || 0);
+  }
+  return {
+    default_query: $("settings-default-query").value,
+    max_companies: Number($("settings-max-companies").value || 50),
+    max_pages: Number($("settings-max-pages").value || 6),
+    tier_a_threshold: Number($("settings-tier-a").value || 75),
+    tier_b_threshold: Number($("settings-tier-b").value || 60),
+    employee_range: $("settings-employee-range").value,
+    fetch_website_evidence: $("settings-fetch").checked,
+    include_github_metadata: $("settings-github").checked,
+    use_apollo_enrichment: $("settings-apollo").checked,
+    use_serp_discovery: $("settings-serp").checked,
+    provider_limits: {
+      enabled: $("settings-provider-limits").checked,
+      daily,
+      rate_per_minute: ratePerMinute,
+      per_run: perRun,
+    },
+  };
+}
+
+function applySettingsToDiscovery() {
+  const payload = settingsPayloadFromForm();
+  $("query").value = payload.default_query || "";
+  $("max-companies").value = payload.max_companies;
+  $("max-pages").value = payload.max_pages;
+  $("fetch").checked = payload.fetch_website_evidence;
+  $("github").checked = payload.include_github_metadata;
+  $("apollo").checked = payload.use_apollo_enrichment;
+  $("settings-status").textContent = "Applied to Discover.";
+  clearCandidatePreview();
 }
 
 function renderSources() {
@@ -322,12 +462,6 @@ async function scanSource(sourceId) {
   } finally {
     if (button) button.textContent = "Scan";
   }
-}
-
-function formatSettingValue(value) {
-  if (typeof value === "boolean") return value ? "on" : "off";
-  if (Array.isArray(value)) return value.join(", ");
-  return String(value ?? "");
 }
 
 function runOptionsPayload() {

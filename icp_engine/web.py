@@ -72,6 +72,9 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
             if parsed.path == "/api/state":
                 self._send_json(app.store.state())
                 return
+            if parsed.path == "/api/settings":
+                self._send_json({"settings": app.store.load_settings()})
+                return
             if parsed.path == "/api/criteria/versions":
                 self._send_json({"versions": app.store.list_criteria_versions(), "current_hash": app.store.load_criteria().get("hash")})
                 return
@@ -249,6 +252,15 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                     self._send_json({"error": "Criteria version not found."}, status=HTTPStatus.NOT_FOUND)
                     return
                 self._send_json({"criteria": criteria, "versions": app.store.list_criteria_versions(), "lint": app.store.lint_criteria(criteria["markdown"])})
+                return
+            if parsed.path == "/api/settings":
+                payload = self._read_json()
+                try:
+                    settings = app.store.save_settings(payload)
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_json({"settings": settings, "provider_controls": app.store.provider_usage_summary()})
                 return
             if parsed.path == "/api/lead-views":
                 payload = self._read_json()

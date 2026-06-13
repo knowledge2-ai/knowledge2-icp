@@ -1214,7 +1214,6 @@ h1 {
 }
 
 .seed-summary,
-.settings-grid,
 .setup-grid {
   display: grid;
   gap: 12px;
@@ -1327,9 +1326,33 @@ h1 {
 }
 
 .prompt-list,
-.account-list {
+.account-list,
+.settings-editor {
   display: grid;
   gap: 10px;
+}
+
+.settings-toggle-grid,
+.settings-limit-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-toggle-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.settings-limit-grid {
+  grid-template-columns: repeat(5, minmax(110px, 1fr));
+}
+
+.settings-limit-grid label {
+  min-width: 0;
+}
+
+.settings-meta {
+  display: grid;
+  gap: 8px;
 }
 
 .prompt-item,
@@ -1425,6 +1448,8 @@ h1 {
   .lead-toolbar,
   .bulk-toolbar,
   .lead-pagination,
+  .settings-toggle-grid,
+  .settings-limit-grid,
   .account-metrics,
   .workflow-form,
   .feedback-form,

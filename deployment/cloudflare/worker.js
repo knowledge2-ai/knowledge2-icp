@@ -186,6 +186,7 @@ const runtime = {
   criteriaVersions: [],
   runs: new Map(),
   seedLists: null,
+  settings: null,
   leadStates: new Map(),
   leadViews: [],
   sources: null,
@@ -251,6 +252,20 @@ async function handleApiRequest(request, env, url) {
 
   if (method === "GET" && url.pathname === "/api/state") {
     return json(await currentState(env, lists));
+  }
+
+  if (method === "GET" && url.pathname === "/api/settings") {
+    return json({ settings: await loadSettings(env) });
+  }
+
+  if (method === "POST" && url.pathname === "/api/settings") {
+    const payload = await readJson(request);
+    try {
+      const settings = await saveSettings(env, payload);
+      return json({ settings, provider_controls: await providerControls(env) });
+    } catch (error) {
+      return json({ error: error.message || String(error) }, 400);
+    }
   }
 
   if (method === "GET" && url.pathname === "/api/lead-views") {
@@ -651,7 +666,7 @@ async function currentState(env, lists) {
     criteria,
     criteria_versions: await criteriaVersions(env),
     prompts: clone(SEED_PROMPTS),
-    settings: clone(SEED_SETTINGS),
+    settings: await loadSettings(env),
     lists: clone(lists),
     runs,
     lead_views: await loadLeadViews(env),
@@ -829,6 +844,108 @@ async function sourceCoverage(env, lists) {
   };
 }
 
+async function loadSettings(env) {
+  if (env?.ICP_STATE?.get) {
+    const stored = await getStateJson(env, "settings", null);
+    if (stored && typeof stored === "object" && !Array.isArray(stored)) {
+      runtime.settings = mergeSettings(stored);
+      return runtime.settings;
+    }
+  }
+  if (!runtime.settings) runtime.settings = mergeSettings({});
+  return runtime.settings;
+}
+
+async function saveSettings(env, payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("Settings payload must be an object.");
+  }
+  const current = await loadSettings(env);
+  runtime.settings = normalizeSettingsPayload(payload, current);
+  await putStateJson(env, "settings", runtime.settings);
+  return runtime.settings;
+}
+
+function mergeSettings(overrides) {
+  const settings = { ...clone(SEED_SETTINGS), ...(overrides && typeof overrides === "object" ? clone(overrides) : {}) };
+  settings.provider_limits = mergeProviderLimits(settings.provider_limits);
+  return settings;
+}
+
+function normalizeSettingsPayload(payload, current) {
+  const nextSettings = mergeSettings(current || {});
+  for (const key of ["default_query", "employee_range"]) {
+    if (key in payload) nextSettings[key] = String(payload[key] || "").trim().replace(/\s+/g, " ");
+  }
+  for (const key of ["fetch_website_evidence", "include_github_metadata", "use_apollo_enrichment", "use_serp_discovery"]) {
+    if (key in payload) nextSettings[key] = coerceBoolean(payload[key], Boolean(nextSettings[key]));
+  }
+  const intFields = {
+    max_companies: [1, 1000],
+    max_pages: [0, 100],
+    tier_a_threshold: [0, 100],
+    tier_b_threshold: [0, 100],
+  };
+  for (const [key, [minimum, maximum]] of Object.entries(intFields)) {
+    if (key in payload) nextSettings[key] = boundedInteger(payload[key], Number(nextSettings[key] || minimum), minimum, maximum);
+  }
+  if (payload.provider_limits && typeof payload.provider_limits === "object" && !Array.isArray(payload.provider_limits)) {
+    nextSettings.provider_limits = normalizeProviderLimits(payload.provider_limits, nextSettings.provider_limits);
+  }
+  return mergeSettings(nextSettings);
+}
+
+function mergeProviderLimits(overrides) {
+  const base = clone(SEED_SETTINGS.provider_limits || {});
+  if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) return base;
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value && typeof value === "object" && !Array.isArray(value) && base[key] && typeof base[key] === "object") {
+      base[key] = { ...base[key], ...value };
+    } else {
+      base[key] = value;
+    }
+  }
+  return base;
+}
+
+function normalizeProviderLimits(payload, current) {
+  const limits = mergeProviderLimits(current);
+  if ("enabled" in payload) limits.enabled = coerceBoolean(payload.enabled, limits.enabled !== false);
+  for (const group of ["daily", "rate_per_minute"]) {
+    if (!payload[group] || typeof payload[group] !== "object" || Array.isArray(payload[group])) continue;
+    const currentGroup = limits[group] && typeof limits[group] === "object" ? limits[group] : {};
+    limits[group] = { ...currentGroup };
+    for (const [key, value] of Object.entries(payload[group])) {
+      limits[group][key] = boundedInteger(value, Number(currentGroup[key] || 0), 0, 100000);
+    }
+  }
+  if (payload.per_run && typeof payload.per_run === "object" && !Array.isArray(payload.per_run)) {
+    const currentPerRun = limits.per_run && typeof limits.per_run === "object" ? limits.per_run : {};
+    limits.per_run = { ...currentPerRun };
+    for (const [key, value] of Object.entries(payload.per_run)) {
+      limits.per_run[key] = boundedInteger(value, Number(currentPerRun[key] || 0), 0, 10000);
+    }
+  }
+  return mergeProviderLimits(limits);
+}
+
+function boundedInteger(value, fallback, minimum, maximum) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) throw new Error(`Expected an integer between ${minimum} and ${maximum}.`);
+  return Math.max(minimum, Math.min(Math.trunc(number), maximum));
+}
+
+function coerceBoolean(value, fallback) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const lowered = value.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(lowered)) return true;
+    if (["false", "0", "no", "off"].includes(lowered)) return false;
+  }
+  if (value === null || value === undefined) return Boolean(fallback);
+  return Boolean(value);
+}
+
 function normalizeSourceType(value) {
   const type = String(value || "serp_query").trim().toLowerCase().replaceAll("-", "_").replaceAll(" ", "_");
   if (!["serp_query", "portfolio_url", "manual_seed", "apollo_query"].includes(type)) throw new Error(`Invalid source type: ${value}.`);
@@ -860,6 +977,7 @@ function countByKey(items, key) {
 
 async function providerControls(env) {
   const events = await loadProviderUsage(env);
+  const settings = await loadSettings(env);
   const today = nowIso().slice(0, 10);
   const allowed = events.filter(
     (event) => event.created_at.startsWith(today) && event.status === "allowed",
@@ -868,7 +986,7 @@ async function providerControls(env) {
     (event) => event.created_at.startsWith(today) && event.status === "denied",
   );
   return {
-    policy: clone(SEED_SETTINGS.provider_limits),
+    policy: clone(settings.provider_limits || SEED_SETTINGS.provider_limits),
     today,
     allowed_counts: providerAmountsByAction(allowed),
     denied_counts: providerAmountsByAction(denied),
@@ -881,7 +999,8 @@ async function authorizeProviderAction(env, action, options = {}) {
   const requestedAmount = Number(options.amount || 1);
   const amount = Number.isFinite(requestedAmount) ? Math.max(1, requestedAmount) : 1;
   const details = options.details && typeof options.details === "object" ? options.details : {};
-  const policy = SEED_SETTINGS.provider_limits || {};
+  const settings = await loadSettings(env);
+  const policy = settings.provider_limits || SEED_SETTINGS.provider_limits || {};
   if (!policy.enabled) {
     const event = await recordProviderUsage(
       env,

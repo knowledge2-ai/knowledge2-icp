@@ -127,6 +127,15 @@ runs, Apollo enrichment, research, and K2 sync actions are audited under
 `provider_action.allowed` or `provider_action.denied`; denied actions return
 HTTP `429` with a `provider_control` payload describing the limit.
 
+Workspace settings can be edited from the Setup tab or saved through the API:
+
+```bash
+curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"default_query":"fleet workflow data limited AI positioning","max_companies":50,"provider_limits":{"daily":{"search":200},"per_run":{"max_companies":100}}}' \
+  http://127.0.0.1:8765/api/settings
+```
+
 Lead workflow state is stored under `out/app_state` and survives server
 restarts. API clients can mark leads as `New`, `Review`, `Qualified`,
 `Rejected`, or `Exported`, bulk update lead status, save filtered lead views,

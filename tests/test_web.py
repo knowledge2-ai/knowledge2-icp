@@ -58,6 +58,26 @@ class WebApiTest(unittest.TestCase):
                 self.assertIn("provider_status", readiness)
                 self.assertIn("provider_controls", readiness)
 
+                settings = _json_post(
+                    f"{base_url}/api/settings",
+                    {
+                        "default_query": "fleet workflow data limited AI positioning",
+                        "max_companies": 42,
+                        "max_pages": 7,
+                        "fetch_website_evidence": False,
+                        "provider_limits": {
+                            "daily": {"search": 17},
+                            "rate_per_minute": {"research": 9},
+                            "per_run": {"max_companies": 42},
+                        },
+                    },
+                )
+                self.assertEqual(settings["settings"]["default_query"], "fleet workflow data limited AI positioning")
+                self.assertEqual(settings["settings"]["max_companies"], 42)
+                self.assertFalse(settings["settings"]["fetch_website_evidence"])
+                self.assertEqual(settings["settings"]["provider_limits"]["daily"]["search"], 17)
+                self.assertEqual(_json_get(f"{base_url}/api/settings")["settings"]["max_pages"], 7)
+
                 updated = _json_post(f"{base_url}/api/criteria", {"markdown": "# ICP  \n\n* Test"})
                 self.assertEqual(updated["criteria"]["markdown"], "# ICP\n\n- Test\n")
                 self.assertIn("versions", updated)

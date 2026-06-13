@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -120,7 +121,47 @@ class AppStore:
         value = _load_json_file(self.settings_path, dict)
         if value is None:
             return dict(SEEDED_SETTINGS)
-        return {**SEEDED_SETTINGS, **value}
+        settings = {**SEEDED_SETTINGS, **value}
+        settings["provider_limits"] = _deep_merge_provider_limits(
+            SEEDED_SETTINGS.get("provider_limits", {}),
+            settings.get("provider_limits", {}),
+        )
+        return settings
+
+    def save_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.ensure()
+        if not isinstance(payload, dict):
+            raise ValueError("Settings payload must be an object.")
+        current = self.load_settings()
+        next_settings = deepcopy(current)
+        for key in ("default_query", "employee_range"):
+            if key in payload:
+                next_settings[key] = " ".join(str(payload.get(key) or "").split())
+        for key in ("fetch_website_evidence", "include_github_metadata", "use_apollo_enrichment", "use_serp_discovery"):
+            if key in payload:
+                next_settings[key] = _coerce_bool(payload[key], bool(current.get(key, False)))
+        int_fields = {
+            "max_companies": (1, 1000),
+            "max_pages": (0, 100),
+            "tier_a_threshold": (0, 100),
+            "tier_b_threshold": (0, 100),
+        }
+        for key, (minimum, maximum) in int_fields.items():
+            if key in payload:
+                next_settings[key] = _bounded_int(payload[key], int(current.get(key) or minimum), minimum, maximum)
+        if isinstance(payload.get("provider_limits"), dict):
+            next_settings["provider_limits"] = _normalize_provider_limits(
+                payload["provider_limits"],
+                current.get("provider_limits", {}),
+            )
+        self.settings_path.write_text(json.dumps(next_settings, indent=2, sort_keys=True), encoding="utf-8")
+        self.append_audit_event(
+            "settings.saved",
+            subject_type="settings",
+            subject_id="workspace",
+            details={"keys": sorted(payload.keys())},
+        )
+        return self.load_settings()
 
     def load_lists(self) -> dict[str, Any]:
         self.ensure()
@@ -1146,6 +1187,57 @@ def _deep_merge_provider_limits(defaults: Any, overrides: Any) -> dict[str, Any]
         else:
             base[key] = value
     return base
+
+
+def _normalize_provider_limits(payload: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+    limits = _deep_merge_provider_limits(SEEDED_SETTINGS.get("provider_limits", {}), current)
+    if "enabled" in payload:
+        limits["enabled"] = _coerce_bool(payload["enabled"], bool(limits.get("enabled", True)))
+    for group in ("daily", "rate_per_minute"):
+        values = payload.get(group)
+        if not isinstance(values, dict):
+            continue
+        current_group = limits.get(group, {}) if isinstance(limits.get(group), dict) else {}
+        limits[group] = {
+            **current_group,
+            **{
+                str(key): _bounded_int(value, int(current_group.get(str(key), 0) or 0), 0, 100000)
+                for key, value in values.items()
+            },
+        }
+    per_run = payload.get("per_run")
+    if isinstance(per_run, dict):
+        current_per_run = limits.get("per_run", {}) if isinstance(limits.get("per_run"), dict) else {}
+        limits["per_run"] = {
+            **current_per_run,
+            **{
+                str(key): _bounded_int(value, int(current_per_run.get(str(key), 0) or 0), 0, 10000)
+                for key, value in per_run.items()
+            },
+        }
+    return _deep_merge_provider_limits(SEEDED_SETTINGS.get("provider_limits", {}), limits)
+
+
+def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Expected an integer between {minimum} and {maximum}.") from exc
+    return max(minimum, min(number, maximum))
+
+
+def _coerce_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+    if value is None:
+        return default
+    return bool(value)
 
 
 def _normalize_provider_action(action: str) -> str:
