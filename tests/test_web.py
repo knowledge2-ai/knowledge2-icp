@@ -64,6 +64,11 @@ class WebApiTest(unittest.TestCase):
                 self.assertGreaterEqual(len(workspace["corpora"]), 5)
                 self.assertFalse(workspace["configured"])
 
+                workspace_state = _json_get(f"{base_url}/api/workspace-state")
+                self.assertTrue(workspace_state["durable"])
+                self.assertEqual(workspace_state["store"], "local-files")
+                self.assertIn("runs", {item["key"] for item in workspace_state["collections"]})
+
                 settings = _json_post(
                     f"{base_url}/api/settings",
                     {

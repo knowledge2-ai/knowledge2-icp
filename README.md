@@ -64,6 +64,11 @@ container binds such as `0.0.0.0` require `ICP_ADMIN_TOKEN` unless
 `--allow-open-api` or `ICP_ALLOW_OPEN_API=true` is set for an isolated local
 network.
 
+Workspace durability is visible through the Setup tab and `GET
+/api/workspace-state`. Local runs report file-backed state under
+`out/app_state`; Cloudflare runs report whether the `ICP_STATE` KV binding is
+present and which collections have persisted records.
+
 K2 sync is dry-run by default:
 
 ```bash

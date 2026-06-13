@@ -24,6 +24,22 @@ const K2_WORKSPACE_FEEDS = [
   { key: "candidate_to_evidence", name: "ICP Candidate Qualification Feed", description: "Reactive qualification of candidate accounts into scored evidence records." },
   { key: "prospect_expansion", name: "ICP Prospect Expansion Feed", description: "Reactive normalization of prospect records and fallback personas into a role tree." },
 ];
+const STATE_COLLECTIONS = [
+  { key: "criteria", type: "object" },
+  { key: "criteria_versions", type: "array" },
+  { key: "settings", type: "object" },
+  { key: "sources", type: "array" },
+  { key: "source_scans", type: "array" },
+  { key: "expansion_runs", type: "array" },
+  { key: "provider_usage", type: "array" },
+  { key: "runs", type: "array" },
+  { key: "lead_states", type: "object" },
+  { key: "lead_views", type: "array" },
+  { key: "quality_feedback", type: "array" },
+  { key: "outreach_statuses", type: "object" },
+  { key: "eval_cases", type: "array" },
+  { key: "eval_runs", type: "array" },
+];
 const BLOCKED_DISCOVERY_HOSTS = new Set([
   "bing.com",
   "capterra.com",
@@ -284,6 +300,10 @@ async function handleApiRequest(request, env, url) {
 
   if (method === "GET" && url.pathname === "/api/state") {
     return json(await currentState(env, lists));
+  }
+
+  if (method === "GET" && url.pathname === "/api/workspace-state") {
+    return json(await workspaceStateStatus(env));
   }
 
   if (method === "GET" && url.pathname === "/api/settings") {
@@ -747,6 +767,7 @@ async function currentState(env, lists) {
     outreach_summary: await workspaceOutreachSummary(env, lists),
     eval_summary: evalSummary(await listEvalRuns(env)),
     provider_status: providerStatus(env),
+    workspace_state: await workspaceStateStatus(env),
     latest_run: await loadRun(env, runs[0]?.id || SEED_RUN_ID, lists),
   };
 }
@@ -1894,6 +1915,75 @@ async function putStateJson(env, key, value) {
   if (env?.ICP_STATE?.put) {
     await env.ICP_STATE.put(key, JSON.stringify(value));
   }
+}
+
+async function workspaceStateStatus(env) {
+  const durable = Boolean(env?.ICP_STATE?.get && env?.ICP_STATE?.put);
+  const collections = [];
+  for (const collection of STATE_COLLECTIONS) {
+    collections.push(await stateCollectionStatus(env, collection));
+  }
+  return {
+    durable,
+    store: durable ? "cloudflare-kv" : "runtime-memory",
+    collections,
+    warnings: durable ? [] : ["ICP_STATE KV binding is missing; Worker state is isolate-memory only."],
+  };
+}
+
+async function stateCollectionStatus(env, collection) {
+  if (env?.ICP_STATE?.get) {
+    const stored = await getStateJson(env, collection.key, null);
+    return {
+      key: collection.key,
+      type: collection.type,
+      persisted: stored !== null && stored !== undefined,
+      count: stateCollectionCount(collection.key, stored),
+    };
+  }
+  return {
+    key: collection.key,
+    type: collection.type,
+    persisted: false,
+    count: stateCollectionCount(collection.key, runtimeStateValue(collection.key)),
+  };
+}
+
+function stateCollectionCount(key, value) {
+  if (value === null || value === undefined) return 0;
+  if (Array.isArray(value)) return value.length;
+  if (typeof value === "object") {
+    if (key === "criteria" || key === "settings") return 1;
+    if (key === "lead_states") {
+      return Object.values(value).reduce((sum, states) => sum + (states && typeof states === "object" ? Object.keys(states).length : 0), 0);
+    }
+    if (key === "outreach_statuses") {
+      return Object.values(value).reduce((sum, statuses) => sum + (statuses && typeof statuses === "object" ? Object.keys(statuses).length : 0), 0);
+    }
+    return Object.keys(value).length;
+  }
+  return 0;
+}
+
+function runtimeStateValue(key) {
+  if (key === "runs") return Array.from(runtime.runs.values());
+  if (key === "lead_states") {
+    return Object.fromEntries([...runtime.leadStates.entries()].map(([runId, states]) => [runId, Object.fromEntries(states.entries())]));
+  }
+  return {
+    criteria: runtime.criteria,
+    criteria_versions: runtime.criteriaVersions,
+    settings: runtime.settings,
+    sources: runtime.sources,
+    source_scans: runtime.sourceScans,
+    expansion_runs: runtime.expansionRuns,
+    provider_usage: runtime.providerUsage,
+    lead_views: runtime.leadViews,
+    quality_feedback: runtime.qualityFeedback,
+    outreach_statuses: runtime.outreachStatuses,
+    eval_cases: runtime.evalCases,
+    eval_runs: runtime.evalRuns,
+  }[key];
 }
 
 async function loadQualityFeedback(env) {

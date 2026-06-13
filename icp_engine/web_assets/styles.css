@@ -1444,6 +1444,38 @@ h1 {
   font-size: 0.95rem;
 }
 
+.section-minihead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.section-minihead h3 {
+  margin: 0;
+}
+
+.workspace-state-panel,
+.workspace-state-list {
+  display: grid;
+  gap: 8px;
+}
+
+.workspace-state-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) minmax(90px, auto) minmax(40px, auto);
+  gap: 8px;
+  align-items: center;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.workspace-state-row code {
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-align: right;
+}
+
 .prompt-list,
 .account-list,
 .settings-editor {
@@ -1574,6 +1606,7 @@ h1 {
   .expansion-header,
   .expansion-run,
   .workspace-status-row,
+  .workspace-state-row,
   .account-metrics,
   .workflow-form,
   .feedback-form,

@@ -1116,7 +1116,39 @@ class AppStore:
             "eval_summary": self.eval_summary(),
             "audit_log": self.list_audit_events(limit=25),
             "provider_status": provider_status(),
+            "workspace_state": self.workspace_state_status(),
             "latest_run": latest_run,
+        }
+
+    def workspace_state_status(self) -> dict[str, Any]:
+        self.ensure()
+        return {
+            "durable": True,
+            "store": "local-files",
+            "state_dir": str(self.state_dir),
+            "collections": [
+                _local_collection_status("criteria", self.criteria_path, "object"),
+                _local_collection_status("criteria_versions", self.criteria_versions_path, "array"),
+                _local_collection_status("settings", self.settings_path, "object"),
+                _local_collection_status("sources", self.sources_path, "array"),
+                _local_collection_status("source_scans", self.source_scans_path, "array"),
+                _local_collection_status("expansion_runs", self.expansion_runs_path, "array"),
+                _local_collection_status("provider_usage", self.provider_usage_path, "array"),
+                {
+                    "key": "runs",
+                    "persisted": self.index_path.exists(),
+                    "count": len([item for item in self.list_runs() if item.get("id") != SEED_RUN_ID]),
+                    "path": str(self.index_path),
+                    "type": "array",
+                },
+                _local_collection_status("lead_states", self.lead_states_path, "object"),
+                _local_collection_status("lead_views", self.lead_views_path, "array"),
+                _local_collection_status("quality_feedback", self.quality_feedback_path, "array"),
+                _local_collection_status("outreach_statuses", self.outreach_status_path, "object"),
+                _local_collection_status("eval_cases", self.eval_cases_path, "array"),
+                _local_collection_status("eval_runs", self.eval_runs_path, "array"),
+            ],
+            "warnings": [],
         }
 
     def _provider_action_denial(
@@ -1295,6 +1327,26 @@ def _load_json_file(path: Path, expected_type: type) -> Any | None:
     except json.JSONDecodeError:
         return None
     return value if isinstance(value, expected_type) else None
+
+
+def _local_collection_status(key: str, path: Path, expected: str) -> dict[str, Any]:
+    expected_type = list if expected == "array" else dict
+    value = _load_json_file(path, expected_type)
+    if expected == "object" and key == "criteria" and path.exists():
+        count = 1
+    elif isinstance(value, list):
+        count = len(value)
+    elif isinstance(value, dict):
+        count = len(value)
+    else:
+        count = 0
+    return {
+        "key": key,
+        "persisted": path.exists(),
+        "count": count,
+        "path": str(path),
+        "type": expected,
+    }
 
 
 def _deep_merge_provider_limits(defaults: Any, overrides: Any) -> dict[str, Any]:

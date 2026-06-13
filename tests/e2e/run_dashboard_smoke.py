@@ -128,6 +128,8 @@ def main() -> int:
                 expect(page.locator("#setup-grid")).to_contain_text("Mojio", timeout=timeout)
                 expect(page.locator("#setup-grid")).to_contain_text("Advanced Utility Systems", timeout=timeout)
                 expect(page.locator("#setup-grid")).to_contain_text("cloudflare-seeded-worker", timeout=timeout)
+                expect(page.locator("#setup-grid")).to_contain_text("Workspace State", timeout=timeout)
+                expect(page.locator("#workspace-state-panel")).to_contain_text("local-files", timeout=timeout)
                 expect(page.locator("#settings-form")).to_be_visible(timeout=timeout)
                 page.locator("#settings-default-query").fill("smoke workflow data weak AI positioning")
                 page.locator("#settings-max-companies").fill("43")

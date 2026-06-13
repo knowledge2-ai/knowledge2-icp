@@ -27,6 +27,9 @@ class AppStoreTest(unittest.TestCase):
             self.assertIn("ServiceTitan", companies)
             self.assertIn("provider_controls", state)
             self.assertTrue(state["provider_controls"]["policy"]["enabled"])
+            self.assertTrue(state["workspace_state"]["durable"])
+            self.assertEqual(state["workspace_state"]["store"], "local-files")
+            self.assertIn("runs", {item["key"] for item in state["workspace_state"]["collections"]})
             self.assertEqual(state["quality_feedback_summary"]["total"], 0)
             self.assertEqual(state["latest_run"]["id"], "run-seeded-icp")
             self.assertGreaterEqual(len(state["latest_run"]["leads"]), 428)
@@ -86,6 +89,10 @@ class AppStoreTest(unittest.TestCase):
             self.assertEqual(store.load_run("run-123")["query"], "fleet software")
             self.assertEqual(store.list_runs()[0]["top_score"], 81)
             self.assertEqual(store.state()["latest_run"]["id"], "run-123")
+            workspace_state = store.workspace_state_status()
+            runs = next(item for item in workspace_state["collections"] if item["key"] == "runs")
+            self.assertTrue(runs["persisted"])
+            self.assertEqual(runs["count"], 1)
 
     def test_lead_workflow_state_views_and_audit_log_are_durable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

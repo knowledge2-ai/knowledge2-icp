@@ -73,6 +73,9 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
             if parsed.path == "/api/state":
                 self._send_json(app.store.state())
                 return
+            if parsed.path == "/api/workspace-state":
+                self._send_json(app.store.workspace_state_status())
+                return
             if parsed.path == "/api/settings":
                 self._send_json({"settings": app.store.load_settings()})
                 return

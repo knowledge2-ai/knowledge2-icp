@@ -19,6 +19,7 @@ const state = {
   sourceCoverage: {},
   qualityFeedbackSummary: {},
   evalSummary: {},
+  workspaceState: {},
   leadViews: [],
   selectedLeadIds: new Set(),
   leadPage: 1,
@@ -85,6 +86,7 @@ async function loadState() {
   state.sourceCoverage = payload.source_coverage || {};
   state.qualityFeedbackSummary = payload.quality_feedback_summary || {};
   state.evalSummary = payload.eval_summary || {};
+  state.workspaceState = payload.workspace_state || {};
   state.leadViews = payload.lead_views || [];
   applySeededDefaults();
   renderSeedSummary();
@@ -186,6 +188,13 @@ function renderSetup() {
       ${settingsEditorMarkup()}
     </section>
     <section class="setup-section">
+      <div class="section-minihead">
+        <h3>Workspace State</h3>
+        <button id="refresh-workspace-state" type="button" class="secondary">Refresh</button>
+      </div>
+      ${workspaceStateMarkup(state.workspaceState)}
+    </section>
+    <section class="setup-section">
       <h3>Account List</h3>
       <div class="account-list">
         ${accounts.map((item) => `<article class="account-item">
@@ -201,6 +210,30 @@ function renderSetup() {
       <div class="tag-list">${verticals.map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join("")}</div>
     </section>`;
   bindSettingsControls();
+  $("refresh-workspace-state")?.addEventListener("click", refreshWorkspaceState);
+}
+
+function workspaceStateMarkup(workspaceState = {}) {
+  const collections = workspaceState.collections || [];
+  return `<div id="workspace-state-panel" class="workspace-state-panel">
+    <div class="kv-grid compact">
+      ${kv("Store", workspaceState.store || "unknown")}
+      ${kv("Durable", workspaceState.durable ? "yes" : "no")}
+    </div>
+    ${(workspaceState.warnings || []).length ? `<div class="eval-checks">${workspaceState.warnings.map((warning) => `<span class="status-pill warn-tag">${escapeHtml(warning)}</span>`).join("")}</div>` : ""}
+    <div class="workspace-state-list">
+      ${collections.map((item) => `<div class="workspace-state-row">
+        <strong>${escapeHtml(item.key || "")}</strong>
+        <span class="status-pill ${item.persisted ? "ok-tag" : "warn-tag"}">${item.persisted ? "persisted" : "seed/runtime"}</span>
+        <code>${escapeHtml(item.count ?? 0)}</code>
+      </div>`).join("") || "<p class=\"muted\">No workspace state collections reported.</p>"}
+    </div>
+  </div>`;
+}
+
+async function refreshWorkspaceState() {
+  state.workspaceState = await api("/api/workspace-state");
+  renderSetup();
 }
 
 function settingsEditorMarkup() {

@@ -102,6 +102,9 @@ Cloudflare Worker endpoints mirror the dashboard-critical subset:
 
 - `GET /api/state`: returns seeded criteria, prompts, settings, lists, runs,
   provider status, and latest run.
+- `GET /api/workspace-state`: reports `ICP_STATE` KV durability and persisted
+  collection counts for runs, settings, sources, workflow state, evals, and
+  feedback.
 - `POST /api/search`: returns seeded/manual candidate lists.
 - `POST /api/runs`: creates an isolate-local run from selected candidates.
 - `GET /api/runs/{run_id}/prospects(.csv)`: returns Apollo people when
