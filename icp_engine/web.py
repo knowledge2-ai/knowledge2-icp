@@ -530,6 +530,15 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                     if not apollo_guard["allowed"]:
                         self._send_provider_denied(apollo_guard)
                         return
+                if _outreach_mode_is_claude(app.store):
+                    outreach_guard = app.store.authorize_provider_action(
+                        "outreach",
+                        amount=max_companies,
+                        details={"max_companies": max_companies, "source": "run"},
+                    )
+                    if not outreach_guard["allowed"]:
+                        self._send_provider_denied(outreach_guard)
+                        return
                 try:
                     run = app.pipeline.create_run(
                         query=str(payload.get("query", "")),
@@ -966,6 +975,15 @@ def _discovery_provider_is_metered(store: AppStore) -> bool:
     if provider == "auto":
         return bool(os.environ.get("PERPLEXITY_API_KEY"))
     return False
+
+
+def _outreach_mode_is_claude(store: AppStore) -> bool:
+    """True when outreach is set to Claude personalization (the metered path).
+
+    The ``template`` default is deterministic and free; only ``claude`` calls the
+    paid model, so only it draws against the ``outreach`` budget.
+    """
+    return str(store.load_settings().get("outreach_mode") or "template").strip().lower() == "claude"
 
 
 def _candidate_payloads(candidates: list[Any]) -> list[dict[str, Any]]:

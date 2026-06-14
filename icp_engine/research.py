@@ -8,6 +8,7 @@ from typing import Any, Callable
 from .apollo import ApolloClient
 from .app_store import AppStore, now_iso
 from .claude import ClaudeUnavailable, classify_with_claude
+from .claude_outreach import generate_outreach
 from .criteria import build_criteria_profile
 from .discovery import DiscoveryCandidate, discover_companies_from_url, parse_seed_companies, research_discovery
 from .enrichment import fetch_company_evidence, normalize_domain
@@ -36,6 +37,7 @@ class ResearchPipeline:
         apollo_client: ApolloClient | None = None,
         k2_backend: K2Backend | None = None,
         classifier: Classifier | None = None,
+        outreach_generator: Callable[..., dict[str, str]] | None = None,
     ) -> None:
         self.store = store
         self.evidence_fetcher = evidence_fetcher
@@ -44,6 +46,7 @@ class ResearchPipeline:
         self.apollo = apollo_client or ApolloClient.from_env()
         self.k2 = k2_backend or K2Backend()
         self.classifier = classifier
+        self.outreach_generator = outreach_generator
 
     def discover(
         self,
@@ -119,9 +122,13 @@ class ResearchPipeline:
             source=str(criteria.get("source", "")),
             criteria_hash=str(criteria.get("hash", "")),
         )
-        qualifier = _resolve_qualifier(self.store.load_settings())
+        settings = self.store.load_settings()
+        qualifier = _resolve_qualifier(settings)
+        outreach_mode = _resolve_outreach_mode(settings)
         qualifier_warned = False
+        outreach_warned = False
         qualified_count = 0
+        outreach_count = 0
         run_id = f"run-{uuid.uuid4().hex[:10]}"
         if candidate_payloads is None:
             candidates, warnings, discovery_provider = self.discover(
@@ -166,6 +173,16 @@ class ResearchPipeline:
                     domain=company.domain,
                     titles=strategy.get("apollo_titles", []),
                 )
+            if outreach_mode == "claude":
+                messages, outreach_warning = self._generate_outreach(
+                    run_id, company, evidence, strategy, criteria_markdown
+                )
+                if messages:
+                    metadata["outreach_messages"] = messages
+                    outreach_count += len(messages)
+                if outreach_warning and not outreach_warned:
+                    warnings.append(outreach_warning)
+                    outreach_warned = True
 
             leads.append(
                 {
@@ -216,6 +233,13 @@ class ResearchPipeline:
                 amount=1,
                 details={"provider": discovery_provider, "query": query},
             )
+        if outreach_count:
+            self.store.record_provider_usage(
+                "outreach",
+                status="allowed",
+                amount=outreach_count,
+                details={"mode": outreach_mode, "criteria_hash": criteria["hash"]},
+            )
         run["k2"] = self.k2.sync_run(run)
         self.store.save_run(run)
         return run
@@ -237,6 +261,65 @@ class ResearchPipeline:
             return None, f"Claude qualifier unavailable; scored with rules instead ({exc})."
         except Exception as exc:  # noqa: BLE001 - never fail a run because the judge is down
             return None, f"Claude qualifier failed; scored with rules instead ({exc})."
+
+    def _generate_outreach(
+        self,
+        run_id: str,
+        company: CompanyInput,
+        evidence: list[Evidence],
+        strategy: dict[str, Any],
+        criteria_markdown: str,
+    ) -> tuple[dict[str, dict[str, str]], str | None]:
+        """Draft Claude-personalized outreach per buying-committee role.
+
+        Each role's message is grounded in the scraped evidence plus best-effort
+        K2-retrieved account context (the Claude + K2 hybrid). On the first
+        ``ClaudeUnavailable`` the lead is left clean so the deterministic template
+        in ``outreach.py`` renders instead — a run never fails on outreach.
+        """
+        committee = strategy.get("committee") or []
+        if not isinstance(committee, list) or not committee:
+            return {}, None
+        generator = self.outreach_generator or generate_outreach
+        run_stub = {"id": run_id}
+        messages: dict[str, dict[str, str]] = {}
+        for role in committee[:3]:
+            if not isinstance(role, dict):
+                continue
+            account_context = self._k2_account_context(run_stub, company)
+            try:
+                draft = generator(
+                    company,
+                    role,
+                    evidence,
+                    role=str(role.get("role") or ""),
+                    account_context=account_context,
+                    criteria_markdown=criteria_markdown,
+                )
+            except ClaudeUnavailable as exc:
+                return {}, f"Claude outreach unavailable; using templates instead ({exc})."
+            key = str(role.get("role") or role.get("title") or f"role-{len(messages) + 1}")
+            messages[key] = {
+                **draft,
+                "role": str(role.get("role") or ""),
+                "title": str(role.get("title") or ""),
+                "grounded": "k2" if account_context else "evidence",
+            }
+        return messages, None
+
+    def _k2_account_context(self, run: dict[str, Any], company: CompanyInput) -> str:
+        """Best-effort K2 RAG grounding for outreach; empty string on any miss."""
+        question = (
+            f"What do we already know about {company.company} ({company.domain})? "
+            "Summarize their product, AI posture, and any prior buying signals."
+        )
+        try:
+            result = self.k2.answer_question(run, question)
+        except Exception:
+            return ""
+        if not isinstance(result, dict) or result.get("status") != "ok":
+            return ""
+        return str(result.get("answer") or "").strip()
 
     def answer_question(self, *, run_id: str, question: str) -> dict[str, object]:
         run = self.store.load_run(run_id)
@@ -354,6 +437,11 @@ def _resolve_qualifier(settings: dict[str, object]) -> str:
 def _resolve_discovery_provider(settings: dict[str, object]) -> str:
     value = str(settings.get("discovery_provider") or "auto").strip().lower()
     return value if value in {"auto", "perplexity", "serper", "duckduckgo"} else "auto"
+
+
+def _resolve_outreach_mode(settings: dict[str, object]) -> str:
+    value = str(settings.get("outreach_mode") or "template").strip().lower()
+    return value if value in {"template", "claude"} else "template"
 
 
 def _qualification_metadata(qualifier: str, score: object) -> dict[str, object]:

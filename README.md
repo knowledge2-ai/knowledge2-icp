@@ -375,6 +375,44 @@ curl -sS -X POST localhost:8787/api/settings \
 > The Cloudflare Worker is frozen. Research discovery is Python-only; the Worker
 > mirror is out of scope.
 
+## Personalized outreach (Claude + K2)
+
+Each qualified lead carries a **structured buying committee** — the flat persona
+list mapped into the four canonical B2B roles (economic buyer / champion / technical
+evaluator / blocker), each with the Apollo titles to prospect for and the angle to
+lead with. The committee is deterministic and rule-based, so it always renders even
+with no LLM; it surfaces on each prospect as `committee_role`.
+
+The per-contact **message** is where the LLM earns its place. With the
+`outreach_mode` setting = `claude`, Claude drafts a role-specific email (subject,
+body, CTA, angle) grounded in the scraped evidence plus best-effort **K2 account
+context** — what we already know about the account from the research corpus. The
+copy is generated once at run creation and cached on the lead, so reading drafts
+stays cheap.
+
+It degrades gracefully in three tiers:
+
+- **Claude + K2** — personalized copy grounded in retrieved account context.
+- **Claude only** — K2 unconfigured or a miss → personalized copy grounded in
+  evidence alone (`grounded: "evidence"`).
+- **Template** — `outreach_mode` is `template` (default), or Claude is unavailable
+  → today's deterministic template, byte-for-byte. A run never fails on outreach.
+
+Claude outreach reuses `ANTHROPIC_API_KEY` and is bounded by the `outreach` budget
+under `provider_limits` (the web layer returns HTTP 429 when the budget is spent).
+Apollo enrichment stays on its own metered `apollo_enrichment` budget.
+
+Enable it:
+
+```bash
+export ANTHROPIC_API_KEY=...                 # do not commit; reused from the qualifier
+export ICP_OUTREACH_MAX_TOKENS=700           # optional; default
+# then set the "outreach_mode" setting to "claude":
+curl -sS -X POST localhost:8787/api/settings \
+  -H 'content-type: application/json' \
+  -d '{"outreach_mode":"claude"}'
+```
+
 ## Validate
 
 ```bash

@@ -20,6 +20,7 @@ PROSPECT_CSV_FIELDS = [
     "title",
     "persona",
     "persona_priority",
+    "committee_role",
     "linkedin_url",
     "email",
     "location",
@@ -52,8 +53,9 @@ def build_lead_prospects(run: dict[str, Any], lead: dict[str, Any]) -> list[dict
     people_payload = metadata.get("apollo_people", {}) if isinstance(metadata.get("apollo_people"), dict) else {}
     people = [item for item in people_payload.get("people", []) if isinstance(item, dict)]
 
+    committee_roles = _committee_role_by_title(strategy)
     if people:
-        return [
+        prospects = [
             _person_prospect(
                 run,
                 lead,
@@ -66,7 +68,11 @@ def build_lead_prospects(run: dict[str, Any], lead: dict[str, Any]) -> list[dict
             )
             for index, person in enumerate(people, start=1)
         ]
-    return [_persona_prospect(run, lead, company, score, strategy, persona, index) for index, persona in enumerate(personas, start=1)]
+    else:
+        prospects = [_persona_prospect(run, lead, company, score, strategy, persona, index) for index, persona in enumerate(personas, start=1)]
+    for prospect in prospects:
+        prospect["committee_role"] = _committee_role_for(prospect, committee_roles)
+    return prospects
 
 
 def prospects_to_csv(prospects_payload: dict[str, Any]) -> str:
@@ -158,6 +164,27 @@ def _base_prospect(
         "first_step": _string(strategy.get("first_step")),
         "offer": _string(strategy.get("offer")),
     }
+
+
+def _committee_role_by_title(strategy: dict[str, Any]) -> dict[str, str]:
+    committee = strategy.get("committee", []) if isinstance(strategy.get("committee"), list) else []
+    mapping: dict[str, str] = {}
+    for role in committee:
+        if not isinstance(role, dict):
+            continue
+        title = _string(role.get("title")).lower()
+        role_name = _string(role.get("role"))
+        if title and role_name and title not in mapping:
+            mapping[title] = role_name
+    return mapping
+
+
+def _committee_role_for(prospect: dict[str, Any], committee_roles: dict[str, str]) -> str:
+    for key in (prospect.get("persona"), prospect.get("title")):
+        role = committee_roles.get(_string(key).lower())
+        if role:
+            return role
+    return ""
 
 
 def _match_persona(title: str, personas: list[dict[str, Any]]) -> dict[str, Any]:

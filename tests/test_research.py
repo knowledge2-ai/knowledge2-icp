@@ -408,5 +408,87 @@ class ResearchPipelineTest(unittest.TestCase):
             self.assertEqual(answer["k2"]["raw_result_count"], 1)
 
 
+class _GroundingK2Backend(K2Backend):
+    """K2 backend whose account-context lookup always returns a marker answer."""
+
+    def __init__(self, marker: str) -> None:
+        super().__init__()
+        self._marker = marker
+
+    def answer_question(self, run, question, *, client=None):  # type: ignore[override]
+        return {"status": "ok", "provider": "k2", "answer": self._marker, "citations": []}
+
+    def sync_run(self, run):  # type: ignore[override]
+        return {"status": "skipped", "reason": "offline test"}
+
+
+class OutreachPipelineTest(unittest.TestCase):
+    def test_claude_outreach_mode_generates_messages_grounded_and_metered(self) -> None:
+        seen_context: list[str] = []
+
+        def fake_generator(company, persona, evidence, *, role="", account_context="", criteria_markdown=""):
+            seen_context.append(account_context)
+            return {
+                "subject": f"{company.company} :: {role}",
+                "body": "Grounded body.",
+                "cta": "15 minutes?",
+                "angle": "evidence angle",
+                "model": "claude:test",
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            store.save_settings({"outreach_mode": "claude"})
+            pipeline = ResearchPipeline(
+                store,
+                evidence_fetcher=fake_evidence,
+                k2_backend=_GroundingK2Backend("K2-ACCOUNT-CONTEXT-MARK"),
+                outreach_generator=fake_generator,
+            )
+
+            run = pipeline.create_run(query="", seed_text="Mojio, moj.io")
+
+            messages = run["leads"][0]["metadata"]["outreach_messages"]
+            self.assertTrue(messages)
+            first = next(iter(messages.values()))
+            self.assertIn("Mojio", first["subject"])
+            self.assertEqual(first["grounded"], "k2")
+            # K2 account context reached the generator.
+            self.assertIn("K2-ACCOUNT-CONTEXT-MARK", seen_context)
+            summary = store.provider_usage_summary()
+            self.assertGreaterEqual(summary["allowed_counts"].get("outreach", 0), 1)
+
+    def test_outreach_unavailable_leaves_lead_clean_for_template(self) -> None:
+        def boom(company, persona, evidence, *, role="", account_context="", criteria_markdown=""):
+            raise ClaudeUnavailable("no key")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            store.save_settings({"outreach_mode": "claude"})
+            pipeline = ResearchPipeline(store, evidence_fetcher=fake_evidence, outreach_generator=boom)
+
+            run = pipeline.create_run(query="", seed_text="Mojio, moj.io")
+
+            self.assertNotIn("outreach_messages", run["leads"][0]["metadata"])
+            self.assertTrue(any("outreach unavailable" in w.lower() for w in run["warnings"]))
+
+    def test_template_mode_skips_outreach_generation(self) -> None:
+        calls = {"n": 0}
+
+        def counting_generator(*args, **kwargs):
+            calls["n"] += 1
+            return {"subject": "x", "body": "y", "cta": "z", "angle": "a", "model": "claude:test"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            # default outreach_mode == "template"
+            pipeline = ResearchPipeline(store, evidence_fetcher=fake_evidence, outreach_generator=counting_generator)
+
+            run = pipeline.create_run(query="", seed_text="Mojio, moj.io")
+
+            self.assertEqual(calls["n"], 0)
+            self.assertNotIn("outreach_messages", run["leads"][0]["metadata"])
+
+
 if __name__ == "__main__":
     unittest.main()

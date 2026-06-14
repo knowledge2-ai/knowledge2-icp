@@ -38,6 +38,9 @@ VERTICAL_PERSONAS = {
 }
 
 
+COMMITTEE_ROLES = ("economic_buyer", "champion", "technical_evaluator", "blocker")
+
+
 def build_strategy(result: ScoreResult, evidence: list[Evidence], metadata: dict[str, object] | None = None) -> dict[str, object]:
     evidence_text = " ".join(item.text for item in evidence).lower()
     vertical_hits = keyword_hits(f"{result.company.category} {evidence_text}", list(VERTICAL_PERSONAS.keys()))
@@ -50,6 +53,7 @@ def build_strategy(result: ScoreResult, evidence: list[Evidence], metadata: dict
     objections = _objections(result)
 
     personas = recommended_personas(result, vertical_hits, metadata)
+    committee = build_buying_committee(result, personas)
     return {
         "headline": f"{result.company.company}: {wedge}",
         "wedge": wedge,
@@ -59,8 +63,99 @@ def build_strategy(result: ScoreResult, evidence: list[Evidence], metadata: dict
         "first_step": _first_step(result),
         "objections": objections,
         "personas": personas,
+        "committee": committee,
         "apollo_titles": sorted({title for persona in personas for title in persona.get("apollo_titles", [])}),
     }
+
+
+def build_buying_committee(result: ScoreResult, personas: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Map the recommended personas into a structured buying committee.
+
+    Turns the flat persona list into the four canonical B2B buying roles
+    (economic buyer / champion / technical evaluator / blocker), each carrying the
+    Apollo titles to prospect for and the angle to lead with. Deterministic and
+    rule-based so it always renders even with no LLM; the per-contact message is
+    where Claude personalizes (see ``claude_outreach``). Empty when there are no
+    personas to map (e.g. a rejected lead).
+    """
+    if not personas:
+        return []
+
+    champion = _select_persona(personas, ["product", "general manager", "platform", "resident", "claims", "patient"])
+    technical = _select_persona(personas, ["engineering", "technology", "cto", "data", "tech"])
+    economic = _select_persona(personas, ["ceo", "founder", "president", "chief product"]) or champion
+    objections = _objections(result)
+
+    committee = [
+        _committee_role("economic_buyer", economic, _economic_angle(result)),
+        _committee_role("champion", champion, _champion_angle(result)),
+    ]
+    if technical and technical is not champion:
+        committee.append(_committee_role("technical_evaluator", technical, _technical_angle(result)))
+    blocker = _select_persona(personas, ["data", "chief data", "security", "governance"])
+    if blocker is not None and all(blocker is not chosen for chosen in (economic, champion, technical)):
+        committee.append(_committee_role("blocker", blocker, objections[0] if objections else _blocker_angle(result)))
+    return committee
+
+
+def _select_persona(personas: list[dict[str, object]], needles: list[str]) -> dict[str, object] | None:
+    for persona in personas:
+        haystack = " ".join(
+            [
+                str(persona.get("title") or ""),
+                " ".join(str(item) for item in persona.get("apollo_titles", []) if item),
+            ]
+        ).lower()
+        if any(needle in haystack for needle in needles):
+            return persona
+    return None
+
+
+def _committee_role(role: str, persona: dict[str, object] | None, angle: str) -> dict[str, object]:
+    persona = persona or {}
+    return {
+        "role": role,
+        "title": str(persona.get("title") or _ROLE_FALLBACK_TITLE[role]),
+        "priority": str(persona.get("priority") or "primary"),
+        "apollo_titles": list(persona.get("apollo_titles") or _ROLE_FALLBACK_TITLES[role]),
+        "rationale": str(persona.get("rationale") or ""),
+        "angle": angle,
+    }
+
+
+_ROLE_FALLBACK_TITLE = {
+    "economic_buyer": "Chief Product Officer",
+    "champion": "VP Product",
+    "technical_evaluator": "VP Engineering",
+    "blocker": "Chief Data Officer",
+}
+
+_ROLE_FALLBACK_TITLES = {
+    "economic_buyer": ["chief product officer", "ceo", "founder"],
+    "champion": ["vp product", "head of product"],
+    "technical_evaluator": ["vp engineering", "chief technology officer"],
+    "blocker": ["chief data officer", "head of data"],
+}
+
+
+def _economic_angle(result: ScoreResult) -> str:
+    if result.tier == "A":
+        return "Frame the AI opportunity as category positioning and revenue, not a feature; this score justifies an executive narrative."
+    return "Tie the workflow-AI wedge to a budget owner: quantify the customer or revenue exposure of standing still."
+
+
+def _champion_angle(result: ScoreResult) -> str:
+    if result.classification.ai_posture <= 1:
+        return "Give the product owner a concrete first workflow where proprietary data becomes a visible AI advantage."
+    return "Help the product owner move from feature-level AI to metadata-grounded automation customers can trust."
+
+
+def _technical_angle(result: ScoreResult) -> str:
+    return "Speak to feasibility: integration surface, permissions/security model, and delivery capacity for workflow AI."
+
+
+def _blocker_angle(result: ScoreResult) -> str:
+    return "Pre-empt the governance objection: data readiness, evals, and reliability before any production AI claim."
 
 
 def recommended_personas(
