@@ -30,6 +30,35 @@ Cloudflare's current Workers static assets configuration uses an `assets`
 directory in the Wrangler config. The optional assets binding lets Worker code
 fetch assets through `env.ASSETS.fetch()`.
 
+## Auth scope matrix
+
+The Worker enforces `public_read_only: true` — read-only demo data is served
+without a token, while everything that mutates state or touches admin/provider
+surfaces requires `ICP_ADMIN_TOKEN` or a session token from `/api/auth/session`.
+The authoritative allowlist is `isPublicReadRequest()` in `worker.js`; this table
+mirrors it.
+
+| Route | Method | Access |
+| --- | --- | --- |
+| `/healthz` | GET | Public (edge liveness) |
+| `/api/health` | GET | Public |
+| `/api/auth/session` | POST | Public (mints a session from `ICP_ADMIN_TOKEN`) |
+| `/api/state` | GET | Public read |
+| `/api/sources` | GET | Public read |
+| `/api/expansion/runs` | GET | Public read |
+| `/api/criteria/versions` | GET | Public read |
+| `/api/runs/{id}` | GET | Public read |
+| `/api/runs/{id}/workflow` | GET | Public read |
+| `/api/runs/{id}/prospects` | GET | Public read |
+| `/api/runs/{id}/accounts/{key}` | GET | Public read |
+| `/api/workspace-state` | GET | Protected (admin diagnostics) |
+| All non-GET `/api/*` (settings, sources, runs, exports, K2 sync, …) | POST/PUT/DELETE | Protected (mutations, provider runs, exports, `k2_apply_sync`) |
+| Any other `/api/*` GET not listed above | GET | Protected |
+
+The frozen-Worker durability test
+(`tests/test_cloudflare_worker_runtime.py`) asserts this contract: public reads
+return `200`, mutations without a token return `401`.
+
 ## Local Preview
 
 ```bash

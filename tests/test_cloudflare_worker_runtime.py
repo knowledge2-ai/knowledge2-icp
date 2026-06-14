@@ -48,8 +48,16 @@ class CloudflareWorkerRuntimeTest(unittest.TestCase):
             const kv = new FakeKV();
             const env = { ICP_STATE: kv, ICP_ADMIN_TOKEN: "admin-secret" };
             const workerOne = await loadWorker("one");
-            const blocked = await workerOne.fetch(new Request("https://worker.test/api/state"), env);
-            assert.equal(blocked.status, 401);
+            // Read-only demo endpoints are public (see deployment/cloudflare/README.md
+            // "Auth scope matrix"); mutating actions still require a token.
+            const publicState = await workerOne.fetch(new Request("https://worker.test/api/state"), env);
+            assert.equal(publicState.status, 200);
+            const blockedMutation = await workerOne.fetch(new Request("https://worker.test/api/settings", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ max_companies: 5 }),
+            }), env);
+            assert.equal(blockedMutation.status, 401);
             const badSession = await workerOne.fetch(new Request("https://worker.test/api/auth/session", {
               method: "POST",
               headers: { "content-type": "application/json" },
