@@ -126,7 +126,7 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                 self._send_json(app.store.eval_summary())
                 return
             if parsed.path == "/api/k2-workspace":
-                self._send_json(build_k2_workspace_status())
+                self._send_json(build_k2_workspace_status(k2_settings=app.store.tenant_config.k2))
                 return
             if parsed.path == "/api/mining/profiles":
                 self._send_json({"profiles": app.store.list_query_profiles()})
@@ -659,6 +659,7 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                         sample_input=payload.get("sample_input") if isinstance(payload.get("sample_input"), dict) else None,
                         activate_entities=bool(payload.get("activate_entities", True)),
                         start_from=str(payload.get("start_from") or "") or None,
+                        k2_settings=app.store.tenant_config.k2,
                     )
                 except ValueError as exc:
                     self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)

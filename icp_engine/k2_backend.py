@@ -17,12 +17,20 @@ from .mining import (
     shape_live_results,
 )
 from .prospects import build_run_prospects
+from .tenant import K2Settings
 
 
 class K2Backend:
-    def __init__(self, *, api_key: str | None = None, base_url: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        k2_settings: K2Settings | None = None,
+    ) -> None:
+        self.k2 = k2_settings or K2Settings()
         self.api_key = api_key if api_key is not None else os.environ.get("K2_API_KEY")
-        self.base_url = base_url or os.environ.get("K2_BASE_URL", "https://api.knowledge2.ai")
+        self.base_url = base_url or os.environ.get("K2_BASE_URL") or self.k2.base_url
         self.research_corpus_id = os.environ.get("K2_RESEARCH_CORPUS_ID", "").strip()
         self.corpus_ids = {
             key: os.environ.get(f"K2_{key.upper()}_CORPUS_ID", "").strip()
@@ -115,9 +123,9 @@ class K2Backend:
         upload_documents: list[dict[str, Any]] = []
         for document in self.build_documents(run):
             metadata = document.get("metadata", {}) if isinstance(document.get("metadata"), dict) else {}
-            source_uri = str(metadata.get("source_url") or f"inline://knowledge2-icp/{document.get('id')}")
+            source_uri = str(metadata.get("source_url") or f"{self.k2.source_uri_prefix}/{document.get('id')}")
             if not source_uri.startswith(("http://", "https://", "inline://")):
-                source_uri = f"inline://knowledge2-icp/{source_uri}"
+                source_uri = f"{self.k2.source_uri_prefix}/{source_uri}"
             upload_documents.append(
                 {
                     "sourceUri": f"{source_uri}#k2-icp-{metadata.get('evidence_id', document.get('id'))}",
@@ -131,13 +139,14 @@ class K2Backend:
         self,
         run: dict[str, Any],
         *,
-        project_name: str = "Knowledge2 ICP GTM",
+        project_name: str | None = None,
         corpus_name: str | None = None,
         description: str = "Agentic GTM lead research evidence and metadata.",
         apply: bool = False,
         client: K2RestClient | None = None,
     ) -> dict[str, Any]:
         documents = self.build_upload_documents(run)
+        project_name = project_name or self.k2.project_name
         corpus_name = corpus_name or f"ICP Run {run.get('id')}"
         if not apply:
             return {
@@ -161,7 +170,7 @@ class K2Backend:
         upload = live_client.upload_documents(
             corpus_id,
             documents,
-            idempotency_key=f"knowledge2-icp-{run.get('id')}",
+            idempotency_key=f"{self.k2.workspace_namespace}-{run.get('id')}",
             auto_index=False,
         )
         return {
