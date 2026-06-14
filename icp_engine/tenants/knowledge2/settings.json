@@ -1,0 +1,48 @@
+{
+  "default_query": "workflow SaaS companies with fleet, dealership, field service, claims, or logistics data and limited public AI positioning",
+  "max_companies": 50,
+  "max_pages": 6,
+  "fetch_website_evidence": true,
+  "include_github_metadata": true,
+  "use_apollo_enrichment": false,
+  "use_serp_discovery": true,
+  "tier_a_threshold": 75,
+  "tier_b_threshold": 60,
+  "employee_range": "25-2000 employees",
+  "qualifier": "rules",
+  "discovery_provider": "auto",
+  "outreach_mode": "template",
+  "mining_corpus": "auto",
+  "deployment_mode": "cloudflare-seeded-worker",
+  "provider_limits": {
+    "enabled": true,
+    "daily": {
+      "search": 200,
+      "discovery": 200,
+      "source_scan": 100,
+      "run": 80,
+      "apollo_enrichment": 100,
+      "outreach": 200,
+      "research": 300,
+      "k2_apply": 10,
+      "k2_dry_run": 100,
+      "mining": 200
+    },
+    "rate_per_minute": {
+      "search": 30,
+      "discovery": 30,
+      "source_scan": 20,
+      "run": 10,
+      "apollo_enrichment": 20,
+      "outreach": 30,
+      "research": 60,
+      "k2_apply": 5,
+      "k2_dry_run": 20,
+      "mining": 30
+    },
+    "per_run": {
+      "max_companies": 100,
+      "max_pages": 20
+    }
+  }
+}

@@ -1,0 +1,26 @@
+[
+  {
+    "id": "prompt-discovery-priority-verticals",
+    "label": "Discovery query",
+    "kind": "search",
+    "text": "workflow SaaS companies with fleet, dealership, field service, claims, or logistics data and limited public AI positioning"
+  },
+  {
+    "id": "prompt-ai-posture-audit",
+    "label": "AI posture audit",
+    "kind": "research",
+    "text": "Which Tier A or B leads have proprietary workflow data but weak AI posture, and what public evidence supports the recommendation?"
+  },
+  {
+    "id": "prompt-apollo-personas",
+    "label": "Apollo persona targets",
+    "kind": "prospecting",
+    "text": "Find product, engineering, data, and vertical GM leaders who can own an AI workflow opportunity map."
+  },
+  {
+    "id": "prompt-k2-manifest",
+    "label": "K2 metadata manifest",
+    "kind": "k2",
+    "text": "Upload lead evidence with run_id, criteria_hash, source_type, page_category, signal_tags, persona_titles, and outreach_angle metadata."
+  }
+]

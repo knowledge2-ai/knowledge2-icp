@@ -84,6 +84,7 @@ class ConfigMixin:
             next_settings["provider_limits"] = _normalize_provider_limits(
                 payload["provider_limits"],
                 current.get("provider_limits", {}),
+                self.tenant_config.default_settings.get("provider_limits", {}),
             )
         self.settings_path.write_text(json.dumps(next_settings, indent=2, sort_keys=True), encoding="utf-8")
         self.append_audit_event(

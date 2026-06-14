@@ -1,0 +1,70 @@
+[
+  {
+    "id": "portfolio-expansion",
+    "name": "Portfolio expansion",
+    "description": "Find more companies like Constellation/Volaris/Harris portfolio accounts.",
+    "queries": [
+      "vertical market software portfolio companies with workflow data",
+      "operating group software companies automotive fleet maintenance claims"
+    ],
+    "filters": [
+      {
+        "key": "tier",
+        "op": "in",
+        "value": [
+          "A",
+          "B"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "ai-gap-audit",
+    "name": "AI gap audit",
+    "description": "Find data-rich accounts with weak AI positioning.",
+    "queries": [
+      "proprietary workflow data no AI docs",
+      "AI assistant thin feature no pricing no case study"
+    ],
+    "filters": [
+      {
+        "key": "ai_posture",
+        "op": "==",
+        "value": "none"
+      }
+    ]
+  },
+  {
+    "id": "workflow-moat",
+    "name": "Workflow moat",
+    "description": "Find strong operational-data categories.",
+    "queries": [
+      "work orders dispatch diagnostics inspections claims inventory schedules transactions API"
+    ],
+    "filters": []
+  },
+  {
+    "id": "budget-access",
+    "name": "Budget & access",
+    "description": "Find companies with enough scale and reachable owners.",
+    "queries": [
+      "enterprise customers partner channel VP product CTO data leader 25 2000 employees"
+    ],
+    "filters": [
+      {
+        "key": "has_contact_path",
+        "op": "==",
+        "value": true
+      }
+    ]
+  },
+  {
+    "id": "prospect-role-tree",
+    "name": "Prospect role tree",
+    "description": "Find people/contact records by role hierarchy.",
+    "queries": [
+      "chief product officer VP engineering head of data general manager vertical product"
+    ],
+    "filters": []
+  }
+]
