@@ -456,6 +456,47 @@ class AppStoreTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 store.save_settings({"qualifier": "gpt"})
 
+    def test_discovery_provider_setting_defaults_to_auto_and_validates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+
+            self.assertEqual(store.load_settings()["discovery_provider"], "auto")
+
+            saved = store.save_settings({"discovery_provider": "perplexity"})
+            self.assertEqual(saved["discovery_provider"], "perplexity")
+            self.assertEqual(store.load_settings()["discovery_provider"], "perplexity")
+
+            with self.assertRaises(ValueError):
+                store.save_settings({"discovery_provider": "bing"})
+
+    def test_discovery_action_enforces_daily_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            store.ensure()
+            store.settings_path.write_text(
+                json.dumps(
+                    {
+                        "provider_limits": {
+                            "enabled": True,
+                            "daily": {"discovery": 1},
+                            "rate_per_minute": {"discovery": 99},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            first = store.authorize_provider_action("discovery", details={"max_companies": 1})
+            second = store.authorize_provider_action("discovery", details={"max_companies": 1})
+
+            self.assertTrue(first["allowed"])
+            self.assertFalse(second["allowed"])
+            self.assertEqual(second["limit_type"], "daily")
+
+            summary = store.provider_usage_summary()
+            self.assertEqual(summary["allowed_counts"]["discovery"], 1)
+            self.assertGreaterEqual(summary["denied_counts"]["discovery"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

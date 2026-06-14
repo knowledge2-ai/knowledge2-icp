@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .enrichment import normalize_domain
 from .k2_client import K2RestClient
 from .prospects import build_run_prospects
 
@@ -196,9 +197,62 @@ class K2Backend:
             "raw_result_count": len(payload.get("results", [])) if isinstance(payload.get("results"), list) else 0,
         }
 
+    def known_domains(
+        self,
+        domains: list[str],
+        *,
+        run: dict[str, Any] | None = None,
+        client: K2RestClient | None = None,
+    ) -> set[str]:
+        """Return the subset of candidate domains already ingested in the K2 research corpus.
+
+        This is the cost lever: companies already in the corpus don't need to be
+        researched again. Best-effort and never fatal — an unconfigured K2, a missing
+        research corpus, or any upstream error yields an empty set so discovery keeps
+        running. Returned domains are normalized to match ``DiscoveryCandidate.domain``.
+        """
+        wanted = {normalize_domain(domain) for domain in domains if normalize_domain(domain)}
+        if not wanted:
+            return set()
+        corpus_id = self._research_corpus_id(run or {})
+        if not corpus_id:
+            return set()
+        if not self.configured and client is None:
+            return set()
+        live_client = client or K2RestClient(api_key=self.api_key or "", base_url=self.base_url)
+        try:
+            payload = live_client.search_batch(corpus_id, sorted(wanted), top_k=1)
+        except Exception:  # noqa: BLE001 - never fail discovery because K2 is unreachable
+            return set()
+        present = {normalize_domain(domain) for domain in _domains_in_payload(payload)}
+        return wanted & present
+
     def _research_corpus_id(self, run: dict[str, Any]) -> str:
         k2_status = run.get("k2", {}) if isinstance(run.get("k2"), dict) else {}
         return str(k2_status.get("corpus_id") or self.research_corpus_id or "").strip()
+
+
+def _domains_in_payload(payload: object) -> set[str]:
+    """Collect every ``domain`` value anywhere in a K2 search payload.
+
+    Walks the response generically so it survives shape differences (batched
+    results, nested metadata blocks) without hardcoding the result envelope.
+    """
+    found: set[str] = set()
+
+    def _walk(node: object) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "domain" and isinstance(value, str) and value.strip():
+                    found.add(value.strip())
+                else:
+                    _walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    _walk(payload)
+    return found
 
 
 def _source_type(url: str) -> str:

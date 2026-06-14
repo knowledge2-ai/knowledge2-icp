@@ -89,6 +89,61 @@ def sample_run() -> dict[str, object]:
     }
 
 
+class FakeSearchClient:
+    """Stub K2 client exposing only search_batch, echoing known domains back."""
+
+    def __init__(self, present_domains: set[str]) -> None:
+        self._present = present_domains
+        self.queries: list[str] | None = None
+
+    def search_batch(self, corpus_id: str, queries: list[str], *, top_k: int = 5) -> dict[str, object]:
+        self.queries = queries
+        return {
+            "results": [
+                {"query": query, "results": [{"metadata": {"domain": query}}]}
+                for query in queries
+                if query in self._present
+            ]
+        }
+
+
+class KnownDomainsTest(unittest.TestCase):
+    def test_returns_subset_present_in_corpus(self) -> None:
+        backend = K2Backend(api_key="")
+        client = FakeSearchClient(present_domains={"moj.io"})
+
+        known = backend.known_domains(
+            ["moj.io", "newco.com"],
+            run={"k2": {"corpus_id": "corpus-1"}},
+            client=client,
+        )
+
+        self.assertEqual(known, {"moj.io"})
+        self.assertEqual(client.queries, ["moj.io", "newco.com"])
+
+    def test_unconfigured_backend_is_a_noop(self) -> None:
+        backend = K2Backend(api_key="")
+        backend.research_corpus_id = ""
+
+        self.assertEqual(backend.known_domains(["moj.io"]), set())
+
+    def test_no_research_corpus_is_a_noop(self) -> None:
+        backend = K2Backend(api_key="test-key")
+        backend.research_corpus_id = ""
+
+        self.assertEqual(backend.known_domains(["moj.io"], client=FakeSearchClient({"moj.io"})), set())
+
+    def test_upstream_error_never_raises(self) -> None:
+        class BoomClient:
+            def search_batch(self, *args: object, **kwargs: object) -> dict[str, object]:
+                raise RuntimeError("k2 down")
+
+        backend = K2Backend(api_key="")
+        known = backend.known_domains(["moj.io"], run={"k2": {"corpus_id": "corpus-1"}}, client=BoomClient())
+
+        self.assertEqual(known, set())
+
+
 class K2SyncTest(unittest.TestCase):
     def test_backend_sync_manifest_dry_run_and_apply(self) -> None:
         backend = K2Backend(api_key="test-key", base_url="http://k2.local")

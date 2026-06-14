@@ -209,6 +209,11 @@ class AppStore:
             if qualifier not in {"rules", "claude"}:
                 raise ValueError("qualifier must be 'rules' or 'claude'.")
             next_settings["qualifier"] = qualifier
+        if "discovery_provider" in payload:
+            provider = str(payload.get("discovery_provider") or "").strip().lower()
+            if provider not in {"auto", "perplexity", "serper", "duckduckgo"}:
+                raise ValueError("discovery_provider must be 'auto', 'perplexity', 'serper', or 'duckduckgo'.")
+            next_settings["discovery_provider"] = provider
         for key in ("fetch_website_evidence", "include_github_metadata", "use_apollo_enrichment", "use_serp_discovery"):
             if key in payload:
                 next_settings[key] = _coerce_bool(payload[key], bool(current.get(key, False)))
