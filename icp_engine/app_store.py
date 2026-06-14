@@ -19,7 +19,16 @@ from .evals import (
 )
 from .outreach import build_lead_outreach_drafts, normalize_outreach_status, outreach_drafts_to_csv, summarize_outreach_drafts
 from .prospects import build_lead_prospects
-from .seed_defaults import SEEDED_CRITERIA_MARKDOWN, SEEDED_LISTS, SEEDED_PROMPTS, SEEDED_SETTINGS, SEED_RUN_ID, seeded_run
+from .mining import MINING_FILTER_KEYS, MINING_FILTER_OPS
+from .seed_defaults import (
+    SEEDED_CRITERIA_MARKDOWN,
+    SEEDED_LISTS,
+    SEEDED_PROMPTS,
+    SEEDED_QUERY_PROFILES,
+    SEEDED_SETTINGS,
+    SEED_RUN_ID,
+    seeded_run,
+)
 
 
 DEFAULT_STATE_DIR = Path(os.environ.get("ICP_APP_STATE_DIR", "out/app_state"))
@@ -58,6 +67,7 @@ class AppStore:
         self.outreach_status_path = self.state_dir / "outreach_statuses.json"
         self.eval_cases_path = self.state_dir / "eval_cases.json"
         self.eval_runs_path = self.state_dir / "eval_runs.json"
+        self.query_profiles_path = self.state_dir / "query_profiles.json"
         self.runs_dir = self.state_dir / "runs"
         self.index_path = self.state_dir / "runs.json"
 
@@ -219,6 +229,11 @@ class AppStore:
             if outreach_mode not in {"template", "claude"}:
                 raise ValueError("outreach_mode must be 'template' or 'claude'.")
             next_settings["outreach_mode"] = outreach_mode
+        if "mining_corpus" in payload:
+            mining_corpus = str(payload.get("mining_corpus") or "").strip().lower()
+            if mining_corpus not in {"auto", "candidate", "evidence", "prospect", "source", "criteria"}:
+                raise ValueError("mining_corpus must be 'auto', 'candidate', 'evidence', 'prospect', 'source', or 'criteria'.")
+            next_settings["mining_corpus"] = mining_corpus
         for key in ("fetch_website_evidence", "include_github_metadata", "use_apollo_enrichment", "use_serp_discovery"):
             if key in payload:
                 next_settings[key] = _coerce_bool(payload[key], bool(current.get(key, False)))
@@ -436,6 +451,65 @@ class AppStore:
             "latest_expansion_run": expansion_runs[-1] if expansion_runs else None,
             "due_source_count": len(self.expansion_sources_due()),
         }
+
+    def list_query_profiles(self) -> list[dict[str, Any]]:
+        self.ensure()
+        value = _load_json_file(self.query_profiles_path, list)
+        if value is None:
+            return [deepcopy(item) for item in SEEDED_QUERY_PROFILES]
+        return [item for item in value if isinstance(item, dict)]
+
+    def save_query_profile(self, profile: dict[str, Any]) -> dict[str, Any]:
+        self.ensure()
+        if not isinstance(profile, dict):
+            raise ValueError("Query profile payload must be an object.")
+        name = " ".join(str(profile.get("name") or "").split())
+        if not name:
+            raise ValueError("Query profile name is required.")
+        queries = [" ".join(str(item).split()) for item in profile.get("queries") or [] if str(item).strip()]
+        filters = _clean_profile_filters(profile.get("filters"))
+        now = now_iso()
+        profile_id = str(profile.get("id") or "").strip() or stable_hash(f"{now}:{name.lower()}")
+        existing = next((item for item in self.list_query_profiles() if item.get("id") == profile_id), {})
+        record = {
+            "id": profile_id,
+            "name": name,
+            "description": " ".join(str(profile.get("description") or "").split()),
+            "queries": queries,
+            "filters": filters,
+            "created_at": str(existing.get("created_at") or now),
+            "updated_at": now,
+        }
+        profiles = [item for item in self.list_query_profiles() if item.get("id") != profile_id]
+        profiles.append(record)
+        self.query_profiles_path.write_text(
+            json.dumps(sorted(profiles, key=lambda item: str(item.get("name"))), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        self.append_audit_event(
+            "query_profile.saved",
+            subject_type="query_profile",
+            subject_id=profile_id,
+            details={"name": name, "filter_count": len(filters), "query_count": len(queries)},
+        )
+        return record
+
+    def delete_query_profile(self, profile_id: str) -> None:
+        self.ensure()
+        clean_id = str(profile_id or "").strip()
+        if not clean_id:
+            raise ValueError("Query profile id is required.")
+        profiles = [item for item in self.list_query_profiles() if item.get("id") != clean_id]
+        self.query_profiles_path.write_text(
+            json.dumps(sorted(profiles, key=lambda item: str(item.get("name"))), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        self.append_audit_event(
+            "query_profile.deleted",
+            subject_type="query_profile",
+            subject_id=clean_id,
+            details={},
+        )
 
     def list_runs(self) -> list[dict[str, Any]]:
         self.ensure()
@@ -1332,6 +1406,22 @@ def _append_unique_criteria_version(history: list[dict[str, Any]], criteria: dic
     existing = [item for item in history if item.get("hash") != version["hash"]]
     existing.append(version)
     return existing[-50:]
+
+
+def _clean_profile_filters(raw: Any) -> list[dict[str, Any]]:
+    """Validate query-profile filter clauses against the standardized mining keys/ops."""
+    filters: list[dict[str, Any]] = []
+    for item in raw or []:
+        if not isinstance(item, dict):
+            raise ValueError("Each query-profile filter must be an object.")
+        key = str(item.get("key") or "").strip()
+        op = str(item.get("op") or "==").strip()
+        if key not in MINING_FILTER_KEYS:
+            raise ValueError(f"Unsupported query-profile filter key: {key!r}")
+        if op not in MINING_FILTER_OPS:
+            raise ValueError(f"Unsupported query-profile filter op: {op!r}")
+        filters.append({"key": key, "op": op, "value": item.get("value")})
+    return filters
 
 
 def _load_json_file(path: Path, expected_type: type) -> Any | None:

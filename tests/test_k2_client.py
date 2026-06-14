@@ -101,6 +101,44 @@ class K2ClientTest(unittest.TestCase):
             server.server_close()
             thread.join(timeout=2)
 
+    def test_search_batch_includes_filters_only_when_present(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                raw = self.rfile.read(int(self.headers.get("Content-Length", "0")) or 0)
+                body = json.loads(raw.decode("utf-8")) if raw else {}
+                calls.append({"path": self.path, "body": body})
+                raw_out = json.dumps({"responses": [{"results": []}]}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw_out)))
+                self.end_headers()
+                self.wfile.write(raw_out)
+
+            def log_message(self, format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = K2RestClient(api_key="test-key", base_url=f"http://127.0.0.1:{server.server_port}")
+            client.search_batch("c1", ["moj.io"], top_k=3)
+            client.search_batch(
+                "c1",
+                ["moj.io"],
+                top_k=3,
+                filters={"condition": "and", "filters": [{"key": "tier", "op": "==", "value": "A"}]},
+            )
+
+            self.assertNotIn("filters", calls[0]["body"])
+            self.assertEqual(calls[1]["body"]["filters"]["filters"][0]["key"], "tier")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
 
 if __name__ == "__main__":
     unittest.main()

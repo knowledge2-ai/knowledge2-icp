@@ -7,6 +7,15 @@ from typing import Any
 
 from .enrichment import normalize_domain
 from .k2_client import K2RestClient
+from .mining import (
+    MINING_FILTER_KEYS,
+    MINING_FILTER_OPS,
+    build_facets,
+    lookalikes_local,
+    mine_local,
+    normalize_clauses,
+    shape_live_results,
+)
 from .prospects import build_run_prospects
 
 
@@ -15,6 +24,10 @@ class K2Backend:
         self.api_key = api_key if api_key is not None else os.environ.get("K2_API_KEY")
         self.base_url = base_url or os.environ.get("K2_BASE_URL", "https://api.knowledge2.ai")
         self.research_corpus_id = os.environ.get("K2_RESEARCH_CORPUS_ID", "").strip()
+        self.corpus_ids = {
+            key: os.environ.get(f"K2_{key.upper()}_CORPUS_ID", "").strip()
+            for key in ("candidate", "evidence", "prospect", "source", "criteria")
+        }
 
     @property
     def configured(self) -> bool:
@@ -227,6 +240,115 @@ class K2Backend:
         present = {normalize_domain(domain) for domain in _domains_in_payload(payload)}
         return wanted & present
 
+    def mine_corpus(
+        self,
+        *,
+        query: str = "",
+        filters: Any = None,
+        corpus_key: str = "candidate",
+        top_k: int = 20,
+        run: dict[str, Any] | None = None,
+        client: K2RestClient | None = None,
+        store: Any | None = None,
+    ) -> dict[str, Any]:
+        """Advanced metadata-filtered search over an ICP corpus, hybrid with a local fallback.
+
+        Live K2 path when a corpus is configured; degrades to an in-memory mine over
+        persisted runs (``store``) when K2 is unconfigured or the call fails. A bad
+        filter key/op raises ``ValueError`` (a 400 at the surface), never a silent local
+        fallthrough.
+        """
+        clauses = normalize_clauses(filters)
+        metadata_filter = build_metadata_filter(clauses)
+        corpus_id = self._mining_corpus_id(corpus_key, run)
+        warnings: list[str] = []
+        if corpus_id and (self.configured or client is not None):
+            live_client = client or K2RestClient(api_key=self.api_key or "", base_url=self.base_url)
+            try:
+                payload = live_client.search_batch(corpus_id, [query or ""], top_k=top_k, filters=metadata_filter)
+            except Exception as exc:  # noqa: BLE001 - never fail mining because K2 is unreachable
+                warnings.append(f"K2 mining failed ({exc}); using local fallback.")
+            else:
+                results = shape_live_results(payload, top_k=top_k)
+                return {
+                    "provider": "k2",
+                    "corpus": corpus_key,
+                    "corpus_id": corpus_id,
+                    "results": results,
+                    "facets": build_facets(results),
+                    "warnings": warnings,
+                }
+        if store is not None:
+            local = mine_local(store, query=query, clauses=clauses, corpus_key=corpus_key, top_k=top_k)
+            local["warnings"] = warnings + local.get("warnings", [])
+            return local
+        warnings.append("K2 not configured and no local store available for mining.")
+        return {"provider": "local", "corpus": corpus_key, "results": [], "facets": {}, "warnings": warnings}
+
+    def find_lookalikes(
+        self,
+        *,
+        seed_domains: list[str],
+        corpus_key: str = "candidate",
+        top_k: int = 20,
+        run: dict[str, Any] | None = None,
+        client: K2RestClient | None = None,
+        store: Any | None = None,
+    ) -> dict[str, Any]:
+        """Find companies like the seed accounts over the corpus, hybrid with a local fallback.
+
+        Seeds are always excluded from their own results. The live path searches the
+        corpus with a profile query built from the seeds' own metadata (not hardcoded);
+        the local path ranks persisted non-seed leads by shared ICP features.
+        """
+        seeds = {normalize_domain(domain) for domain in seed_domains if normalize_domain(domain)}
+        if not seeds:
+            return {"provider": "local", "corpus": corpus_key, "results": [], "facets": {}, "warnings": ["No seed domains supplied."]}
+
+        corpus_id = self._mining_corpus_id(corpus_key, run)
+        warnings: list[str] = []
+        if corpus_id and (self.configured or client is not None):
+            live_client = client or K2RestClient(api_key=self.api_key or "", base_url=self.base_url)
+            profile_query = self._lookalike_query(seeds, store)
+            try:
+                payload = live_client.search_batch(corpus_id, [profile_query], top_k=top_k + len(seeds))
+            except Exception as exc:  # noqa: BLE001 - never fail because K2 is unreachable
+                warnings.append(f"K2 lookalike search failed ({exc}); using local fallback.")
+            else:
+                results = [r for r in shape_live_results(payload, top_k=top_k + len(seeds)) if r["domain"] not in seeds][:top_k]
+                return {
+                    "provider": "k2",
+                    "corpus": corpus_key,
+                    "corpus_id": corpus_id,
+                    "seed_domains": sorted(seeds),
+                    "results": results,
+                    "facets": build_facets(results),
+                    "warnings": warnings,
+                }
+        if store is not None:
+            local = lookalikes_local(store, seed_domains=sorted(seeds), corpus_key=corpus_key, top_k=top_k)
+            local["seed_domains"] = sorted(seeds)
+            local["warnings"] = warnings + local.get("warnings", [])
+            return local
+        warnings.append("K2 not configured and no local store available for lookalikes.")
+        return {"provider": "local", "corpus": corpus_key, "seed_domains": sorted(seeds), "results": [], "facets": {}, "warnings": warnings}
+
+    def _lookalike_query(self, seeds: set[str], store: Any | None) -> str:
+        """Build a similarity query from the seeds' own ICP signals (vertical/posture)."""
+        terms: list[str] = []
+        if store is not None:
+            for record in mine_local(store, query="", clauses=[], corpus_key="candidate", top_k=500).get("results", []):
+                if record.get("domain") in seeds:
+                    terms.extend(str(record.get(field) or "") for field in ("vertical", "ai_posture", "company"))
+        terms = [term for term in terms if term.strip()]
+        return " ".join(dict.fromkeys(terms)) or "vertical market software workflow data weak AI posture"
+
+    def _mining_corpus_id(self, corpus_key: str, run: dict[str, Any] | None) -> str:
+        specific = self.corpus_ids.get(corpus_key) or ""
+        if specific:
+            return specific
+        return self._research_corpus_id(run or {})
+
     def _research_corpus_id(self, run: dict[str, Any]) -> str:
         k2_status = run.get("k2", {}) if isinstance(run.get("k2"), dict) else {}
         return str(k2_status.get("corpus_id") or self.research_corpus_id or "").strip()
@@ -283,11 +405,25 @@ def _page_category(url: str) -> str:
     return "homepage" if path.rstrip("/").count("/") <= 2 else "other"
 
 
-def _run_metadata_filter(run_id: str) -> dict[str, Any]:
+def build_metadata_filter(clauses: list[tuple[str, str, Any]]) -> dict[str, Any]:
+    """Build a K2 metadata-filter dict from ``(key, op, value)`` clauses.
+
+    Returns the same ``{"condition": "and", "filters": [...]}`` envelope K2 search and
+    ``generate_answer`` already expect. Keys are constrained to ``MINING_FILTER_KEYS`` and
+    ops to a small supported set so the shared filter seam can't be fed unknown fields.
+    """
     filters: list[dict[str, Any]] = []
-    if run_id:
-        filters.append({"key": "run_id", "op": "==", "value": run_id})
+    for key, op, value in clauses:
+        if key not in MINING_FILTER_KEYS:
+            raise ValueError(f"Unsupported metadata filter key: {key!r}")
+        if op not in MINING_FILTER_OPS:
+            raise ValueError(f"Unsupported metadata filter op: {op!r}")
+        filters.append({"key": key, "op": op, "value": value})
     return {"condition": "and", "filters": filters}
+
+
+def _run_metadata_filter(run_id: str) -> dict[str, Any]:
+    return build_metadata_filter([("run_id", "==", run_id)] if run_id else [])
 
 
 def _k2_citations(results: object) -> list[dict[str, Any]]:

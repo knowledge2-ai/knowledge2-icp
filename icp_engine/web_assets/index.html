@@ -97,6 +97,7 @@
           <button class="tab" data-view="prospects">Prospects</button>
           <button class="tab" data-view="research">Research</button>
           <button class="tab admin-only" data-view="k2">K2</button>
+          <button class="tab admin-only" data-view="mining">Mining</button>
           <button class="tab admin-only" data-view="evals">Evals</button>
           <button class="tab" data-view="setup">Setup</button>
           <button class="tab" data-view="criteria">Criteria</button>
@@ -284,6 +285,54 @@
             </div>
           </div>
           <section id="k2-panel" class="detail-panel empty">Run research before exporting a K2 manifest.</section>
+        </section>
+
+        <section id="view-mining" class="view">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Corpus Mining</p>
+              <h2>Search &amp; Lookalike Over Ingested Data</h2>
+            </div>
+            <div class="button-row">
+              <button id="mining-search" type="button">Search</button>
+              <button id="mining-csv" type="button" class="secondary">Download CSV</button>
+            </div>
+          </div>
+          <div class="mining-controls">
+            <label class="field">
+              <span>Query</span>
+              <input id="mining-query" type="text" placeholder="telematics workflow data weak AI posture" />
+            </label>
+            <label class="field">
+              <span>Saved profile</span>
+              <select id="mining-profile"><option value="">Custom</option></select>
+            </label>
+            <label class="field">
+              <span>Corpus</span>
+              <select id="mining-corpus">
+                <option value="">Default (setting)</option>
+                <option value="candidate">candidate</option>
+                <option value="evidence">evidence</option>
+                <option value="prospect">prospect</option>
+                <option value="source">source</option>
+                <option value="criteria">criteria</option>
+              </select>
+            </label>
+          </div>
+          <div class="mining-controls">
+            <label class="field mining-filters-field">
+              <span>Filters (key op value, one per line — e.g. <code>tier == A</code>)</span>
+              <textarea id="mining-filters" rows="3" spellcheck="false" placeholder="tier == A&#10;ai_posture == weak"></textarea>
+            </label>
+            <label class="field">
+              <span>Lookalike seed domains (comma-separated)</span>
+              <input id="mining-seeds" type="text" placeholder="moj.io, fleetco.com" />
+              <button id="mining-lookalikes" type="button" class="secondary">Find lookalikes</button>
+            </label>
+          </div>
+          <p id="mining-status" class="muted"></p>
+          <div id="mining-facets" class="mining-facets"></div>
+          <section id="mining-panel" class="detail-panel empty">Search the corpus or find lookalikes of your Tier-A accounts.</section>
         </section>
 
         <section id="view-evals" class="view">
