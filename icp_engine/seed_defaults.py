@@ -94,6 +94,7 @@ SEEDED_SETTINGS: dict[str, Any] = {
     "employee_range": "25-2000 employees",
     "qualifier": "rules",
     "discovery_provider": "auto",
+    "outreach_mode": "template",
     "deployment_mode": "cloudflare-seeded-worker",
     "provider_limits": {
         "enabled": True,
@@ -103,6 +104,7 @@ SEEDED_SETTINGS: dict[str, Any] = {
             "source_scan": 100,
             "run": 80,
             "apollo_enrichment": 100,
+            "outreach": 200,
             "research": 300,
             "k2_apply": 10,
             "k2_dry_run": 100,
@@ -113,6 +115,7 @@ SEEDED_SETTINGS: dict[str, Any] = {
             "source_scan": 20,
             "run": 10,
             "apollo_enrichment": 20,
+            "outreach": 30,
             "research": 60,
             "k2_apply": 5,
             "k2_dry_run": 20,

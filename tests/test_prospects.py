@@ -49,6 +49,24 @@ class ProspectsTest(unittest.TestCase):
         titles = {item["title"] for item in payload["prospects"]}
         self.assertEqual(titles, {"Chief Product Officer", "VP Engineering"})
 
+    def test_surfaces_committee_role_on_matching_prospect(self) -> None:
+        run = _run(metadata={})
+        run["leads"][0]["strategy"]["committee"] = [
+            {"role": "economic_buyer", "title": "Chief Product Officer"},
+            {"role": "technical_evaluator", "title": "VP Engineering"},
+        ]
+
+        payload = build_run_prospects(run)
+
+        roles = {item["title"]: item["committee_role"] for item in payload["prospects"]}
+        self.assertEqual(roles["Chief Product Officer"], "economic_buyer")
+        self.assertEqual(roles["VP Engineering"], "technical_evaluator")
+        self.assertIn("committee_role", prospects_to_csv(payload).splitlines()[0])
+
+    def test_committee_role_blank_without_committee(self) -> None:
+        payload = build_run_prospects(_run(metadata={}))
+        self.assertTrue(all(item["committee_role"] == "" for item in payload["prospects"]))
+
 
 def _run(*, metadata: dict[str, object]) -> dict[str, object]:
     return {

@@ -497,6 +497,47 @@ class AppStoreTest(unittest.TestCase):
             self.assertEqual(summary["allowed_counts"]["discovery"], 1)
             self.assertGreaterEqual(summary["denied_counts"]["discovery"], 1)
 
+    def test_outreach_mode_setting_defaults_to_template_and_validates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+
+            self.assertEqual(store.load_settings()["outreach_mode"], "template")
+
+            saved = store.save_settings({"outreach_mode": "claude"})
+            self.assertEqual(saved["outreach_mode"], "claude")
+            self.assertEqual(store.load_settings()["outreach_mode"], "claude")
+
+            with self.assertRaises(ValueError):
+                store.save_settings({"outreach_mode": "gpt"})
+
+    def test_outreach_action_enforces_daily_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            store.ensure()
+            store.settings_path.write_text(
+                json.dumps(
+                    {
+                        "provider_limits": {
+                            "enabled": True,
+                            "daily": {"outreach": 1},
+                            "rate_per_minute": {"outreach": 99},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            first = store.authorize_provider_action("outreach", details={"prospects": 1})
+            second = store.authorize_provider_action("outreach", details={"prospects": 1})
+
+            self.assertTrue(first["allowed"])
+            self.assertFalse(second["allowed"])
+            self.assertEqual(second["limit_type"], "daily")
+
+            summary = store.provider_usage_summary()
+            self.assertEqual(summary["allowed_counts"]["outreach"], 1)
+            self.assertGreaterEqual(summary["denied_counts"]["outreach"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

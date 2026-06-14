@@ -214,6 +214,11 @@ class AppStore:
             if provider not in {"auto", "perplexity", "serper", "duckduckgo"}:
                 raise ValueError("discovery_provider must be 'auto', 'perplexity', 'serper', or 'duckduckgo'.")
             next_settings["discovery_provider"] = provider
+        if "outreach_mode" in payload:
+            outreach_mode = str(payload.get("outreach_mode") or "").strip().lower()
+            if outreach_mode not in {"template", "claude"}:
+                raise ValueError("outreach_mode must be 'template' or 'claude'.")
+            next_settings["outreach_mode"] = outreach_mode
         for key in ("fetch_website_evidence", "include_github_metadata", "use_apollo_enrichment", "use_serp_discovery"):
             if key in payload:
                 next_settings[key] = _coerce_bool(payload[key], bool(current.get(key, False)))

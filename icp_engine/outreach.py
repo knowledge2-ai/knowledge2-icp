@@ -42,11 +42,41 @@ def build_lead_outreach_drafts(
     score = lead.get("score", {}) if isinstance(lead.get("score"), dict) else {}
     company = score.get("company", {}) if isinstance(score.get("company"), dict) else {}
     strategy = lead.get("strategy", {}) if isinstance(lead.get("strategy"), dict) else {}
+    metadata = lead.get("metadata", {}) if isinstance(lead.get("metadata"), dict) else {}
+    messages = _outreach_messages_by_title(metadata.get("outreach_messages"))
     prospects = build_lead_prospects(run, lead)
     return [
-        _draft_for_prospect(run, lead, company, strategy, evidence, prospect, statuses.get(str(prospect.get("id") or "")))
+        _draft_for_prospect(
+            run,
+            lead,
+            company,
+            strategy,
+            evidence,
+            prospect,
+            statuses.get(str(prospect.get("id") or "")),
+            messages,
+        )
         for prospect in prospects
     ]
+
+
+def _outreach_messages_by_title(raw: object) -> dict[str, dict[str, Any]]:
+    """Index cached Claude outreach (keyed by committee role) by persona title.
+
+    Drafts are computed on read, so the LLM copy generated once at run creation
+    lives on ``lead["metadata"]["outreach_messages"]``. Prospects carry a persona
+    title, not a committee role, so index by title to map the two.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    by_title: dict[str, dict[str, Any]] = {}
+    for message in raw.values():
+        if not isinstance(message, dict):
+            continue
+        title = str(message.get("title") or "").strip().lower()
+        if title and title not in by_title:
+            by_title[title] = message
+    return by_title
 
 
 def summarize_outreach_drafts(drafts: list[dict[str, Any]]) -> dict[str, Any]:
@@ -85,6 +115,7 @@ def _draft_for_prospect(
     evidence: list[dict[str, Any]],
     prospect: dict[str, Any],
     status_record: dict[str, Any] | None,
+    messages: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     prospect_id = str(prospect.get("id") or "")
     evidence_refs = _evidence_refs(evidence)
@@ -106,6 +137,16 @@ def _draft_for_prospect(
         ]
     )
     cta = first_step
+    # Prefer the Claude-personalized copy cached at run creation; fall back to the
+    # deterministic template above byte-for-byte when no cached message exists.
+    cached = _cached_message_for(prospect, messages)
+    personalized = False
+    if cached:
+        subject = str(cached.get("subject") or subject)
+        body = str(cached.get("body") or body)
+        cta = str(cached.get("cta") or cta)
+        angle = str(cached.get("angle") or angle)
+        personalized = True
     status_record = status_record if isinstance(status_record, dict) else {}
     return {
         "id": f"draft-{prospect_id}",
@@ -127,9 +168,24 @@ def _draft_for_prospect(
         "evidence_urls": [item["url"] for item in evidence_refs],
         "outreach_angle": angle,
         "first_step": first_step,
+        "personalized": personalized,
+        "grounded": str(cached.get("grounded") or "") if cached else "",
         "approval_note": str(status_record.get("note") or ""),
         "updated_at": str(status_record.get("updated_at") or ""),
     }
+
+
+def _cached_message_for(
+    prospect: dict[str, Any],
+    messages: dict[str, dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    if not messages:
+        return None
+    for key in (prospect.get("persona"), prospect.get("title")):
+        message = messages.get(str(key or "").strip().lower())
+        if message:
+            return message
+    return None
 
 
 def _evidence_refs(evidence: list[dict[str, Any]]) -> list[dict[str, str]]:
