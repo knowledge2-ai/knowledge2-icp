@@ -9,7 +9,10 @@ from urllib.request import Request, urlopen
 
 from .discovery import DiscoveryCandidate
 from .enrichment import normalize_domain
+from .tenant import Branding
 
+
+_BRANDING = Branding()
 
 DEFAULT_MODEL = "sonar"
 DEFAULT_BASE_URL = "https://api.perplexity.ai"
@@ -124,7 +127,7 @@ class PerplexityRestClient:
         headers = {
             "Accept": "application/json",
             "Authorization": f"Bearer {self.api_key}",
-            "User-Agent": "Knowledge2ICPDiscovery/0.1 (+https://knowledge2.ai)",
+            "User-Agent": _BRANDING.discovery_user_agent,
         }
         data = None
         if body is not None:

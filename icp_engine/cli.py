@@ -10,10 +10,11 @@ from .gemini import GeminiUnavailable, classify_with_gemini
 from .models import CompanyInput
 from .reporting import write_dossier, write_ranked_csv
 from .scoring import score_company
+from .tenant import Branding
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="icp", description="Knowledge2 ICP qualification CLI")
+    parser = argparse.ArgumentParser(prog="icp", description=Branding().cli_description)
     subparsers = parser.add_subparsers(dest="command", required=True)
     qualify = subparsers.add_parser("qualify", help="Score companies from a CSV")
     qualify.add_argument("--input", required=True, type=Path, help="Input company CSV")

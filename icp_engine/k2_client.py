@@ -7,6 +7,11 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from .tenant import Branding
+
+
+_BRANDING = Branding()
+
 
 # The /search:batch endpoint hard-caps top_k server-side; mirror it here so callers
 # can size their requests to what the API will actually return (no silent truncation).
@@ -371,7 +376,7 @@ class K2RestClient:
         url = f"{base}{path}{query}"
         request_headers = {
             "accept": "application/json",
-            "User-Agent": "Knowledge2ICP/0.1",
+            "User-Agent": _BRANDING.api_user_agent,
             "X-API-Key": self.api_key,
         }
         data = None

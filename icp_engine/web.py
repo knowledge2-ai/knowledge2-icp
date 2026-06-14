@@ -45,7 +45,7 @@ class GTMApp:
 
 def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
-        server_version = "Knowledge2ICPWeb/0.1"
+        server_version = app.store.tenant_config.branding.server_version
 
         def do_HEAD(self) -> None:
             parsed = urlparse(self.path)
@@ -806,7 +806,7 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                     return
                 result = app.pipeline.k2.sync_manifest(
                     run,
-                    project_name=str(payload.get("project_name") or "Knowledge2 ICP GTM"),
+                    project_name=str(payload.get("project_name") or app.store.tenant_config.k2.project_name),
                     corpus_name=str(payload.get("corpus_name") or f"ICP Run {run_id}"),
                     apply=bool(payload.get("apply", False)),
                 )
@@ -899,7 +899,7 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
             self.send_response(HTTPStatus.UNAUTHORIZED)
             self.send_header("Content-Type", "application/json")
             self.send_header("Cache-Control", "no-store")
-            self.send_header("WWW-Authenticate", 'Bearer realm="knowledge2-icp"')
+            self.send_header("WWW-Authenticate", f'Bearer realm="{app.store.tenant_config.branding.auth_realm}"')
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -948,7 +948,7 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
 def _health_payload(app: GTMApp, *, detailed: bool) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "status": "ok",
-        "service": "knowledge2-icp",
+        "service": app.store.tenant_config.branding.auth_realm,
         "version": APP_VERSION,
         "auth_required": bool(app.admin_token),
     }
@@ -1121,7 +1121,7 @@ def run_server(
     store = AppStore(state_dir=store_dir) if store_dir else AppStore()
     app = GTMApp(store=store, admin_token=token)
     server = ThreadingHTTPServer((host, port), make_handler(app))
-    print(f"Knowledge2 ICP web app running at http://{host}:{port}")
+    print(f"{app.store.tenant_config.branding.service_name} web app running at http://{host}:{port}")
     server.serve_forever()
     return server
 
