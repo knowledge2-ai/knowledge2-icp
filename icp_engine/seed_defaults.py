@@ -92,6 +92,7 @@ SEEDED_SETTINGS: dict[str, Any] = {
     "tier_a_threshold": 75,
     "tier_b_threshold": 60,
     "employee_range": "25-2000 employees",
+    "qualifier": "rules",
     "deployment_mode": "cloudflare-seeded-worker",
     "provider_limits": {
         "enabled": True,

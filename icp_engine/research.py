@@ -7,13 +7,14 @@ from typing import Callable
 
 from .apollo import ApolloClient
 from .app_store import AppStore, now_iso
+from .claude import ClaudeUnavailable, classify_with_claude
 from .criteria import build_criteria_profile
 from .discovery import DiscoveryCandidate, discover_companies, discover_companies_from_url, parse_seed_companies
 from .enrichment import fetch_company_evidence, normalize_domain
 from .github import search_github_metadata
 from .k2_backend import K2Backend
 from .metadata import lead_metadata_summary, refs_from_candidate
-from .models import CompanyInput, Evidence
+from .models import Classification, CompanyInput, Evidence
 from .scoring import score_company
 from .serialization import evidence_to_dict, score_to_dict
 from .strategy import build_strategy
@@ -21,6 +22,7 @@ from .text import compact_snippet, normalize_whitespace
 
 
 EvidenceFetcher = Callable[[CompanyInput, Path], tuple[list[Evidence], list[str]]]
+Classifier = Callable[[CompanyInput, list[Evidence], str], Classification]
 
 
 class ResearchPipeline:
@@ -32,12 +34,14 @@ class ResearchPipeline:
         search_fetcher: Callable[[str], str] | None = None,
         apollo_client: ApolloClient | None = None,
         k2_backend: K2Backend | None = None,
+        classifier: Classifier | None = None,
     ) -> None:
         self.store = store
         self.evidence_fetcher = evidence_fetcher
         self.search_fetcher = search_fetcher
         self.apollo = apollo_client or ApolloClient.from_env()
         self.k2 = k2_backend or K2Backend()
+        self.classifier = classifier
 
     def discover(self, query: str, *, seed_text: str = "", max_companies: int = 10) -> tuple[list[DiscoveryCandidate], list[str]]:
         candidates = parse_seed_companies(seed_text)
@@ -76,11 +80,15 @@ class ResearchPipeline:
         use_apollo: bool = False,
     ) -> dict[str, object]:
         criteria = self.store.load_criteria()
+        criteria_markdown = str(criteria.get("markdown", ""))
         criteria_profile = build_criteria_profile(
-            str(criteria.get("markdown", "")),
+            criteria_markdown,
             source=str(criteria.get("source", "")),
             criteria_hash=str(criteria.get("hash", "")),
         )
+        qualifier = _resolve_qualifier(self.store.load_settings())
+        qualifier_warned = False
+        qualified_count = 0
         run_id = f"run-{uuid.uuid4().hex[:10]}"
         if candidate_payloads is None:
             candidates, warnings = self.discover(query, seed_text=seed_text, max_companies=max_companies)
@@ -102,7 +110,20 @@ class ResearchPipeline:
             metadata = self._collect_metadata(company, candidate, include_github=include_github, use_apollo=use_apollo)
             metadata.update(lead_metadata_summary(company, evidence, refs_from_candidate(candidate)))
             metadata["criteria_profile"] = criteria_profile.to_dict()
-            score = score_company(company, evidence, fetch_warnings=fetch_warnings, criteria_profile=criteria_profile)
+            model_classification, qualify_warning = self._qualify(company, evidence, criteria_markdown, qualifier)
+            if model_classification is not None:
+                qualified_count += 1
+            if qualify_warning and not qualifier_warned:
+                warnings.append(qualify_warning)
+                qualifier_warned = True
+            score = score_company(
+                company,
+                evidence,
+                model_classification=model_classification,
+                fetch_warnings=fetch_warnings,
+                criteria_profile=criteria_profile,
+            )
+            metadata["qualification"] = _qualification_metadata(qualifier, score)
             strategy = build_strategy(score, evidence, metadata)
             if use_apollo and self.apollo.configured:
                 metadata["apollo_people"] = self.apollo.search_people(
@@ -133,18 +154,45 @@ class ResearchPipeline:
             "query": query,
             "created_at": now_iso(),
             "status": "completed",
+            "qualifier": qualifier,
             "criteria": {
                 "hash": criteria["hash"],
                 "source": criteria["source"],
                 "updated_at": criteria.get("updated_at"),
                 "profile": criteria_profile.to_dict(),
+                "qualifier": qualifier,
             },
             "warnings": warnings,
             "leads": leads,
         }
+        if qualified_count:
+            self.store.record_provider_usage(
+                "qualify",
+                status="allowed",
+                amount=qualified_count,
+                details={"qualifier": qualifier, "criteria_hash": criteria["hash"]},
+            )
         run["k2"] = self.k2.sync_run(run)
         self.store.save_run(run)
         return run
+
+    def _qualify(
+        self,
+        company: CompanyInput,
+        evidence: list[Evidence],
+        criteria_markdown: str,
+        qualifier: str,
+    ) -> tuple[Classification | None, str | None]:
+        if qualifier != "claude":
+            return None, None
+        classifier = self.classifier or classify_with_claude
+        try:
+            classification = classifier(company, evidence, criteria_markdown=criteria_markdown)
+            return classification, None
+        except ClaudeUnavailable as exc:
+            return None, f"Claude qualifier unavailable; scored with rules instead ({exc})."
+        except Exception as exc:  # noqa: BLE001 - never fail a run because the judge is down
+            return None, f"Claude qualifier failed; scored with rules instead ({exc})."
 
     def answer_question(self, *, run_id: str, question: str) -> dict[str, object]:
         run = self.store.load_run(run_id)
@@ -252,6 +300,23 @@ class ResearchPipeline:
         else:
             metadata["apollo_organizations"] = {"status": "skipped", "reason": "Apollo enrichment disabled for this run.", "organizations": []}
         return metadata
+
+
+def _resolve_qualifier(settings: dict[str, object]) -> str:
+    value = str(settings.get("qualifier") or "rules").strip().lower()
+    return value if value in {"rules", "claude"} else "rules"
+
+
+def _qualification_metadata(qualifier: str, score: object) -> dict[str, object]:
+    classification = getattr(score, "classification", None)
+    return {
+        "qualifier": qualifier,
+        "source": getattr(classification, "source", "rules"),
+        "confidence": getattr(classification, "confidence", 0.0),
+        "ai_narrative": getattr(score, "ai_narrative", ""),
+        "reasons": dict(getattr(classification, "reasons", {}) or {}),
+        "evidence_ids": dict(getattr(classification, "evidence_ids", {}) or {}),
+    }
 
 
 def _dedupe_candidates(candidates: list[DiscoveryCandidate]) -> list[DiscoveryCandidate]:

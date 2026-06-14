@@ -1,0 +1,12 @@
+{
+  "artifactRoot": ".dlc",
+  "branchingModel": "branching.json",
+  "testRunner": "pytest tests/ -x -q --tb=short -k \"not e2e and not integration and not playwright\"",
+  "enabledReviews": ["security", "ux", "a11y", "performance"],
+  "promotionGuard": false,
+  "defaultInteractionMode": "confident",
+  "defaultExecutionMode": "inline",
+  "contextLifecycle": {
+    "mode": "light"
+  }
+}

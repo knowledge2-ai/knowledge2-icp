@@ -204,6 +204,11 @@ class AppStore:
         for key in ("default_query", "employee_range"):
             if key in payload:
                 next_settings[key] = " ".join(str(payload.get(key) or "").split())
+        if "qualifier" in payload:
+            qualifier = str(payload.get("qualifier") or "").strip().lower()
+            if qualifier not in {"rules", "claude"}:
+                raise ValueError("qualifier must be 'rules' or 'claude'.")
+            next_settings["qualifier"] = qualifier
         for key in ("fetch_website_evidence", "include_github_metadata", "use_apollo_enrichment", "use_serp_discovery"):
             if key in payload:
                 next_settings[key] = _coerce_bool(payload[key], bool(current.get(key, False)))

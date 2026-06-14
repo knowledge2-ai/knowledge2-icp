@@ -282,11 +282,15 @@ def _account_summary_document(
 ) -> dict[str, Any]:
     source_refs = lead_metadata.get("source_refs", {}) if isinstance(lead_metadata.get("source_refs"), dict) else {}
     criteria_profile = lead_metadata.get("criteria_profile", {}) if isinstance(lead_metadata.get("criteria_profile"), dict) else {}
+    qualification = lead_metadata.get("qualification", {}) if isinstance(lead_metadata.get("qualification"), dict) else {}
+    ai_narrative = str(qualification.get("ai_narrative", "") or score.get("ai_narrative", ""))
     text = "\n".join(
         [
             f"Company: {company.get('company')} ({company.get('domain')})",
             f"Tier: {score.get('tier')} score {score.get('total_score')}",
             f"Criteria: Tier A >= {criteria_profile.get('tier_a_threshold', 75)}, Tier B >= {criteria_profile.get('tier_b_threshold', 60)}, employee range {criteria_profile.get('min_employee_count', 25)}-{criteria_profile.get('max_employee_count', 2000)}",
+            f"Qualifier: {qualification.get('qualifier', 'rules')} via {qualification.get('source', 'rules')}",
+            f"AI narrative: {ai_narrative or 'n/a'}",
             f"Strategy: {strategy.get('outreach_angle')}",
             f"Offer: {strategy.get('offer')}",
             f"Personas: {', '.join(persona.get('title', '') for persona in strategy.get('personas', []))}",
@@ -311,6 +315,10 @@ def _account_summary_document(
             "page_category": "summary",
             "source_url": company.get("domain"),
             "evidence_id": "account-summary",
+            "qualifier": qualification.get("qualifier", "rules"),
+            "qualifier_source": qualification.get("source", "rules"),
+            "qualifier_confidence": qualification.get("confidence", 0.0),
+            "ai_narrative": ai_narrative,
             "signal_tags": lead_metadata.get("signal_tags", []),
             "criteria_tier_a_threshold": criteria_profile.get("tier_a_threshold"),
             "criteria_tier_b_threshold": criteria_profile.get("tier_b_threshold"),

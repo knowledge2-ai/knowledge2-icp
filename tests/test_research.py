@@ -6,8 +6,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from icp_engine.app_store import AppStore
+from icp_engine.claude import ClaudeUnavailable
 from icp_engine.k2_backend import K2Backend
-from icp_engine.models import CompanyInput, Evidence
+from icp_engine.models import Classification, CompanyInput, Evidence
 from icp_engine.research import ResearchPipeline
 
 
@@ -36,6 +37,95 @@ def fake_evidence(company: CompanyInput, cache_dir: Path) -> tuple[list[Evidence
         ],
         [],
     )
+
+
+def fake_classifier(company: CompanyInput, evidence: list[Evidence], *, criteria_markdown: str) -> Classification:
+    return Classification(
+        ai_posture=3,
+        data_workflow=4,
+        commercial_urgency=3,
+        budget_access=3,
+        feasibility=4,
+        reasons={"ai_posture": "Embedded workflow assistant."},
+        evidence_ids={"ai_posture": ["e1"]},
+        confidence=0.85,
+        source="claude:test",
+        ai_narrative="Builds an embedded dispatch assistant on proprietary fleet data.",
+    )
+
+
+class QualifierPipelineTest(unittest.TestCase):
+    def test_claude_qualifier_uses_model_classification_and_persists_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            store.save_settings({"qualifier": "claude"})
+            pipeline = ResearchPipeline(store, evidence_fetcher=fake_evidence, classifier=fake_classifier)
+
+            run = pipeline.create_run(query="", seed_text="Mojio, moj.io", include_github=False, use_apollo=False)
+
+            self.assertEqual(run["status"], "completed")
+            self.assertEqual(run["qualifier"], "claude")
+            lead = run["leads"][0]
+            self.assertEqual(lead["score"]["classification"]["source"], "claude:test")
+            self.assertEqual(lead["score"]["ai_narrative"], "Builds an embedded dispatch assistant on proprietary fleet data.")
+            qualification = lead["metadata"]["qualification"]
+            self.assertEqual(qualification["qualifier"], "claude")
+            self.assertEqual(qualification["source"], "claude:test")
+            self.assertEqual(qualification["evidence_ids"]["ai_posture"], ["e1"])
+            self.assertEqual(qualification["ai_narrative"], "Builds an embedded dispatch assistant on proprietary fleet data.")
+
+    def test_claude_judge_failure_falls_back_to_rules_with_warning(self) -> None:
+        def boom(company, evidence, *, criteria_markdown):  # type: ignore[no-untyped-def]
+            raise ClaudeUnavailable("no key")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            store.save_settings({"qualifier": "claude"})
+            pipeline = ResearchPipeline(store, evidence_fetcher=fake_evidence, classifier=boom)
+
+            run = pipeline.create_run(query="", seed_text="Mojio, moj.io", include_github=False, use_apollo=False)
+
+            self.assertEqual(run["status"], "completed")
+            self.assertEqual(len(run["leads"]), 1)
+            lead = run["leads"][0]
+            self.assertEqual(lead["metadata"]["qualification"]["source"], "rules")
+            self.assertTrue(any("Claude qualifier" in warning for warning in run["warnings"]))
+
+    def test_judge_fields_flow_into_k2_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            store.save_settings({"qualifier": "claude"})
+            pipeline = ResearchPipeline(store, evidence_fetcher=fake_evidence, classifier=fake_classifier)
+            run = pipeline.create_run(query="", seed_text="Mojio, moj.io", include_github=False, use_apollo=False)
+
+            manifest = K2Backend(api_key="").build_manifest(run)
+
+            self.assertIn("ai_narrative", manifest["metadata_keys"])
+            self.assertIn("qualifier", manifest["metadata_keys"])
+            summary = next(
+                doc for doc in manifest["documents"] if doc["metadata"].get("source_type") == "account_summary"
+            )
+            self.assertEqual(summary["metadata"]["qualifier"], "claude")
+            self.assertEqual(summary["metadata"]["qualifier_source"], "claude:test")
+            self.assertIn("dispatch assistant", summary["metadata"]["ai_narrative"])
+            self.assertIn("AI narrative:", summary["text"])
+
+    def test_rules_qualifier_never_calls_the_judge(self) -> None:
+        calls: list[str] = []
+
+        def tracking(company, evidence, *, criteria_markdown):  # type: ignore[no-untyped-def]
+            calls.append(company.domain)
+            return fake_classifier(company, evidence, criteria_markdown=criteria_markdown)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))  # default qualifier is "rules"
+            pipeline = ResearchPipeline(store, evidence_fetcher=fake_evidence, classifier=tracking)
+
+            run = pipeline.create_run(query="", seed_text="Mojio, moj.io", include_github=False, use_apollo=False)
+
+            self.assertEqual(run["qualifier"], "rules")
+            self.assertEqual(calls, [])
+            self.assertEqual(run["leads"][0]["metadata"]["qualification"]["source"], "rules")
 
 
 class ResearchPipelineTest(unittest.TestCase):
