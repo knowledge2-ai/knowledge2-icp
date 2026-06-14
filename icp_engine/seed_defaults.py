@@ -6,178 +6,31 @@ from pathlib import Path
 from typing import Any
 
 
-SEEDED_CRITERIA_MARKDOWN = """# Seeded ICP Criteria
-
-Source: local `icp.md`.
-
-## Bottom line
-
-Pre-2025 incumbent software companies with proprietary workflow/data assets,
-enough customers to feel competitive pressure, and either no public AI
-narrative or a shallow AI feature that does not yet change the customer core
-workflow.
-
-## Hard gates
-
-- Founded before 2025.
-- Product company, not primarily services or consulting.
-- B2B or B2B2C with business customers, enterprise accounts, or partner channels.
-- Has proprietary workflow/data such as trips, claims, inventory, tickets,
-  inspections, schedules, diagnostics, documents, or transactions.
-- Enough budget: roughly 25-2000 employees, or smaller when clearly funded.
-- Not AI-native as the founding premise or core category.
-
-## Scoring settings
-
-- AI gap: 30 points.
-- Data/workflow moat: 25 points.
-- Commercial urgency: 20 points.
-- Budget/access: 15 points.
-- Feasibility: 10 points.
-- Tier A threshold: 75.
-- Tier B threshold: 60.
-- Reject or nurture below 60.
-
-## Priority verticals
-
-Priority verticals: automotive, dealer, dealership, fleet, telematics,
-field service, maintenance, logistics, warehouse, construction, property,
-facilities, insurance, claims, healthcare admin, manufacturing, ERP,
-compliance, govtech, permitting, legal, accounting, TMS, WMS, CMMS, RCM.
-
-## Limited AI traction checks
-
-Look for missing AI-specific product docs, paid AI SKUs, case studies, adoption
-proof, release cadence, review mentions, action-capable workflow depth, data
-grounding, and governance controls.
-"""
+# Plain data directory holding the knowledge2 tenant's externalized seed data
+# (mirrors the non-package ``web_assets`` data-dir convention — no ``__init__.py``).
+_KNOWLEDGE2_DIR = Path(__file__).with_name("tenants") / "knowledge2"
 
 
-SEEDED_PROMPTS: list[dict[str, Any]] = [
-    {
-        "id": "prompt-discovery-priority-verticals",
-        "label": "Discovery query",
-        "kind": "search",
-        "text": "workflow SaaS companies with fleet, dealership, field service, claims, or logistics data and limited public AI positioning",
-    },
-    {
-        "id": "prompt-ai-posture-audit",
-        "label": "AI posture audit",
-        "kind": "research",
-        "text": "Which Tier A or B leads have proprietary workflow data but weak AI posture, and what public evidence supports the recommendation?",
-    },
-    {
-        "id": "prompt-apollo-personas",
-        "label": "Apollo persona targets",
-        "kind": "prospecting",
-        "text": "Find product, engineering, data, and vertical GM leaders who can own an AI workflow opportunity map.",
-    },
-    {
-        "id": "prompt-k2-manifest",
-        "label": "K2 metadata manifest",
-        "kind": "k2",
-        "text": "Upload lead evidence with run_id, criteria_hash, source_type, page_category, signal_tags, persona_titles, and outreach_angle metadata.",
-    },
-]
+SEEDED_CRITERIA_MARKDOWN = (_KNOWLEDGE2_DIR / "criteria.md").read_text(encoding="utf-8")
 
 
-SEEDED_SETTINGS: dict[str, Any] = {
-    "default_query": SEEDED_PROMPTS[0]["text"],
-    "max_companies": 50,
-    "max_pages": 6,
-    "fetch_website_evidence": True,
-    "include_github_metadata": True,
-    "use_apollo_enrichment": False,
-    "use_serp_discovery": True,
-    "tier_a_threshold": 75,
-    "tier_b_threshold": 60,
-    "employee_range": "25-2000 employees",
-    "qualifier": "rules",
-    "discovery_provider": "auto",
-    "outreach_mode": "template",
-    "mining_corpus": "auto",
-    "deployment_mode": "cloudflare-seeded-worker",
-    "provider_limits": {
-        "enabled": True,
-        "daily": {
-            "search": 200,
-            "discovery": 200,
-            "source_scan": 100,
-            "run": 80,
-            "apollo_enrichment": 100,
-            "outreach": 200,
-            "research": 300,
-            "k2_apply": 10,
-            "k2_dry_run": 100,
-            "mining": 200,
-        },
-        "rate_per_minute": {
-            "search": 30,
-            "discovery": 30,
-            "source_scan": 20,
-            "run": 10,
-            "apollo_enrichment": 20,
-            "outreach": 30,
-            "research": 60,
-            "k2_apply": 5,
-            "k2_dry_run": 20,
-            "mining": 30,
-        },
-        "per_run": {
-            "max_companies": 100,
-            "max_pages": 20,
-        },
-    },
-}
+SEEDED_PROMPTS: list[dict[str, Any]] = json.loads(
+    (_KNOWLEDGE2_DIR / "prompts.json").read_text(encoding="utf-8")
+)
+
+
+SEEDED_SETTINGS: dict[str, Any] = json.loads(
+    (_KNOWLEDGE2_DIR / "settings.json").read_text(encoding="utf-8")
+)
 
 
 # Named query profiles (PRD §14.4) seeded so corpus mining starts with the standard
 # ICP search angles. Each profile pairs example queries with metadata-filter hints over
 # the §14.3 keys; profiles drive `mine_corpus` so the named angles are operable, not just
 # topology metadata.
-SEEDED_QUERY_PROFILES: list[dict[str, Any]] = [
-    {
-        "id": "portfolio-expansion",
-        "name": "Portfolio expansion",
-        "description": "Find more companies like Constellation/Volaris/Harris portfolio accounts.",
-        "queries": [
-            "vertical market software portfolio companies with workflow data",
-            "operating group software companies automotive fleet maintenance claims",
-        ],
-        "filters": [{"key": "tier", "op": "in", "value": ["A", "B"]}],
-    },
-    {
-        "id": "ai-gap-audit",
-        "name": "AI gap audit",
-        "description": "Find data-rich accounts with weak AI positioning.",
-        "queries": [
-            "proprietary workflow data no AI docs",
-            "AI assistant thin feature no pricing no case study",
-        ],
-        "filters": [{"key": "ai_posture", "op": "==", "value": "none"}],
-    },
-    {
-        "id": "workflow-moat",
-        "name": "Workflow moat",
-        "description": "Find strong operational-data categories.",
-        "queries": ["work orders dispatch diagnostics inspections claims inventory schedules transactions API"],
-        "filters": [],
-    },
-    {
-        "id": "budget-access",
-        "name": "Budget & access",
-        "description": "Find companies with enough scale and reachable owners.",
-        "queries": ["enterprise customers partner channel VP product CTO data leader 25 2000 employees"],
-        "filters": [{"key": "has_contact_path", "op": "==", "value": True}],
-    },
-    {
-        "id": "prospect-role-tree",
-        "name": "Prospect role tree",
-        "description": "Find people/contact records by role hierarchy.",
-        "queries": ["chief product officer VP engineering head of data general manager vertical product"],
-        "filters": [],
-    },
-]
+SEEDED_QUERY_PROFILES: list[dict[str, Any]] = json.loads(
+    (_KNOWLEDGE2_DIR / "query_profiles.json").read_text(encoding="utf-8")
+)
 
 
 def _load_seed_accounts() -> list[dict[str, Any]]:
@@ -186,22 +39,11 @@ def _load_seed_accounts() -> list[dict[str, Any]]:
     return payload.get("account_universe", [])
 
 
+# account_universe stays sourced from web_assets/seed-companies.json (bundled into the
+# Cloudflare worker); priority_verticals is externalized to tenants/knowledge2/lists.json.
 SEEDED_LISTS: dict[str, Any] = {
     "account_universe": _load_seed_accounts(),
-    "priority_verticals": [
-        "automotive",
-        "fleet",
-        "telematics",
-        "dealership",
-        "field service",
-        "logistics",
-        "construction",
-        "insurance claims",
-        "healthcare admin",
-        "manufacturing",
-        "govtech",
-        "legal practice software",
-    ],
+    **json.loads((_KNOWLEDGE2_DIR / "lists.json").read_text(encoding="utf-8")),
 }
 
 

@@ -25,7 +25,14 @@ class SourcesMixin:
     def load_sources(self) -> list[dict[str, Any]]:
         self.ensure()
         value = _load_json_file(self.sources_path, list)
-        sources = value if value is not None else _default_sources()
+        sources = (
+            value
+            if value is not None
+            else _default_sources(
+                self.tenant_config.prompts,
+                len(self.tenant_config.lists.get("account_universe", [])),
+            )
+        )
         return [_normalize_source_record(item) for item in sources if isinstance(item, dict) and item.get("name")]
 
     def save_source(

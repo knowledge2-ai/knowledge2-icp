@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any
 
 from ..mining import MINING_FILTER_KEYS, MINING_FILTER_OPS
-from ..seed_defaults import SEEDED_LISTS, SEEDED_PROMPTS, SEEDED_SETTINGS
 
 
 DEFAULT_STATE_DIR = Path(os.environ.get("ICP_APP_STATE_DIR", "out/app_state"))
@@ -160,8 +159,12 @@ def _deep_merge_provider_limits(defaults: Any, overrides: Any) -> dict[str, Any]
     return base
 
 
-def _normalize_provider_limits(payload: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
-    limits = _deep_merge_provider_limits(SEEDED_SETTINGS.get("provider_limits", {}), current)
+def _normalize_provider_limits(
+    payload: dict[str, Any],
+    current: dict[str, Any],
+    seeded_provider_limits: dict[str, Any],
+) -> dict[str, Any]:
+    limits = _deep_merge_provider_limits(seeded_provider_limits, current)
     if "enabled" in payload:
         limits["enabled"] = _coerce_bool(payload["enabled"], bool(limits.get("enabled", True)))
     for group in ("daily", "rate_per_minute"):
@@ -186,7 +189,7 @@ def _normalize_provider_limits(payload: dict[str, Any], current: dict[str, Any])
                 for key, value in per_run.items()
             },
         }
-    return _deep_merge_provider_limits(SEEDED_SETTINGS.get("provider_limits", {}), limits)
+    return _deep_merge_provider_limits(seeded_provider_limits, limits)
 
 
 def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
@@ -308,10 +311,10 @@ def _parse_event_datetime(value: str) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def _default_sources() -> list[dict[str, Any]]:
-    prompts = {item.get("id"): item for item in SEEDED_PROMPTS if isinstance(item, dict)}
+def _default_sources(prompts: list[dict[str, Any]], account_count: int) -> list[dict[str, Any]]:
+    prompts = {item.get("id"): item for item in prompts if isinstance(item, dict)}
     discovery_prompt = prompts.get("discovery-query", {})
-    source_count = len(SEEDED_LISTS.get("account_universe", []))
+    source_count = account_count
     return [
         _source_seed_record(
             "seed-constellation-portfolio",
