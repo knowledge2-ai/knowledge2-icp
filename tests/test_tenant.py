@@ -3,10 +3,12 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from icp_engine import apollo, discovery, enrichment, github, k2_client, perplexity, seed_defaults
 from icp_engine.app_store import AppStore
 from icp_engine.tenant import Branding, K2Settings, TenantConfig
+from icp_engine.web import build_tenant_store
 
 
 class TenantConfigTest(unittest.TestCase):
@@ -86,6 +88,59 @@ class BrandingUserAgentCentralizationTest(unittest.TestCase):
         self.assertEqual(apollo._BRANDING.api_user_agent, "Knowledge2ICP/0.1")
         self.assertEqual(github._BRANDING.api_user_agent, "Knowledge2ICP/0.1")
         self.assertEqual(k2_client._BRANDING.api_user_agent, "Knowledge2ICP/0.1")
+
+
+class TenantLoaderTest(unittest.TestCase):
+    def test_load_acme_returns_acme_config(self) -> None:
+        config = TenantConfig.load("acme")
+        self.assertEqual(config.tenant_id, "acme")
+        self.assertEqual(config.branding.service_name, "Acme GTM")
+        self.assertEqual(config.k2.workspace_namespace, "acme-gtm")
+        self.assertIn("Acme GTM ICP", config.criteria_markdown)
+        # Distinct from the built-in default tenant.
+        default = TenantConfig.default()
+        self.assertNotEqual(config.criteria_markdown, default.criteria_markdown)
+        self.assertNotEqual(config.branding.service_name, default.branding.service_name)
+
+    def test_load_knowledge2_equals_default_path(self) -> None:
+        config = TenantConfig.load("knowledge2")
+        self.assertEqual(config.tenant_id, "knowledge2")
+        self.assertIn("Seeded ICP Criteria", config.criteria_markdown)
+
+    def test_from_tenant_dir_round_trips_acme_files(self) -> None:
+        config = TenantConfig.from_tenant_dir(Path("icp_engine/tenants/acme"))
+        self.assertIn("logistics", config.default_settings["default_query"])
+        self.assertEqual(config.default_settings["max_companies"], 30)
+        self.assertTrue(config.lists["account_universe"])
+        self.assertTrue(config.query_profiles)
+
+    def test_build_tenant_store_isolates_tenant_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            acme = build_tenant_store("acme", base_state_dir=base)
+            knowledge2 = build_tenant_store("knowledge2", base_state_dir=base)
+
+            self.assertEqual(acme.state_dir, base / "acme")
+            self.assertEqual(knowledge2.state_dir, base)
+            self.assertNotEqual(acme.state_dir, knowledge2.state_dir)
+
+            self.assertIn("Acme GTM ICP", acme.load_criteria()["markdown"])
+            self.assertEqual(acme.load_settings()["max_companies"], 30)
+
+            # The knowledge2 store resolves criteria from its own (default) path, never
+            # from acme's tenant data.
+            self.assertNotIn("Acme GTM ICP", knowledge2.load_criteria()["markdown"])
+
+            # Saving criteria to the acme store must not leak into knowledge2.
+            acme.save_criteria("# Acme override\n\nOnly acme.\n")
+            self.assertIn("Acme override", acme.load_criteria()["markdown"])
+            self.assertNotIn("Acme override", knowledge2.load_criteria()["markdown"])
+
+    def test_build_tenant_store_respects_env_var(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict("os.environ", {"ICP_TENANT": "acme"}):
+                store = build_tenant_store(None, base_state_dir=Path(tmp))
+            self.assertEqual(store.tenant_config.tenant_id, "acme")
 
 
 if __name__ == "__main__":

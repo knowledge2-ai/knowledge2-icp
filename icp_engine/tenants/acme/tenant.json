@@ -1,0 +1,18 @@
+{
+  "tenant_id": "acme",
+  "branding": {
+    "service_name": "Acme GTM",
+    "user_agent": "AcmeGTM/0.1 (+https://acme.example)",
+    "discovery_user_agent": "AcmeGTMDiscovery/0.1 (+https://acme.example)",
+    "api_user_agent": "AcmeGTM/0.1",
+    "server_version": "AcmeGTMWeb/0.1",
+    "auth_realm": "acme-gtm",
+    "cli_description": "Acme GTM qualification CLI"
+  },
+  "k2": {
+    "project_name": "Acme GTM",
+    "workspace_namespace": "acme-gtm",
+    "base_url": "https://api.acme.example",
+    "source_uri_prefix": "inline://acme-gtm"
+  }
+}

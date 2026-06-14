@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from .app_store import AppStore
+from .app_store import AppStore, DEFAULT_STATE_DIR
 from .claude import ClaudeUnavailable, suggest_criteria
 from .k2_client import K2ApiError, SEARCH_BATCH_MAX_TOP_K
 from .k2_workspace_status import build_k2_workspace_status, run_k2_pipeline_action
@@ -24,6 +24,7 @@ from .mining import mining_to_csv
 from .outreach import summarize_outreach_drafts
 from .prospects import build_run_prospects, prospects_to_csv
 from .research import ResearchPipeline
+from .tenant import TenantConfig
 
 
 ASSET_DIR = Path(__file__).with_name("web_assets")
@@ -1107,18 +1108,32 @@ def _candidate_payloads(candidates: list[Any]) -> list[dict[str, Any]]:
     ]
 
 
+def build_tenant_store(tenant_id: str | None = None, *, base_state_dir: Path | None = None) -> AppStore:
+    clean = (tenant_id or os.environ.get("ICP_TENANT") or "knowledge2").strip() or "knowledge2"
+    config = TenantConfig.load(clean)
+    base = base_state_dir if base_state_dir is not None else DEFAULT_STATE_DIR
+    if clean == "knowledge2":
+        # knowledge2 keeps the base state dir and the repo-local icp.md fallback unchanged.
+        return AppStore(state_dir=base, tenant_config=config)
+    # Non-default tenants nest under the base dir and resolve criteria from their own
+    # tenant_config (icp_path points inside their isolated state dir, never the shared icp.md).
+    state_dir = base / clean
+    return AppStore(state_dir=state_dir, icp_path=state_dir / "icp.md", tenant_config=config)
+
+
 def run_server(
     host: str,
     port: int,
     store_dir: Path | None = None,
     admin_token: str | None = None,
     *,
+    tenant_id: str | None = None,
     allow_open_api: bool | None = None,
 ) -> ThreadingHTTPServer:
     token = (admin_token if admin_token is not None else os.environ.get("ICP_ADMIN_TOKEN", "")).strip()
     if not token and not _open_api_allowed(host, allow_open_api):
         raise ValueError("ICP_ADMIN_TOKEN is required when binding the API to a non-loopback host.")
-    store = AppStore(state_dir=store_dir) if store_dir else AppStore()
+    store = build_tenant_store(tenant_id, base_state_dir=store_dir)
     app = GTMApp(store=store, admin_token=token)
     server = ThreadingHTTPServer((host, port), make_handler(app))
     print(f"{app.store.tenant_config.branding.service_name} web app running at http://{host}:{port}")
@@ -1146,6 +1161,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--state-dir", type=Path, default=None)
+    parser.add_argument("--tenant", default=os.environ.get("ICP_TENANT", "knowledge2"))
     parser.add_argument("--admin-token", default=None, help="Optional bearer token for /api/* routes. Defaults to ICP_ADMIN_TOKEN.")
     parser.add_argument(
         "--allow-open-api",
@@ -1154,7 +1170,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Allow unauthenticated /api/* routes on non-loopback hosts. Intended only for isolated local networks.",
     )
     args = parser.parse_args(argv)
-    run_server(args.host, args.port, args.state_dir, admin_token=args.admin_token, allow_open_api=args.allow_open_api)
+    run_server(args.host, args.port, args.state_dir, admin_token=args.admin_token, tenant_id=args.tenant, allow_open_api=args.allow_open_api)
     return 0
 
 

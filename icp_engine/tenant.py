@@ -11,11 +11,16 @@ identically until a non-default tenant is supplied.
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from . import seed_defaults
+
+
+TENANTS_DIR = Path(__file__).parent / "tenants"
 
 
 @dataclass(frozen=True)
@@ -73,3 +78,29 @@ class TenantConfig:
     def default(cls) -> "TenantConfig":
         """The built-in Knowledge2 tenant — preserves original behavior."""
         return cls()
+
+    @classmethod
+    def from_tenant_dir(cls, tenant_dir: Path) -> "TenantConfig":
+        """Build a tenant config from a directory of data files + a tenant.json manifest."""
+        manifest = json.loads((tenant_dir / "tenant.json").read_text(encoding="utf-8"))
+        return cls(
+            tenant_id=str(manifest["tenant_id"]),
+            criteria_markdown=(tenant_dir / "criteria.md").read_text(encoding="utf-8"),
+            default_settings=json.loads((tenant_dir / "settings.json").read_text(encoding="utf-8")),
+            prompts=json.loads((tenant_dir / "prompts.json").read_text(encoding="utf-8")),
+            query_profiles=json.loads((tenant_dir / "query_profiles.json").read_text(encoding="utf-8")),
+            lists=json.loads((tenant_dir / "lists.json").read_text(encoding="utf-8")),
+            branding=Branding(**manifest.get("branding", {})),
+            k2=K2Settings(**manifest.get("k2", {})),
+        )
+
+    @classmethod
+    def load(cls, tenant_id: str) -> "TenantConfig":
+        """Resolve a tenant by id. knowledge2 keeps its built-in (worker-bundled account) path."""
+        clean = (tenant_id or "knowledge2").strip() or "knowledge2"
+        # knowledge2 is special-cased: its account universe lives in the worker-bundled
+        # web_assets/seed-companies.json (merged in seed_defaults), not in its tenant dir,
+        # so it routes through default() rather than the generic file loader.
+        if clean == "knowledge2":
+            return cls.default()
+        return cls.from_tenant_dir(TENANTS_DIR / clean)

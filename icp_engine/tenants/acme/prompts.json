@@ -1,0 +1,26 @@
+[
+  {
+    "id": "prompt-discovery-logistics",
+    "label": "Discovery query",
+    "kind": "search",
+    "text": "mid-market logistics and supply-chain software vendors with shipment, route, or warehouse data and limited public AI positioning"
+  },
+  {
+    "id": "prompt-ai-posture-audit",
+    "label": "AI posture audit",
+    "kind": "research",
+    "text": "Which Tier A or B logistics platforms own freight or warehouse data but have no AI route or ETA optimization, and what public evidence supports it?"
+  },
+  {
+    "id": "prompt-apollo-personas",
+    "label": "Apollo persona targets",
+    "kind": "prospecting",
+    "text": "Find VP product, head of data, and operations leaders at logistics software vendors who can own an AI optimization roadmap."
+  },
+  {
+    "id": "prompt-k2-manifest",
+    "label": "K2 metadata manifest",
+    "kind": "k2",
+    "text": "Upload logistics lead evidence with run_id, criteria_hash, source_type, freight_vertical, signal_tags, and outreach_angle metadata."
+  }
+]
