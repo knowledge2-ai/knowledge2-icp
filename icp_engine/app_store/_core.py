@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from ..seed_defaults import SEED_RUN_ID
+from ..tenant import TenantConfig
 from ._config import ConfigMixin
 from ._criteria import CriteriaMixin
 from ._engagement import EngagementMixin
@@ -20,7 +21,13 @@ from ._helpers import (
 
 
 class AppStore(CriteriaMixin, ConfigMixin, EngagementMixin, LeadsMixin, PlatformMixin, SourcesMixin):
-    def __init__(self, state_dir: Path | str = DEFAULT_STATE_DIR, icp_path: Path | str = DEFAULT_ICP_PATH) -> None:
+    def __init__(
+        self,
+        state_dir: Path | str = DEFAULT_STATE_DIR,
+        icp_path: Path | str = DEFAULT_ICP_PATH,
+        tenant_config: TenantConfig | None = None,
+    ) -> None:
+        self.tenant_config = tenant_config or TenantConfig.default()
         self.state_dir = Path(state_dir)
         self.icp_path = Path(icp_path)
         self.criteria_path = self.state_dir / "criteria.md"

@@ -6,7 +6,6 @@ import json
 from copy import deepcopy
 from typing import Any
 
-from ..seed_defaults import SEEDED_LISTS, SEEDED_PROMPTS, SEEDED_QUERY_PROFILES, SEEDED_SETTINGS
 from ._helpers import (
     _bounded_int,
     _clean_profile_filters,
@@ -24,17 +23,18 @@ class ConfigMixin:
         self.ensure()
         value = _load_json_file(self.prompts_path, list)
         if value is None:
-            return [dict(item) for item in SEEDED_PROMPTS]
+            return [dict(item) for item in self.tenant_config.prompts]
         return [item for item in value if isinstance(item, dict)]
 
     def load_settings(self) -> dict[str, Any]:
         self.ensure()
+        seeded_settings = self.tenant_config.default_settings
         value = _load_json_file(self.settings_path, dict)
         if value is None:
-            return dict(SEEDED_SETTINGS)
-        settings = {**SEEDED_SETTINGS, **value}
+            return dict(seeded_settings)
+        settings = {**seeded_settings, **value}
         settings["provider_limits"] = _deep_merge_provider_limits(
-            SEEDED_SETTINGS.get("provider_limits", {}),
+            seeded_settings.get("provider_limits", {}),
             settings.get("provider_limits", {}),
         )
         return settings
@@ -96,16 +96,17 @@ class ConfigMixin:
 
     def load_lists(self) -> dict[str, Any]:
         self.ensure()
+        seeded_lists = deepcopy(self.tenant_config.lists)
         value = _load_json_file(self.lists_path, dict)
         if value is None:
-            return json.loads(json.dumps(SEEDED_LISTS))
-        return {**json.loads(json.dumps(SEEDED_LISTS)), **value}
+            return seeded_lists
+        return {**seeded_lists, **value}
 
     def list_query_profiles(self) -> list[dict[str, Any]]:
         self.ensure()
         value = _load_json_file(self.query_profiles_path, list)
         if value is None:
-            return [deepcopy(item) for item in SEEDED_QUERY_PROFILES]
+            return [deepcopy(item) for item in self.tenant_config.query_profiles]
         return [item for item in value if isinstance(item, dict)]
 
     def save_query_profile(self, profile: dict[str, Any]) -> dict[str, Any]:

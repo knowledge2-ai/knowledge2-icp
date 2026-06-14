@@ -8,7 +8,6 @@ from typing import Any
 
 from ..criteria import build_criteria_profile
 from ..criteria_editor import format_criteria_markdown, lint_criteria_markdown
-from ..seed_defaults import SEEDED_CRITERIA_MARKDOWN
 from ._helpers import (
     _append_unique_criteria_version,
     _criteria_impact_reason,
@@ -33,7 +32,7 @@ class CriteriaMixin:
             source = str(self.icp_path)
             updated_at = datetime.fromtimestamp(self.icp_path.stat().st_mtime, tz=timezone.utc).replace(microsecond=0).isoformat()
         else:
-            markdown = SEEDED_CRITERIA_MARKDOWN
+            markdown = self.tenant_config.criteria_markdown
             source = "seed:icp.md"
             updated_at = now_iso()
         return {

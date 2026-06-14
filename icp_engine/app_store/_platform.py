@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ..seed_defaults import SEEDED_SETTINGS
 from ._helpers import (
     _deep_merge_provider_limits,
     _load_json_file,
@@ -50,7 +49,7 @@ class PlatformMixin:
 
     def provider_policy(self) -> dict[str, Any]:
         return _deep_merge_provider_limits(
-            SEEDED_SETTINGS.get("provider_limits", {}),
+            self.tenant_config.default_settings.get("provider_limits", {}),
             self.load_settings().get("provider_limits", {}),
         )
 
