@@ -538,6 +538,80 @@ class AppStoreTest(unittest.TestCase):
             self.assertEqual(summary["allowed_counts"]["outreach"], 1)
             self.assertGreaterEqual(summary["denied_counts"]["outreach"], 1)
 
+    def test_query_profiles_seed_and_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+
+            seeded = {profile["id"] for profile in store.list_query_profiles()}
+            self.assertIn("ai-gap-audit", seeded)
+            self.assertIn("portfolio-expansion", seeded)
+
+            saved = store.save_query_profile(
+                {
+                    "name": "Telematics A-tier",
+                    "description": "Tier A telematics with weak AI",
+                    "queries": ["telematics workflow data weak AI"],
+                    "filters": [{"key": "tier", "op": "==", "value": "A"}],
+                }
+            )
+            self.assertTrue(saved["id"])
+            reloaded = {profile["id"] for profile in store.list_query_profiles()}
+            self.assertIn(saved["id"], reloaded)
+
+            store.delete_query_profile(saved["id"])
+            self.assertNotIn(saved["id"], {profile["id"] for profile in store.list_query_profiles()})
+
+            audit_actions = {event["action"] for event in store.list_audit_events(limit=20)}
+            self.assertIn("query_profile.saved", audit_actions)
+            self.assertIn("query_profile.deleted", audit_actions)
+
+    def test_query_profile_rejects_unknown_filter_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            with self.assertRaises(ValueError):
+                store.save_query_profile({"name": "Bad", "filters": [{"key": "bogus", "op": "==", "value": "x"}]})
+
+    def test_mining_corpus_setting_defaults_to_auto_and_validates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+
+            self.assertEqual(store.load_settings()["mining_corpus"], "auto")
+
+            saved = store.save_settings({"mining_corpus": "evidence"})
+            self.assertEqual(saved["mining_corpus"], "evidence")
+            self.assertEqual(store.load_settings()["mining_corpus"], "evidence")
+
+            with self.assertRaises(ValueError):
+                store.save_settings({"mining_corpus": "bing"})
+
+    def test_mining_action_enforces_daily_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            store.ensure()
+            store.settings_path.write_text(
+                json.dumps(
+                    {
+                        "provider_limits": {
+                            "enabled": True,
+                            "daily": {"mining": 1},
+                            "rate_per_minute": {"mining": 99},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            first = store.authorize_provider_action("mining", details={"query": "tier A"})
+            second = store.authorize_provider_action("mining", details={"query": "tier A"})
+
+            self.assertTrue(first["allowed"])
+            self.assertFalse(second["allowed"])
+            self.assertEqual(second["limit_type"], "daily")
+
+            summary = store.provider_usage_summary()
+            self.assertEqual(summary["allowed_counts"]["mining"], 1)
+            self.assertGreaterEqual(summary["denied_counts"]["mining"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

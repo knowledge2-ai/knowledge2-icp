@@ -2284,8 +2284,11 @@ async function refreshProspects({ silent = false } = {}) {
   renderProspectsPanel(payload);
 }
 
-async function downloadWithAuth(path, filename, contentType) {
-  const response = await authFetch(path, { headers: { Accept: contentType } });
+async function downloadWithAuth(path, filename, contentType, options = {}) {
+  const response = await authFetch(path, {
+    ...options,
+    headers: { Accept: contentType, ...(options.headers || {}) },
+  });
   if (!response.ok) {
     let message = `Request failed: ${response.status}`;
     try {
@@ -2745,6 +2748,151 @@ $("download-prospects-json").addEventListener("click", () => {
     $("prospect-summary").className = "detail-panel empty";
     $("prospect-summary").textContent = error.message;
   });
+});
+
+function parseMiningFilters(text) {
+  return String(text || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const parts = line.split(/\s+/);
+      return { key: parts[0], op: parts[1] || "==", value: parts.slice(2).join(" ") };
+    });
+}
+
+function miningRequestBody() {
+  return {
+    query: $("mining-query").value.trim(),
+    corpus: $("mining-corpus").value,
+    filters: parseMiningFilters($("mining-filters").value),
+    top_k: 25,
+  };
+}
+
+function appendMiningFilter(key, value) {
+  const field = $("mining-filters");
+  const lines = field.value.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (lines.some((line) => line.split(/\s+/)[0] === key)) {
+    field.value = lines.map((line) => (line.split(/\s+/)[0] === key ? `${key} == ${value}` : line)).join("\n");
+  } else {
+    field.value = [...lines, `${key} == ${value}`].join("\n");
+  }
+}
+
+function renderMiningFacets(facets) {
+  const container = $("mining-facets");
+  const groups = Object.entries(facets || {});
+  if (!groups.length) {
+    container.innerHTML = "";
+    return;
+  }
+  container.innerHTML = groups
+    .map(
+      ([key, counts]) => `
+        <div class="facet-group">
+          <span class="facet-label">${escapeHtml(key)}</span>
+          ${Object.entries(counts)
+            .map(
+              ([value, count]) =>
+                `<button type="button" class="facet-chip" data-facet-key="${escapeHtml(key)}" data-facet-value="${escapeHtml(value)}">${escapeHtml(value)} · ${escapeHtml(count)}</button>`,
+            )
+            .join("")}
+        </div>`,
+    )
+    .join("");
+  container.querySelectorAll(".facet-chip").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      appendMiningFilter(chip.dataset.facetKey, chip.dataset.facetValue);
+      runMiningSearch().catch(showMiningError);
+    });
+  });
+}
+
+function renderMiningPanel(result) {
+  const panel = $("mining-panel");
+  const results = result.results || [];
+  renderMiningFacets(result.facets || {});
+  const warnings = (result.warnings || []).length
+    ? `<div class="detail-section"><h2>Warnings</h2>${result.warnings.map((item) => `<p>${escapeHtml(item)}</p>`).join("")}</div>`
+    : "";
+  if (!results.length) {
+    panel.className = "detail-panel empty";
+    panel.innerHTML = `No matches.${warnings}`;
+    return;
+  }
+  panel.className = "detail-panel";
+  panel.innerHTML = `
+    <p class="eyebrow">${escapeHtml(result.provider || "local")} · ${escapeHtml(result.corpus || "candidate")} · ${results.length} results</p>
+    <div class="source-candidate-list">
+      ${results
+        .map(
+          (item) => `
+        <article class="source-candidate">
+          <strong>${escapeHtml(item.company || item.domain || "")}</strong>
+          <span>${escapeHtml(item.domain || "")}</span>
+          <small><span class="${tierClass(item.tier)}">${escapeHtml(item.tier || "?")}</span> · ${escapeHtml(item.vertical || "")} · ${escapeHtml(item.ai_posture || "")} · score ${escapeHtml(item.total_score ?? "")}</small>
+          <p>${escapeHtml(item.snippet || "")}</p>
+        </article>`,
+        )
+        .join("")}
+    </div>
+    ${warnings}`;
+}
+
+function showMiningError(error) {
+  $("mining-status").textContent = error.message;
+}
+
+async function runMiningSearch() {
+  $("mining-status").textContent = "Searching corpus...";
+  const result = await api("/api/mining/search", { method: "POST", body: JSON.stringify(miningRequestBody()) });
+  renderMiningPanel(result);
+  $("mining-status").textContent = `${(result.results || []).length} results from ${result.provider || "local"}.`;
+}
+
+async function runMiningLookalikes() {
+  $("mining-status").textContent = "Finding lookalikes...";
+  const result = await api("/api/mining/lookalikes", {
+    method: "POST",
+    body: JSON.stringify({ seed_domains: $("mining-seeds").value, corpus: $("mining-corpus").value, top_k: 25 }),
+  });
+  renderMiningPanel(result);
+  $("mining-status").textContent = `${(result.results || []).length} lookalikes from ${result.provider || "local"}.`;
+}
+
+async function loadMiningProfiles() {
+  const payload = await api("/api/mining/profiles");
+  state.queryProfiles = payload.profiles || [];
+  const select = $("mining-profile");
+  const current = select.value;
+  select.innerHTML =
+    `<option value="">Custom</option>` +
+    state.queryProfiles.map((profile) => `<option value="${escapeHtml(profile.id)}">${escapeHtml(profile.name || profile.id)}</option>`).join("");
+  select.value = current;
+}
+
+function applyMiningProfile(profileId) {
+  const profile = (state.queryProfiles || []).find((item) => item.id === profileId);
+  if (!profile) return;
+  $("mining-query").value = (profile.queries || []).join(" ");
+  $("mining-filters").value = (profile.filters || [])
+    .map((filter) => `${filter.key} ${filter.op || "=="} ${filter.value ?? ""}`.trim())
+    .join("\n");
+}
+
+$("mining-search")?.addEventListener("click", () => runMiningSearch().catch(showMiningError));
+$("mining-lookalikes")?.addEventListener("click", () => runMiningLookalikes().catch(showMiningError));
+$("mining-profile")?.addEventListener("change", (event) => applyMiningProfile(event.target.value));
+$("mining-csv")?.addEventListener("click", () => {
+  downloadWithAuth("/api/mining/search.csv", "corpus-mining.csv", "text/csv", {
+    method: "POST",
+    body: JSON.stringify(miningRequestBody()),
+    headers: { "Content-Type": "application/json" },
+  }).catch(showMiningError);
+});
+document.querySelector('.tab[data-view="mining"]')?.addEventListener("click", () => {
+  loadMiningProfiles().catch(showMiningError);
 });
 
 loadState().catch((error) => {

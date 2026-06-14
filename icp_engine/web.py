@@ -20,6 +20,7 @@ from .app_store import AppStore
 from .claude import ClaudeUnavailable, suggest_criteria
 from .k2_client import K2ApiError
 from .k2_workspace_status import build_k2_workspace_status, run_k2_pipeline_action
+from .mining import mining_to_csv
 from .outreach import summarize_outreach_drafts
 from .prospects import build_run_prospects, prospects_to_csv
 from .research import ResearchPipeline
@@ -126,6 +127,9 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                 return
             if parsed.path == "/api/k2-workspace":
                 self._send_json(build_k2_workspace_status())
+                return
+            if parsed.path == "/api/mining/profiles":
+                self._send_json({"profiles": app.store.list_query_profiles()})
                 return
             if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/workflow"):
                 run_id = parsed.path.split("/")[3]
@@ -570,6 +574,59 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                 )
                 self._send_json(answer)
                 return
+            if parsed.path in ("/api/mining/search", "/api/mining/search.csv"):
+                payload = self._read_json()
+                guard = app.store.authorize_provider_action("mining", details={"mode": "search"})
+                if not guard["allowed"]:
+                    self._send_provider_denied(guard)
+                    return
+                try:
+                    result = app.pipeline.k2.mine_corpus(
+                        query=str(payload.get("query", "")),
+                        filters=payload.get("filters"),
+                        corpus_key=_mining_corpus_key(app.store, payload),
+                        top_k=_mining_top_k(payload),
+                        store=app.store,
+                    )
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                if parsed.path.endswith(".csv"):
+                    self._send_text(
+                        mining_to_csv(result),
+                        content_type="text/csv; charset=utf-8",
+                        filename="corpus-mining.csv",
+                    )
+                    return
+                self._send_json(result)
+                return
+            if parsed.path == "/api/mining/lookalikes":
+                payload = self._read_json()
+                guard = app.store.authorize_provider_action("mining", details={"mode": "lookalikes"})
+                if not guard["allowed"]:
+                    self._send_provider_denied(guard)
+                    return
+                result = app.pipeline.k2.find_lookalikes(
+                    seed_domains=_seed_domains(payload),
+                    corpus_key=_mining_corpus_key(app.store, payload),
+                    top_k=_mining_top_k(payload),
+                    store=app.store,
+                )
+                self._send_json(result)
+                return
+            if parsed.path == "/api/mining/profiles":
+                payload = self._read_json()
+                if str(payload.get("action") or "save") == "delete":
+                    app.store.delete_query_profile(str(payload.get("id") or ""))
+                    self._send_json({"profiles": app.store.list_query_profiles()})
+                    return
+                try:
+                    profile = app.store.save_query_profile(payload)
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_json({"profile": profile, "profiles": app.store.list_query_profiles()})
+                return
             if parsed.path == "/api/evals/cases":
                 payload = self._read_json()
                 try:
@@ -984,6 +1041,37 @@ def _outreach_mode_is_claude(store: AppStore) -> bool:
     paid model, so only it draws against the ``outreach`` budget.
     """
     return str(store.load_settings().get("outreach_mode") or "template").strip().lower() == "claude"
+
+
+_MINING_CORPUS_KEYS = {"candidate", "evidence", "prospect", "source", "criteria"}
+
+
+def _mining_corpus_key(store: AppStore, payload: dict[str, Any]) -> str:
+    """Resolve the corpus to mine: explicit request wins, else the ``mining_corpus`` setting.
+
+    ``auto`` (the default, on both the request and the setting) maps to the candidate
+    corpus — the run/lead index the growth loop fills.
+    """
+    requested = str(payload.get("corpus") or "").strip().lower()
+    if requested in _MINING_CORPUS_KEYS:
+        return requested
+    setting = str(store.load_settings().get("mining_corpus") or "auto").strip().lower()
+    return setting if setting in _MINING_CORPUS_KEYS else "candidate"
+
+
+def _mining_top_k(payload: dict[str, Any]) -> int:
+    try:
+        requested = int(payload.get("top_k") or 20)
+    except (TypeError, ValueError):
+        requested = 20
+    return max(1, min(requested, 50))
+
+
+def _seed_domains(payload: dict[str, Any]) -> list[str]:
+    raw = payload.get("seed_domains")
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    return [part.strip() for part in str(raw or "").replace("\n", ",").split(",") if part.strip()]
 
 
 def _candidate_payloads(candidates: list[Any]) -> list[dict[str, Any]]:

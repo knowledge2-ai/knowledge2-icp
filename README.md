@@ -413,6 +413,44 @@ curl -sS -X POST localhost:8787/api/settings \
   -d '{"outreach_mode":"claude"}'
 ```
 
+## Corpus mining & lookalike (K2)
+
+The **Mining** tab searches and mines the data the funnel has *already ingested* —
+not net-new internet sourcing (that is discovery, above). It answers "find companies
+like my Tier-A accounts" and "show every weak-AI-posture telematics lead" over the
+run/lead corpus the scheduled growth loop keeps filling.
+
+Two operations, both hybrid:
+
+- **Search** — metadata-filtered, faceted search. Filters are `key op value` clauses
+  over the standardized metadata keys (`tier`, `ai_posture`, `vertical`, `company`,
+  `total_score`, `outreach_status`, …) with ops `== != > >= < <= in contains`. Results
+  come back with `tier`/`ai_posture`/`vertical` facet counts you can click to refine.
+- **Lookalike** — seed a few account domains; the engine ranks other corpus companies
+  by shared ICP features (vertical, AI posture, tier, score proximity) and always
+  excludes the seeds themselves.
+
+**Hybrid with local fallback.** When a corpus is configured (`K2_<NAME>_CORPUS_ID`),
+mining runs as a live K2 metadata-filtered search. When K2 is unconfigured or a call
+fails, it degrades to an in-memory mine over the persisted run/lead JSON — same
+filters, same facets, with a warning noting the fallback. A bad filter key or op is a
+`400`, not a silent local fallthrough. Pick which corpus to mine with the
+`mining_corpus` setting (`auto` → the candidate corpus).
+
+**Query profiles** (`/api/mining/profiles`) save reusable query+filter presets;
+five are seeded (portfolio-expansion, ai-gap-audit, workflow-moat, budget-access,
+prospect-role-tree). Mining is bounded by the `mining` budget under `provider_limits`
+(HTTP 429 when spent). Export the current result set as CSV from the tab or
+`POST /api/mining/search.csv`.
+
+```bash
+# Optional: point mining at live K2 corpora (keys only; do not commit values):
+export K2_CANDIDATE_CORPUS_ID=...
+# Unset corpora just use the local mine over persisted runs — no setup required.
+```
+
+> The Cloudflare Worker mirror is frozen — mining is Python-only.
+
 ## Validate
 
 ```bash

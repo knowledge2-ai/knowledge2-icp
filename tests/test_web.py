@@ -572,6 +572,86 @@ class WebApiTest(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=2)
 
+    def test_mining_endpoints_search_csv_and_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = GTMApp(store=AppStore(Path(tmp)))
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_port}"
+            try:
+                # Seeded query profiles are served, and a custom one round-trips.
+                profiles = _json_get(f"{base_url}/api/mining/profiles")["profiles"]
+                self.assertIn("ai-gap-audit", {item["id"] for item in profiles})
+                saved = _json_post(
+                    f"{base_url}/api/mining/profiles",
+                    {"name": "A-tier telematics", "queries": ["telematics weak AI"], "filters": [{"key": "tier", "op": "==", "value": "A"}]},
+                )
+                self.assertIn(saved["profile"]["id"], {item["id"] for item in saved["profiles"]})
+                after_delete = _json_post(f"{base_url}/api/mining/profiles", {"action": "delete", "id": saved["profile"]["id"]})
+                self.assertNotIn(saved["profile"]["id"], {item["id"] for item in after_delete["profiles"]})
+
+                # Search degrades to the local mine over persisted runs; the filter narrows to tier A.
+                result = _json_post(f"{base_url}/api/mining/search", {"query": "telematics", "filters": [{"key": "tier", "op": "==", "value": "A"}]})
+                self.assertEqual(result["provider"], "local")
+                self.assertIn("facets", result)
+                self.assertTrue(result["results"])
+                self.assertTrue(all(item["tier"] == "A" for item in result["results"]))
+
+                # A bad filter key is a 400, not a silent local fallthrough.
+                with self.assertRaises(HTTPError) as bad:
+                    _json_post(f"{base_url}/api/mining/search", {"filters": [{"key": "bogus", "op": "==", "value": "x"}]})
+                self.assertEqual(bad.exception.code, 400)
+
+                # CSV export carries the header row and a CSV content type.
+                body, content_type = _text_post(f"{base_url}/api/mining/search.csv", {"query": "telematics"})
+                self.assertIn("text/csv", content_type)
+                self.assertIn("company,domain,vertical,tier", body.splitlines()[0])
+
+                # Lookalike with no seeds returns a warning, not an error.
+                lookalikes = _json_post(f"{base_url}/api/mining/lookalikes", {"seed_domains": ""})
+                self.assertEqual(lookalikes["results"], [])
+                self.assertTrue(lookalikes["warnings"])
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+    def test_mining_budget_denial_returns_429(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            store.ensure()
+            store.settings_path.write_text(
+                json.dumps(
+                    {
+                        "provider_limits": {
+                            "enabled": True,
+                            "daily": {"mining": 1},
+                            "rate_per_minute": {"mining": 100},
+                            "per_run": {"max_companies": 100},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            store.record_provider_usage("mining", status="allowed", amount=1, details={"source": "seed"})
+            app = GTMApp(store=store)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_port}"
+            try:
+                with self.assertRaises(HTTPError) as denied:
+                    _json_post(f"{base_url}/api/mining/search", {"query": "telematics"})
+                self.assertEqual(denied.exception.code, 429)
+                body = json.loads(denied.exception.read().decode("utf-8"))
+                self.assertEqual(body["provider_control"]["action"], "mining")
+                self.assertEqual(body["provider_control"]["limit_type"], "daily")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
     def test_api_auth_when_admin_token_configured(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = AppStore(Path(tmp))
@@ -655,6 +735,13 @@ def _json_post(url: str, payload: dict[str, object], headers: dict[str, str] | N
     )
     with urlopen(request, timeout=5) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def _text_post(url: str, payload: dict[str, object], headers: dict[str, str] | None = None) -> tuple[str, str]:
+    request_headers = {"Content-Type": "application/json", **(headers or {})}
+    request = Request(url, data=json.dumps(payload).encode("utf-8"), method="POST", headers=request_headers)
+    with urlopen(request, timeout=5) as response:
+        return response.read().decode("utf-8"), response.headers.get("Content-Type", "")
 
 
 if __name__ == "__main__":

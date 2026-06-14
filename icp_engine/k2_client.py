@@ -102,12 +102,18 @@ class K2RestClient:
         payload = self._request("GET", f"/v1/corpora/{corpus_id}/metadata/discover", params=params)
         return _dict_payload(payload)
 
-    def search_batch(self, corpus_id: str, queries: list[str], *, top_k: int = 5) -> dict[str, Any]:
-        payload = self._request(
-            "POST",
-            f"/v1/corpora/{corpus_id}/search:batch",
-            body={"queries": queries, "top_k": max(1, min(top_k, 20))},
-        )
+    def search_batch(
+        self,
+        corpus_id: str,
+        queries: list[str],
+        *,
+        top_k: int = 5,
+        filters: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {"queries": queries, "top_k": max(1, min(top_k, 20))}
+        if filters is not None:
+            body["filters"] = filters
+        payload = self._request("POST", f"/v1/corpora/{corpus_id}/search:batch", body=body)
         return _dict_payload(payload)
 
     def list_agents(self, project_id: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:

@@ -1214,6 +1214,64 @@ h1 {
   gap: 8px;
 }
 
+.mining-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 12px 0;
+}
+
+.mining-controls .field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 220px;
+}
+
+.mining-controls .field > span {
+  font-size: 0.78rem;
+  color: var(--muted, #7c8a82);
+}
+
+.mining-filters-field {
+  flex: 2 1 320px;
+}
+
+.mining-facets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 8px 0;
+}
+
+.facet-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.facet-label {
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted, #7c8a82);
+  margin-right: 2px;
+}
+
+.facet-chip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  padding: 3px 10px;
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.facet-chip:hover {
+  background: var(--line);
+}
+
 .manifest-preview {
   max-height: 420px;
   overflow: auto;

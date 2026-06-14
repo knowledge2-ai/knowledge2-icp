@@ -95,6 +95,7 @@ SEEDED_SETTINGS: dict[str, Any] = {
     "qualifier": "rules",
     "discovery_provider": "auto",
     "outreach_mode": "template",
+    "mining_corpus": "auto",
     "deployment_mode": "cloudflare-seeded-worker",
     "provider_limits": {
         "enabled": True,
@@ -108,6 +109,7 @@ SEEDED_SETTINGS: dict[str, Any] = {
             "research": 300,
             "k2_apply": 10,
             "k2_dry_run": 100,
+            "mining": 200,
         },
         "rate_per_minute": {
             "search": 30,
@@ -119,6 +121,7 @@ SEEDED_SETTINGS: dict[str, Any] = {
             "research": 60,
             "k2_apply": 5,
             "k2_dry_run": 20,
+            "mining": 30,
         },
         "per_run": {
             "max_companies": 100,
@@ -126,6 +129,55 @@ SEEDED_SETTINGS: dict[str, Any] = {
         },
     },
 }
+
+
+# Named query profiles (PRD §14.4) seeded so corpus mining starts with the standard
+# ICP search angles. Each profile pairs example queries with metadata-filter hints over
+# the §14.3 keys; profiles drive `mine_corpus` so the named angles are operable, not just
+# topology metadata.
+SEEDED_QUERY_PROFILES: list[dict[str, Any]] = [
+    {
+        "id": "portfolio-expansion",
+        "name": "Portfolio expansion",
+        "description": "Find more companies like Constellation/Volaris/Harris portfolio accounts.",
+        "queries": [
+            "vertical market software portfolio companies with workflow data",
+            "operating group software companies automotive fleet maintenance claims",
+        ],
+        "filters": [{"key": "tier", "op": "in", "value": ["A", "B"]}],
+    },
+    {
+        "id": "ai-gap-audit",
+        "name": "AI gap audit",
+        "description": "Find data-rich accounts with weak AI positioning.",
+        "queries": [
+            "proprietary workflow data no AI docs",
+            "AI assistant thin feature no pricing no case study",
+        ],
+        "filters": [{"key": "ai_posture", "op": "==", "value": "none"}],
+    },
+    {
+        "id": "workflow-moat",
+        "name": "Workflow moat",
+        "description": "Find strong operational-data categories.",
+        "queries": ["work orders dispatch diagnostics inspections claims inventory schedules transactions API"],
+        "filters": [],
+    },
+    {
+        "id": "budget-access",
+        "name": "Budget & access",
+        "description": "Find companies with enough scale and reachable owners.",
+        "queries": ["enterprise customers partner channel VP product CTO data leader 25 2000 employees"],
+        "filters": [{"key": "has_contact_path", "op": "==", "value": True}],
+    },
+    {
+        "id": "prospect-role-tree",
+        "name": "Prospect role tree",
+        "description": "Find people/contact records by role hierarchy.",
+        "queries": ["chief product officer VP engineering head of data general manager vertical product"],
+        "filters": [],
+    },
+]
 
 
 def _load_seed_accounts() -> list[dict[str, Any]]:
