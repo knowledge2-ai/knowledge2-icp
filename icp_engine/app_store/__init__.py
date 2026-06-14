@@ -6,14 +6,14 @@ unchanged: import it (and the module helpers/constants) straight from ``icp_engi
 
 from __future__ import annotations
 
-from ._core import (
+from ._core import AppStore
+from ._helpers import (
     DEFAULT_ICP_PATH,
     DEFAULT_STATE_DIR,
     LEAD_STATUSES,
     QUALITY_DIMENSIONS,
     QUALITY_RATINGS,
     SOURCE_TYPES,
-    AppStore,
     now_iso,
     provider_status,
     stable_hash,
