@@ -14,6 +14,7 @@ from ..evals import (
 )
 from ..outreach import (
     build_lead_outreach_drafts,
+    coerce_outreach_status,
     normalize_outreach_status,
     outreach_drafts_to_csv,
     summarize_outreach_drafts,
@@ -57,11 +58,15 @@ class EngagementMixin:
             merged: dict[str, dict[str, Any]] = {}
             for run_statuses in payload.values():
                 if isinstance(run_statuses, dict):
-                    merged.update({str(key): value for key, value in run_statuses.items() if isinstance(value, dict)})
+                    merged.update({
+                        str(key): _sanitize_outreach_status_record(value)
+                        for key, value in run_statuses.items()
+                        if isinstance(value, dict)
+                    })
             return merged
         run_statuses = payload.get(run_id, {}) if isinstance(payload, dict) else {}
         return {
-            str(key): value
+            str(key): _sanitize_outreach_status_record(value)
             for key, value in run_statuses.items()
             if isinstance(value, dict)
         } if isinstance(run_statuses, dict) else {}
@@ -306,3 +311,9 @@ class EngagementMixin:
         for row in rows:
             lines.append(",".join(_csv_cell(row.get(header, "")) for header in headers))
         return "\n".join(lines) + "\n"
+
+
+def _sanitize_outreach_status_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Coerce a persisted outreach-status record onto the enum so corrupt
+    on-disk data degrades gracefully instead of raising during draft rendering."""
+    return {**record, "status": coerce_outreach_status(record.get("status"))}

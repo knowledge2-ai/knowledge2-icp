@@ -302,6 +302,32 @@ def _seed_lead(
     if docs_url:
         signal_tags.append("integration")
     personas = _personas(vertical, tier)
+    classification_reasons = {
+        "ai_posture": "Seeded from local ICP examples and public-positioning notes.",
+        "data_workflow": f"Signals include {vertical} workflow data and operational systems.",
+        "criteria": "Scored with seeded local ICP criteria.",
+    }
+    classification_evidence_ids = {
+        "ai_posture": ["seed-evidence"],
+        "data_workflow": ["seed-evidence"],
+        "commercial_urgency": ["seed-evidence"],
+        "feasibility": ["seed-evidence"] if docs_url else [],
+    }
+    classification_confidence = (
+        0.82 if qualification and tier != "Reject" else 0.72 if tier != "Reject" else 0.55
+    )
+    classification_source = str(qualification.get("classification_source") or "seed")
+    # metadata.qualification mirrors the live shape from research._qualification_metadata
+    # (qualifier/source/confidence/ai_narrative/reasons/evidence_ids) so seed and live
+    # leads expose one schema. Seed accounts are rule-scored fixtures → qualifier "rules".
+    qualification_metadata = {
+        "qualifier": "rules",
+        "source": classification_source,
+        "confidence": classification_confidence,
+        "ai_narrative": str(qualification.get("ai_narrative") or ""),
+        "reasons": classification_reasons,
+        "evidence_ids": classification_evidence_ids,
+    }
     source_refs = {
         "careers_urls": [],
         "contact_urls": [],
@@ -342,19 +368,10 @@ def _seed_lead(
                 "commercial_urgency": 3 if tier != "Reject" else 1,
                 "budget_access": 3 if tier != "Reject" else 1,
                 "feasibility": feasibility,
-                "reasons": {
-                    "ai_posture": "Seeded from local ICP examples and public-positioning notes.",
-                    "data_workflow": f"Signals include {vertical} workflow data and operational systems.",
-                    "criteria": "Scored with seeded local ICP criteria.",
-                },
-                "evidence_ids": {
-                    "ai_posture": ["seed-evidence"],
-                    "data_workflow": ["seed-evidence"],
-                    "commercial_urgency": ["seed-evidence"],
-                    "feasibility": ["seed-evidence"] if docs_url else [],
-                },
-                "confidence": 0.82 if qualification and tier != "Reject" else 0.72 if tier != "Reject" else 0.55,
-                "source": str(qualification.get("classification_source") or "seed"),
+                "reasons": classification_reasons,
+                "evidence_ids": classification_evidence_ids,
+                "confidence": classification_confidence,
+                "source": classification_source,
             },
             "ai_gap_score": _qualified_int(qualification, "ai_gap_score", 30 if ai_posture <= 1 else 0),
             "data_workflow_score": _qualified_int(qualification, "data_workflow_score", min(25, data_workflow * 5)),
@@ -456,7 +473,7 @@ def _seed_lead(
                 "reason": "Seeded account list is available before live Apollo enrichment.",
                 "organizations": [],
             },
-            "qualification": qualification,
+            "qualification": qualification_metadata,
         },
     }
 

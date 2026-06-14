@@ -107,6 +107,17 @@ def normalize_outreach_status(status: str) -> str:
     return normalized
 
 
+def coerce_outreach_status(status: object) -> str:
+    """Load-time defense: map a persisted status onto the enum, defaulting an
+    unknown/corrupt value to "Draft" instead of raising. normalize_outreach_status
+    still rejects bad *input* at write time; this only guards stored data so a
+    corrupt outreach_statuses.json can't crash draft rendering."""
+    try:
+        return normalize_outreach_status(str(status))
+    except (ValueError, TypeError):
+        return "Draft"
+
+
 def _draft_for_prospect(
     run: dict[str, Any],
     lead: dict[str, Any],

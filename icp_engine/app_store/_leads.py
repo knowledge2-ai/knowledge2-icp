@@ -12,6 +12,7 @@ from ._helpers import (
     LEAD_STATUSES,
     _audit_events_for_account,
     _clean_tags,
+    _coerce_lead_status,
     _default_lead_state,
     _evidence_timeline,
     _find_lead,
@@ -89,13 +90,17 @@ class LeadsMixin:
         payload = _load_json_file(self.lead_states_path, dict) or {}
         if run_id is None:
             return {
-                str(item_run_id): value
+                str(item_run_id): {
+                    domain: _sanitize_lead_state_record(record)
+                    for domain, record in value.items()
+                    if isinstance(record, dict)
+                }
                 for item_run_id, value in payload.items()
                 if isinstance(value, dict)
             }
         run_states = payload.get(run_id, {}) if isinstance(payload, dict) else {}
         return {
-            _normalize_domain(domain): record
+            _normalize_domain(domain): _sanitize_lead_state_record(record)
             for domain, record in run_states.items()
             if isinstance(record, dict)
         } if isinstance(run_states, dict) else {}
@@ -247,3 +252,9 @@ class LeadsMixin:
         except json.JSONDecodeError:
             return None
         return value if isinstance(value, dict) else None
+
+
+def _sanitize_lead_state_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Coerce a persisted lead-state record's status onto the enum so corrupt
+    on-disk data degrades gracefully instead of raising downstream."""
+    return {**record, "status": _coerce_lead_status(record.get("status"))}
