@@ -161,6 +161,20 @@ class FindLookalikesTest(unittest.TestCase):
         self.assertEqual(payload["results"], [])
         self.assertTrue(payload["warnings"])
 
+    def test_live_failure_falls_back_to_local_with_warning(self) -> None:
+        class _Boom:
+            def search_batch(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+                raise RuntimeError("k2 down")
+
+        backend = K2Backend(api_key="test-key")
+        backend.corpus_ids["candidate"] = "corpus-cand"
+
+        payload = backend.find_lookalikes(seed_domains=["moj.io"], client=_Boom(), store=_FakeStore())
+
+        self.assertEqual(payload["provider"], "local")
+        self.assertEqual(payload["results"][0]["domain"], "fleetco.com")
+        self.assertTrue(any("k2 down" in warning for warning in payload["warnings"]))
+
 
 class _FakeStore:
     def list_runs(self):  # type: ignore[no-untyped-def]

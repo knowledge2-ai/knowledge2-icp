@@ -468,14 +468,17 @@ class AppStore:
             raise ValueError("Query profile name is required.")
         queries = [" ".join(str(item).split()) for item in profile.get("queries") or [] if str(item).strip()]
         filters = _clean_profile_filters(profile.get("filters"))
-        profile_id = str(profile.get("id") or "").strip() or stable_hash(f"{now_iso()}:{name.lower()}")
+        now = now_iso()
+        profile_id = str(profile.get("id") or "").strip() or stable_hash(f"{now}:{name.lower()}")
+        existing = next((item for item in self.list_query_profiles() if item.get("id") == profile_id), {})
         record = {
             "id": profile_id,
             "name": name,
             "description": " ".join(str(profile.get("description") or "").split()),
             "queries": queries,
             "filters": filters,
-            "updated_at": now_iso(),
+            "created_at": str(existing.get("created_at") or now),
+            "updated_at": now,
         }
         profiles = [item for item in self.list_query_profiles() if item.get("id") != profile_id]
         profiles.append(record)

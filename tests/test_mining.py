@@ -79,6 +79,31 @@ class MineLocalTest(unittest.TestCase):
         self.assertEqual(payload["facets"], {"tier": {}, "ai_posture": {}, "vertical": {}})
 
 
+class MatchOperatorsTest(unittest.TestCase):
+    """Exercise every clause operator through the offline mine, not just ``==``."""
+
+    def _domains(self, key: str, op: str, value: object) -> set[str]:
+        payload = mine_local(_store(), query="", clauses=[(key, op, value)], top_k=20)
+        return {result["domain"] for result in payload["results"]}
+
+    def test_numeric_comparisons(self) -> None:
+        self.assertEqual(self._domains("total_score", ">", 70), {"moj.io", "fleetco.com"})
+        self.assertEqual(self._domains("total_score", ">=", 78), {"moj.io", "fleetco.com"})
+        self.assertEqual(self._domains("total_score", "<", 50), {"widget.com"})
+        self.assertEqual(self._domains("total_score", "<=", 78), {"fleetco.com", "widget.com"})
+
+    def test_not_equal(self) -> None:
+        self.assertEqual(self._domains("tier", "!=", "A"), {"widget.com"})
+
+    def test_in_and_contains(self) -> None:
+        self.assertEqual(self._domains("vertical", "in", ["telematics"]), {"moj.io", "fleetco.com"})
+        self.assertEqual(self._domains("vertical", "contains", "tele"), {"moj.io", "fleetco.com"})
+
+    def test_comparison_on_non_numeric_field_is_false_not_string_equality(self) -> None:
+        # A non-numeric operand can't be ordered; a `>` clause must not degrade to `==`.
+        self.assertEqual(self._domains("tier", ">", "A"), set())
+
+
 class LookalikesLocalTest(unittest.TestCase):
     def test_excludes_seed_and_ranks_by_shared_features(self) -> None:
         payload = lookalikes_local(_store(), seed_domains=["moj.io"], top_k=20)

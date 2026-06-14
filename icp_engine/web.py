@@ -18,7 +18,7 @@ from urllib.parse import unquote, urlparse
 
 from .app_store import AppStore
 from .claude import ClaudeUnavailable, suggest_criteria
-from .k2_client import K2ApiError
+from .k2_client import K2ApiError, SEARCH_BATCH_MAX_TOP_K
 from .k2_workspace_status import build_k2_workspace_status, run_k2_pipeline_action
 from .mining import mining_to_csv
 from .outreach import summarize_outreach_drafts
@@ -582,7 +582,7 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                     return
                 try:
                     result = app.pipeline.k2.mine_corpus(
-                        query=str(payload.get("query", "")),
+                        query=_mining_query(payload),
                         filters=payload.get("filters"),
                         corpus_key=_mining_corpus_key(app.store, payload),
                         top_k=_mining_top_k(payload),
@@ -617,7 +617,11 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
             if parsed.path == "/api/mining/profiles":
                 payload = self._read_json()
                 if str(payload.get("action") or "save") == "delete":
-                    app.store.delete_query_profile(str(payload.get("id") or ""))
+                    try:
+                        app.store.delete_query_profile(str(payload.get("id") or ""))
+                    except ValueError as exc:
+                        self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                        return
                     self._send_json({"profiles": app.store.list_query_profiles()})
                     return
                 try:
@@ -1064,14 +1068,26 @@ def _mining_top_k(payload: dict[str, Any]) -> int:
         requested = int(payload.get("top_k") or 20)
     except (TypeError, ValueError):
         requested = 20
-    return max(1, min(requested, 50))
+    # Cap at the live /search:batch ceiling so the surface never promises more
+    # results than the K2 path can actually return.
+    return max(1, min(requested, SEARCH_BATCH_MAX_TOP_K))
+
+
+_MINING_QUERY_MAX_CHARS = 1000
+_MINING_SEEDS_MAX = 50
+
+
+def _mining_query(payload: dict[str, Any]) -> str:
+    return str(payload.get("query", ""))[:_MINING_QUERY_MAX_CHARS]
 
 
 def _seed_domains(payload: dict[str, Any]) -> list[str]:
     raw = payload.get("seed_domains")
     if isinstance(raw, list):
-        return [str(item).strip() for item in raw if str(item).strip()]
-    return [part.strip() for part in str(raw or "").replace("\n", ",").split(",") if part.strip()]
+        seeds = [str(item).strip() for item in raw if str(item).strip()]
+    else:
+        seeds = [part.strip() for part in str(raw or "").replace("\n", ",").split(",") if part.strip()]
+    return seeds[:_MINING_SEEDS_MAX]
 
 
 def _candidate_payloads(candidates: list[Any]) -> list[dict[str, Any]]:

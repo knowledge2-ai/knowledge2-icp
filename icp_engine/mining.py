@@ -283,6 +283,10 @@ def _match_clause(field: Any, op: str, value: Any) -> bool:
         if op == "<":
             return left < right
         return left <= right
+    if op in {">", ">=", "<", "<="}:
+        # A non-numeric operand can't be ordered; don't silently fall through to
+        # the string-equality return below (a `<` clause behaving like `==`).
+        return False
     if op == "in":
         values = {str(item).strip().lower() for item in value} if isinstance(value, (list, tuple, set)) else {str(value).strip().lower()}
         return str(field or "").strip().lower() in values

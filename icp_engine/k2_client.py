@@ -8,6 +8,11 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
+# The /search:batch endpoint hard-caps top_k server-side; mirror it here so callers
+# can size their requests to what the API will actually return (no silent truncation).
+SEARCH_BATCH_MAX_TOP_K = 20
+
+
 class K2ApiError(RuntimeError):
     def __init__(self, message: str, *, status_code: int | None = None, body: str = "") -> None:
         super().__init__(message)
@@ -110,7 +115,7 @@ class K2RestClient:
         top_k: int = 5,
         filters: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        body: dict[str, Any] = {"queries": queries, "top_k": max(1, min(top_k, 20))}
+        body: dict[str, Any] = {"queries": queries, "top_k": max(1, min(top_k, SEARCH_BATCH_MAX_TOP_K))}
         if filters is not None:
             body["filters"] = filters
         payload = self._request("POST", f"/v1/corpora/{corpus_id}/search:batch", body=body)

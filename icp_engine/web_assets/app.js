@@ -100,6 +100,9 @@ async function loadState() {
   renderSources();
   renderRuns(payload.runs || []);
   renderRun(state.currentRun);
+  // Best-effort: keep the Mining profile <select> populated even when Mining is
+  // the active tab on reload (it otherwise only loads on a tab click).
+  loadMiningProfiles().catch(() => {});
 }
 
 function initAuthControls() {
