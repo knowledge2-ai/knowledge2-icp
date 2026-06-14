@@ -1,0 +1,98 @@
+{
+  "account_universe": [
+    {
+      "company": "FreightLine TMS",
+      "domain": "freightline.example",
+      "category": "freight transportation management software",
+      "source": "https://acme.example/icp/logistics-universe",
+      "source_group": "Acme logistics universe",
+      "source_url": "https://freightline.example/product",
+      "notes": "Mid-market TMS with proprietary load and route data; no public AI optimization docs",
+      "hq": "Columbus, OH",
+      "employee_count": 320,
+      "founded_year": 2014
+    },
+    {
+      "company": "DockPilot WMS",
+      "domain": "dockpilot.example",
+      "category": "warehouse management software",
+      "source": "https://acme.example/icp/logistics-universe",
+      "source_group": "Acme logistics universe",
+      "source_url": "https://dockpilot.example/about",
+      "notes": "Warehouse dock scheduling and inventory positions; thin AI feature, no case studies",
+      "hq": "Memphis, TN",
+      "employee_count": 210,
+      "founded_year": 2016
+    },
+    {
+      "company": "RouteAtlas",
+      "domain": "routeatlas.example",
+      "category": "last-mile delivery software",
+      "source": "https://acme.example/icp/logistics-universe",
+      "source_group": "Acme logistics universe",
+      "source_url": "https://routeatlas.example/platform",
+      "notes": "Last-mile routing with proprietary delivery telemetry; no public AI roadmap",
+      "hq": "Austin, TX",
+      "employee_count": 540,
+      "founded_year": 2013
+    },
+    {
+      "company": "ColdChain Insight",
+      "domain": "coldchaininsight.example",
+      "category": "cold-chain monitoring software",
+      "source": "https://acme.example/icp/logistics-universe",
+      "source_group": "Acme logistics universe",
+      "source_url": "https://coldchaininsight.example/solutions",
+      "notes": "Temperature and cold-chain telemetry for shippers; limited AI positioning",
+      "hq": "Denver, CO",
+      "employee_count": 130,
+      "founded_year": 2017
+    },
+    {
+      "company": "YardSync",
+      "domain": "yardsync.example",
+      "category": "yard management software",
+      "source": "https://acme.example/icp/logistics-universe",
+      "source_group": "Acme logistics universe",
+      "source_url": "https://yardsync.example/product",
+      "notes": "Yard and gate scheduling with proprietary trailer movement data; no AI SKU",
+      "hq": "Atlanta, GA",
+      "employee_count": 95,
+      "founded_year": 2018
+    },
+    {
+      "company": "TradeGate Compliance",
+      "domain": "tradegate.example",
+      "category": "customs and trade compliance software",
+      "source": "https://acme.example/icp/logistics-universe",
+      "source_group": "Acme logistics universe",
+      "source_url": "https://tradegate.example/platform",
+      "notes": "Customs filing and trade compliance for brokers; data-rich, weak AI narrative",
+      "hq": "Newark, NJ",
+      "employee_count": 410,
+      "founded_year": 2011
+    },
+    {
+      "company": "FleetPulse Telematics",
+      "domain": "fleetpulse.example",
+      "category": "fleet telematics software",
+      "source": "https://acme.example/icp/logistics-universe",
+      "source_group": "Acme logistics universe",
+      "source_url": "https://fleetpulse.example/about",
+      "notes": "Fleet telematics with proprietary trip and diagnostics data; shallow AI feature",
+      "hq": "Chicago, IL",
+      "employee_count": 680,
+      "founded_year": 2012
+    }
+  ],
+  "priority_verticals": [
+    "freight TMS",
+    "last-mile delivery",
+    "fleet telematics",
+    "warehouse management",
+    "supply-chain visibility",
+    "customs and trade compliance",
+    "cold-chain monitoring",
+    "yard management"
+  ]
+}

@@ -1,0 +1,52 @@
+[
+  {
+    "id": "freight-data-moat",
+    "name": "Freight data moat",
+    "description": "Find logistics platforms with proprietary shipment, route, or load data.",
+    "queries": [
+      "freight TMS shipment tracking proprietary route data API",
+      "warehouse management dock schedule inventory positions software"
+    ],
+    "filters": [
+      {
+        "key": "tier",
+        "op": "in",
+        "value": [
+          "A",
+          "B"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "ai-optimization-gap",
+    "name": "AI optimization gap",
+    "description": "Find logistics vendors with no AI route or ETA optimization.",
+    "queries": [
+      "logistics software no AI route optimization no ETA prediction docs",
+      "supply chain visibility platform thin AI feature no case study"
+    ],
+    "filters": [
+      {
+        "key": "ai_posture",
+        "op": "==",
+        "value": "none"
+      }
+    ]
+  },
+  {
+    "id": "ops-buyer-access",
+    "name": "Ops buyer access",
+    "description": "Find logistics vendors with reachable operations and data owners.",
+    "queries": [
+      "VP operations head of data logistics software 50 1500 employees carrier shipper 3PL"
+    ],
+    "filters": [
+      {
+        "key": "has_contact_path",
+        "op": "==",
+        "value": true
+      }
+    ]
+  }
+]
