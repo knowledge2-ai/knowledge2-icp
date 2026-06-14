@@ -12,8 +12,11 @@ from urllib.request import Request, urlopen
 
 from .evidence import dedupe_evidence, is_high_value_url
 from .models import CompanyInput, Evidence
+from .tenant import Branding
 from .text import compact_snippet, html_to_text_and_links
 
+
+_BRANDING = Branding()
 
 DEFAULT_PATHS = [
     "",
@@ -158,7 +161,7 @@ def _fetch_or_read_cache(url: str, cache_dir: Path, timeout_seconds: float) -> d
     request = Request(
         url,
         headers={
-            "User-Agent": "Knowledge2ICP/0.1 (+https://knowledge2.ai)",
+            "User-Agent": _BRANDING.user_agent,
             "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
         },
     )

@@ -23,7 +23,12 @@ class Branding:
     """User-facing identity strings (wired through the web/CLI layers)."""
 
     service_name: str = "Knowledge2 ICP"
+    # enrichment
     user_agent: str = "Knowledge2ICP/0.1 (+https://knowledge2.ai)"
+    # perplexity, discovery
+    discovery_user_agent: str = "Knowledge2ICPDiscovery/0.1 (+https://knowledge2.ai)"
+    # apollo, github, k2_client
+    api_user_agent: str = "Knowledge2ICP/0.1"
     server_version: str = "Knowledge2ICPWeb/0.1"
     auth_realm: str = "knowledge2-icp"
     cli_description: str = "Knowledge2 ICP qualification CLI"

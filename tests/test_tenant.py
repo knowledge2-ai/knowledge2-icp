@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from icp_engine import seed_defaults
+from icp_engine import apollo, discovery, enrichment, github, k2_client, perplexity, seed_defaults
 from icp_engine.app_store import AppStore
 from icp_engine.tenant import Branding, K2Settings, TenantConfig
 
@@ -68,6 +68,24 @@ class TenantConfigTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store = AppStore(Path(tmp) / "state", Path(tmp) / "missing-icp.md", tenant_config=custom)
             self.assertEqual(store.provider_policy()["daily"]["research"], 7)
+
+
+class BrandingUserAgentCentralizationTest(unittest.TestCase):
+    def test_branding_exposes_three_user_agent_defaults(self) -> None:
+        branding = Branding()
+        self.assertEqual(branding.user_agent, "Knowledge2ICP/0.1 (+https://knowledge2.ai)")
+        self.assertEqual(branding.discovery_user_agent, "Knowledge2ICPDiscovery/0.1 (+https://knowledge2.ai)")
+        self.assertEqual(branding.api_user_agent, "Knowledge2ICP/0.1")
+
+    def test_module_defaults_match_branding_fields(self) -> None:
+        # Each module's module-level _BRANDING default must be byte-identical to the
+        # original literal so the default tenant's wire User-Agent is unchanged.
+        self.assertEqual(enrichment._BRANDING.user_agent, "Knowledge2ICP/0.1 (+https://knowledge2.ai)")
+        self.assertEqual(perplexity._BRANDING.discovery_user_agent, "Knowledge2ICPDiscovery/0.1 (+https://knowledge2.ai)")
+        self.assertEqual(discovery._BRANDING.discovery_user_agent, "Knowledge2ICPDiscovery/0.1 (+https://knowledge2.ai)")
+        self.assertEqual(apollo._BRANDING.api_user_agent, "Knowledge2ICP/0.1")
+        self.assertEqual(github._BRANDING.api_user_agent, "Knowledge2ICP/0.1")
+        self.assertEqual(k2_client._BRANDING.api_user_agent, "Knowledge2ICP/0.1")
 
 
 if __name__ == "__main__":

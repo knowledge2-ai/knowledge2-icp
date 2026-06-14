@@ -11,8 +11,11 @@ from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from .enrichment import normalize_domain
+from .tenant import Branding
 from .text import normalize_whitespace
 
+
+_BRANDING = Branding()
 
 SEARCH_TIMEOUT_SECONDS = 10
 SERPER_BASE_URL = "https://google.serper.dev"
@@ -220,7 +223,7 @@ def discover_companies_with_serper(
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
-        "User-Agent": "Knowledge2ICPDiscovery/0.1 (+https://knowledge2.ai)",
+        "User-Agent": _BRANDING.discovery_user_agent,
         "X-API-KEY": key,
     }
     try:
@@ -352,7 +355,7 @@ def _fetch_url(url: str) -> str:
     request = Request(
         url,
         headers={
-            "User-Agent": "Knowledge2ICPDiscovery/0.1 (+https://knowledge2.ai)",
+            "User-Agent": _BRANDING.discovery_user_agent,
             "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
         },
     )

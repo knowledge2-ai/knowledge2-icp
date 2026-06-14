@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .app_store import AppStore
 from .k2_backend import K2Backend
+from .tenant import K2Settings
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -15,7 +16,7 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--run-id", help="Run ID stored in the local app state")
     source.add_argument("--manifest", type=Path, help="Path to a K2 manifest JSON file")
     parser.add_argument("--state-dir", type=Path, default=Path("out/app_state"))
-    parser.add_argument("--project-name", default="Knowledge2 ICP GTM")
+    parser.add_argument("--project-name", default=K2Settings().project_name)
     parser.add_argument("--corpus-name", default=None)
     parser.add_argument("--description", default="Agentic GTM lead research evidence and metadata.")
     parser.add_argument("--apply", action="store_true", help="Actually upload documents to K2. Default is dry-run.")

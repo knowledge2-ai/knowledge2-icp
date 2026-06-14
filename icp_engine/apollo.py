@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from .tenant import Branding
+
+
+_BRANDING = Branding()
 
 APOLLO_BASE_URL = "https://api.apollo.io/api/v1"
 DEFAULT_PERSONA_TITLES = [
@@ -74,7 +78,7 @@ class ApolloClient:
                 "content-type": "application/json",
                 "cache-control": "no-cache",
                 "x-api-key": self.api_key or "",
-                "User-Agent": "Knowledge2ICP/0.1",
+                "User-Agent": _BRANDING.api_user_agent,
             },
         )
         with urlopen(request, timeout=self.timeout_seconds) as response:
