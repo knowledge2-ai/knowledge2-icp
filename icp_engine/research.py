@@ -44,7 +44,7 @@ class ResearchPipeline:
         self.search_fetcher = search_fetcher
         self.research_client = research_client
         self.apollo = apollo_client or ApolloClient.from_env()
-        self.k2 = k2_backend or K2Backend()
+        self.k2 = k2_backend or K2Backend(k2_settings=self.store.tenant_config.k2)
         self.classifier = classifier
         self.outreach_generator = outreach_generator
 

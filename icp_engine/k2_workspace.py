@@ -18,9 +18,10 @@ from .seed_defaults import (
     SEEDED_SETTINGS,
     seeded_run,
 )
+from .tenant import K2Settings
 
 
-DEFAULT_PROJECT_NAME = "Knowledge2 ICP GTM"
+DEFAULT_PROJECT_NAME = K2Settings().project_name
 DEFAULT_SUMMARY_PATH = Path("out/app_state/k2_workspace_bootstrap.json")
 
 
@@ -222,9 +223,14 @@ FEEDS: tuple[dict[str, Any], ...] = (
 )
 
 
-def build_seeded_workspace_documents(run: dict[str, Any] | None = None) -> dict[str, list[dict[str, Any]]]:
+def build_seeded_workspace_documents(
+    run: dict[str, Any] | None = None,
+    *,
+    k2_settings: K2Settings | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    settings = k2_settings or K2Settings()
     run = run or seeded_run()
-    documents = K2Backend(api_key="dry-run").build_upload_documents(run)
+    documents = K2Backend(api_key="dry-run", k2_settings=settings).build_upload_documents(run)
     source_docs: list[dict[str, Any]] = []
     candidate_docs: list[dict[str, Any]] = []
     evidence_docs: list[dict[str, Any]] = []
@@ -235,20 +241,20 @@ def build_seeded_workspace_documents(run: dict[str, Any] | None = None) -> dict[
         source_type = str(metadata.get("source_type") or "")
         evidence_id = str(metadata.get("evidence_id") or "")
         if source_type == "prospect":
-            prospect_docs.append(_with_metadata(document, entity_type="prospect"))
+            prospect_docs.append(_with_metadata(document, entity_type="prospect", k2_settings=settings))
             continue
         if evidence_id == "account-summary":
-            candidate_docs.append(_with_metadata(document, entity_type="company"))
+            candidate_docs.append(_with_metadata(document, entity_type="company", k2_settings=settings))
         if source_type != "account_summary":
-            source_docs.append(_with_metadata(document, entity_type="source_page"))
-        evidence_docs.append(_with_metadata(document, entity_type="evidence"))
+            source_docs.append(_with_metadata(document, entity_type="source_page", k2_settings=settings))
+        evidence_docs.append(_with_metadata(document, entity_type="evidence", k2_settings=settings))
 
     return {
-        "source": _unique_source_uris(source_docs, "source"),
-        "candidate": _unique_source_uris(candidate_docs, "candidate"),
-        "evidence": _unique_source_uris(evidence_docs, "evidence"),
-        "prospect": _unique_source_uris(prospect_docs, "prospect"),
-        "criteria": _unique_source_uris(_criteria_documents(run), "criteria"),
+        "source": _unique_source_uris(source_docs, "source", k2_settings=settings),
+        "candidate": _unique_source_uris(candidate_docs, "candidate", k2_settings=settings),
+        "evidence": _unique_source_uris(evidence_docs, "evidence", k2_settings=settings),
+        "prospect": _unique_source_uris(prospect_docs, "prospect", k2_settings=settings),
+        "criteria": _unique_source_uris(_criteria_documents(run, k2_settings=settings), "criteria", k2_settings=settings),
     }
 
 
@@ -257,11 +263,13 @@ class K2WorkspaceProvisioner:
         self,
         *,
         client: K2RestClient,
-        project_name: str = DEFAULT_PROJECT_NAME,
+        project_name: str | None = None,
         summary_path: Path = DEFAULT_SUMMARY_PATH,
+        k2_settings: K2Settings | None = None,
     ) -> None:
         self.client = client
-        self.project_name = project_name
+        self.k2 = k2_settings or K2Settings()
+        self.project_name = project_name or self.k2.project_name
         self.summary_path = summary_path
 
     def ensure_workspace(
@@ -277,7 +285,7 @@ class K2WorkspaceProvisioner:
         project = self.client.ensure_project(self.project_name)
         project_id = _id(project)
         corpora = self._ensure_corpora(project_id)
-        documents = build_seeded_workspace_documents()
+        documents = build_seeded_workspace_documents(k2_settings=self.k2)
         summary: dict[str, Any] = {
             "status": "ready",
             "project": {"id": project_id, "name": project.get("name", self.project_name)},
@@ -298,7 +306,7 @@ class K2WorkspaceProvisioner:
                 summary["uploads"][key] = self._upload_batches(
                     corpus_id,
                     documents[key],
-                    idempotency_prefix=f"knowledge2-icp-{project_id}-{key}",
+                    idempotency_prefix=f"{self.k2.workspace_namespace}-{project_id}-{key}",
                     batch_size=batch_size,
                     poll_seconds=poll_seconds,
                     timeout_seconds=timeout_seconds,
@@ -309,7 +317,7 @@ class K2WorkspaceProvisioner:
             for key, corpus in corpora.items():
                 job = self.client.sync_indexes(
                     corpus["id"],
-                    idempotency_key=f"knowledge2-icp-{project_id}-index-sync-{key}",
+                    idempotency_key=f"{self.k2.workspace_namespace}-{project_id}-index-sync-{key}",
                 )
                 summary["index_sync"][key] = {"start": job}
                 self._write_summary(summary)
@@ -330,7 +338,7 @@ class K2WorkspaceProvisioner:
                 project_id=project_id,
                 name="ICP Expansion Pipeline",
                 description="Versioned K2-native ICP expansion graph for source discovery, qualification, prospects, and criteria refinement.",
-                topology=build_pipeline_topology(corpora, agents, feeds),
+                topology=build_pipeline_topology(corpora, agents, feeds, k2_settings=self.k2),
             )
             summary["pipeline_spec"] = pipeline
             self._write_summary(summary)
@@ -479,7 +487,10 @@ def build_pipeline_topology(
     corpora: dict[str, dict[str, Any]],
     agents: dict[str, dict[str, Any]],
     feeds: dict[str, dict[str, Any]],
+    *,
+    k2_settings: K2Settings | None = None,
 ) -> dict[str, Any]:
+    settings = k2_settings or K2Settings()
     return {
         "corpora": [
             {"id": value["id"], "name": value["name"], "description": value.get("description", "")}
@@ -528,7 +539,7 @@ def build_pipeline_topology(
             },
         ],
         "metadata": {
-            "workspace": "knowledge2-icp",
+            "workspace": settings.workspace_namespace,
             "purpose": "scheduled-reactive-icp-expansion",
             "query_profiles": [
                 "portfolio-expansion",
@@ -544,7 +555,7 @@ def build_pipeline_topology(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Bootstrap the K2-native ICP workspace.")
     parser.add_argument("--project-name", default=os.environ.get("K2_ICP_PROJECT_NAME", DEFAULT_PROJECT_NAME))
-    parser.add_argument("--base-url", default=os.environ.get("K2_BASE_URL", "https://api.knowledge2.ai"))
+    parser.add_argument("--base-url", default=os.environ.get("K2_BASE_URL", K2Settings().base_url))
     parser.add_argument("--summary-path", type=Path, default=DEFAULT_SUMMARY_PATH)
     parser.add_argument("--apply-uploads", action="store_true", help="Upload seeded criteria/source/candidate/evidence/prospect documents.")
     parser.add_argument("--apply-indexes", action="store_true", help="Sync retrieval indexes after upload.")
@@ -579,26 +590,37 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
 
-def _with_metadata(document: dict[str, Any], *, entity_type: str) -> dict[str, Any]:
+def _with_metadata(
+    document: dict[str, Any],
+    *,
+    entity_type: str,
+    k2_settings: K2Settings | None = None,
+) -> dict[str, Any]:
+    settings = k2_settings or K2Settings()
     metadata = dict(document.get("metadata", {}) if isinstance(document.get("metadata"), dict) else {})
     metadata["entity_type"] = entity_type
-    metadata.setdefault("workspace", "knowledge2-icp")
+    metadata.setdefault("workspace", settings.workspace_namespace)
     return {**document, "metadata": metadata}
 
 
-def _criteria_documents(run: dict[str, Any]) -> list[dict[str, Any]]:
+def _criteria_documents(
+    run: dict[str, Any],
+    *,
+    k2_settings: K2Settings | None = None,
+) -> list[dict[str, Any]]:
+    settings = k2_settings or K2Settings()
     criteria_hash = str(run.get("criteria", {}).get("hash") or "seeded-icp-v1")
     base_metadata = {
         "run_id": run.get("id"),
         "criteria_hash": criteria_hash,
         "criteria_version": criteria_hash,
         "entity_type": "criteria",
-        "workspace": "knowledge2-icp",
+        "workspace": settings.workspace_namespace,
         "source_type": "seed",
     }
     prompt_docs = [
         {
-            "sourceUri": f"inline://knowledge2-icp/criteria/prompts/{prompt['id']}",
+            "sourceUri": f"{settings.source_uri_prefix}/criteria/prompts/{prompt['id']}",
             "rawText": f"{prompt['label']} ({prompt['kind']}): {prompt['text']}",
             "metadata": {
                 **base_metadata,
@@ -611,18 +633,18 @@ def _criteria_documents(run: dict[str, Any]) -> list[dict[str, Any]]:
     ]
     return [
         {
-            "sourceUri": "inline://knowledge2-icp/criteria/seeded-markdown",
+            "sourceUri": f"{settings.source_uri_prefix}/criteria/seeded-markdown",
             "rawText": SEEDED_CRITERIA_MARKDOWN,
             "metadata": {**base_metadata, "label_source": "criteria_markdown"},
         },
         *prompt_docs,
         {
-            "sourceUri": "inline://knowledge2-icp/criteria/settings",
+            "sourceUri": f"{settings.source_uri_prefix}/criteria/settings",
             "rawText": json.dumps(SEEDED_SETTINGS, indent=2, sort_keys=True),
             "metadata": {**base_metadata, "label_source": "settings"},
         },
         {
-            "sourceUri": "inline://knowledge2-icp/criteria/lists",
+            "sourceUri": f"{settings.source_uri_prefix}/criteria/lists",
             "rawText": json.dumps(
                 {
                     "priority_verticals": SEEDED_LISTS["priority_verticals"],
@@ -641,10 +663,16 @@ def _criteria_documents(run: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _unique_source_uris(documents: list[dict[str, Any]], corpus_key: str) -> list[dict[str, Any]]:
+def _unique_source_uris(
+    documents: list[dict[str, Any]],
+    corpus_key: str,
+    *,
+    k2_settings: K2Settings | None = None,
+) -> list[dict[str, Any]]:
+    settings = k2_settings or K2Settings()
     unique = []
     for index, document in enumerate(documents):
-        source_uri = str(document.get("sourceUri") or document.get("source_uri") or f"inline://knowledge2-icp/{corpus_key}/{index}")
+        source_uri = str(document.get("sourceUri") or document.get("source_uri") or f"{settings.source_uri_prefix}/{corpus_key}/{index}")
         base, separator, fragment = source_uri.partition("#")
         joiner = "&" if "?" in base else "?"
         source_uri = f"{base}{joiner}k2_seq={index:05d}"

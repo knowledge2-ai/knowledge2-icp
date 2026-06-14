@@ -8,6 +8,7 @@ from typing import Any, Protocol
 
 from .k2_client import K2ApiError, K2RestClient
 from .k2_workspace import AGENTS, CORPORA, DEFAULT_PROJECT_NAME, DEFAULT_SUMMARY_PATH, FEEDS
+from .tenant import K2Settings
 
 
 PIPELINE_SPEC_NAME = "ICP Expansion Pipeline"
@@ -43,7 +44,9 @@ def build_k2_workspace_status(
     env: dict[str, str] | None = None,
     project_name: str | None = None,
     summary_path: Path | None = None,
+    k2_settings: K2Settings | None = None,
 ) -> dict[str, Any]:
+    settings = k2_settings or K2Settings()
     env_values = env if env is not None else os.environ
     selected_summary_path = summary_path or Path(env_values.get("K2_ICP_WORKSPACE_SUMMARY") or DEFAULT_SUMMARY_PATH)
     summary = _load_summary(selected_summary_path)
@@ -51,9 +54,9 @@ def build_k2_workspace_status(
         project_name
         or env_values.get("K2_ICP_PROJECT_NAME")
         or str(summary.get("project", {}).get("name") or "")
-        or DEFAULT_PROJECT_NAME
+        or settings.project_name
     )
-    base_url = env_values.get("K2_BASE_URL") or "https://api.knowledge2.ai"
+    base_url = env_values.get("K2_BASE_URL") or settings.base_url
     api_key = (env_values.get("K2_API_KEY") or env_values.get("K2_DEV_TOKEN") or "").strip()
     research_corpus_id = str(env_values.get("K2_RESEARCH_CORPUS_ID") or "").strip()
 
@@ -105,7 +108,9 @@ def run_k2_pipeline_action(
     sample_input: dict[str, Any] | None = None,
     activate_entities: bool = True,
     start_from: str | None = None,
+    k2_settings: K2Settings | None = None,
 ) -> dict[str, Any]:
+    settings = k2_settings or K2Settings()
     normalized_action = action.strip().lower().replace("-", "_")
     if normalized_action not in {"dry_run", "apply", "trigger", "backfill"}:
         raise ValueError("Unsupported K2 pipeline action. Use dry_run, apply, trigger, or backfill.")
@@ -117,9 +122,9 @@ def run_k2_pipeline_action(
         project_name
         or env_values.get("K2_ICP_PROJECT_NAME")
         or str(summary.get("project", {}).get("name") or "")
-        or DEFAULT_PROJECT_NAME
+        or settings.project_name
     )
-    base_url = env_values.get("K2_BASE_URL") or "https://api.knowledge2.ai"
+    base_url = env_values.get("K2_BASE_URL") or settings.base_url
     api_key = (env_values.get("K2_API_KEY") or env_values.get("K2_DEV_TOKEN") or "").strip()
 
     if client is None:
@@ -164,6 +169,7 @@ def run_k2_pipeline_action(
             env=dict(env_values),
             project_name=selected_project_name,
             summary_path=selected_summary_path,
+            k2_settings=settings,
         ),
     }
     if normalized_action == "backfill":
