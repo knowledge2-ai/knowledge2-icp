@@ -469,7 +469,15 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                 if not guard["allowed"]:
                     self._send_provider_denied(guard)
                     return
-                candidates, warnings = app.pipeline.discover(
+                if _discovery_provider_is_metered(app.store) and str(payload.get("query", "")).strip():
+                    discovery_guard = app.store.authorize_provider_action(
+                        "discovery",
+                        details={"max_companies": max_companies, "source": "search"},
+                    )
+                    if not discovery_guard["allowed"]:
+                        self._send_provider_denied(discovery_guard)
+                        return
+                candidates, warnings, _ = app.pipeline.discover(
                     str(payload.get("query", "")),
                     seed_text=str(payload.get("seed_text", "")),
                     max_companies=max_companies,
@@ -505,6 +513,14 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                     if not search_guard["allowed"]:
                         self._send_provider_denied(search_guard)
                         return
+                    if _discovery_provider_is_metered(app.store):
+                        discovery_guard = app.store.authorize_provider_action(
+                            "discovery",
+                            details={"max_companies": max_companies, "source": "run"},
+                        )
+                        if not discovery_guard["allowed"]:
+                            self._send_provider_denied(discovery_guard)
+                            return
                 if bool(payload.get("use_apollo", False)):
                     apollo_guard = app.store.authorize_provider_action(
                         "apollo_enrichment",
@@ -935,6 +951,21 @@ def _sample_runs_for_suggestion(store: AppStore, run_ids: list[Any] | None) -> l
     recent = store.list_runs()[:3]
     runs = [store.load_run(str(item.get("id"))) for item in recent if isinstance(item, dict) and item.get("id")]
     return [run for run in runs if isinstance(run, dict)]
+
+
+def _discovery_provider_is_metered(store: AppStore) -> bool:
+    """True when the configured discovery provider hits the paid research API.
+
+    Perplexity is the only metered research provider; the Serper/DuckDuckGo fallback
+    is already covered by the ``search`` action budget. ``auto`` only reaches
+    Perplexity when a key is set.
+    """
+    provider = str(store.load_settings().get("discovery_provider") or "auto").strip().lower()
+    if provider == "perplexity":
+        return True
+    if provider == "auto":
+        return bool(os.environ.get("PERPLEXITY_API_KEY"))
+    return False
 
 
 def _candidate_payloads(candidates: list[Any]) -> list[dict[str, Any]]:

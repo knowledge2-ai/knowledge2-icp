@@ -334,6 +334,47 @@ grade it later.
 > The Cloudflare Worker is a frozen, read-only demo mirror. All qualification
 > logic here is Python-only; the Worker is out of scope for this feature.
 
+## Research-grade discovery (Perplexity)
+
+The top of the funnel can source companies with a Perplexity Sonar research agent
+instead of keyword search. Given a brief, it returns a synthesized, web-cited
+company list (each with a primary domain and a one-line ICP-fit reason) mapped into
+the same `DiscoveryCandidate` shape the rest of the pipeline already uses. The ICP
+framing comes from the **versioned criteria markdown**, not a hardcoded prompt, so
+retargeting is a criteria edit.
+
+Provider selection is the `discovery_provider` setting:
+
+- `auto` (default) — Perplexity when `PERPLEXITY_API_KEY` is set, otherwise the
+  existing Serper → DuckDuckGo path. A set key "just works"; no key is unchanged.
+- `perplexity` / `serper` / `duckduckgo` — force one engine. Perplexity still falls
+  back to Serper → DuckDuckGo on an unavailable key or an upstream error, with a
+  warning recorded on the run — a run never fails because Perplexity is down.
+
+The provider that actually sourced each run is recorded at `run["discovery"]["provider"]`.
+Perplexity calls are bounded by the `discovery` budget under the existing
+`provider_limits` metering (the web layer returns HTTP 429 when the budget is spent),
+and reduced by a **K2-aware dedup**: candidate domains already ingested in the K2
+research corpus are skipped before they are researched again (no-op when K2 is
+unconfigured). The Serper/DuckDuckGo fallback stays on the separate `search` budget.
+
+The client is a hand-rolled stdlib REST client (mirroring `k2_client.py`) — there is
+**no new dependency** and nothing to install.
+
+Enable it:
+
+```bash
+export PERPLEXITY_API_KEY=...               # do not commit
+export ICP_PERPLEXITY_MODEL=sonar           # optional; default
+# then set the "discovery_provider" setting to "perplexity" (or "auto"):
+curl -sS -X POST localhost:8787/api/settings \
+  -H 'content-type: application/json' \
+  -d '{"discovery_provider":"perplexity"}'
+```
+
+> The Cloudflare Worker is frozen. Research discovery is Python-only; the Worker
+> mirror is out of scope.
+
 ## Validate
 
 ```bash

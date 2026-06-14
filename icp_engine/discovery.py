@@ -6,7 +6,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
-from typing import Callable
+from typing import Any, Callable
 from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 from urllib.request import Request, urlopen
 
@@ -99,25 +99,110 @@ def discover_companies(
 
     provider = os.environ.get("ICP_SEARCH_PROVIDER", "").strip().lower()
     serper_key = os.environ.get("SERPER_API_KEY") or os.environ.get("SERP_API_KEY")
+    warnings: list[str] = []
     if fetcher is None and serper_key and provider in {"", "serper", "serp"}:
         candidates, warnings = discover_companies_with_serper(query, max_results=max_results, api_key=serper_key)
         if candidates:
             return candidates, warnings
         warnings.append("Falling back to DuckDuckGo HTML search.")
-    else:
-        warnings = []
 
+    ddg_candidates, ddg_warnings = _duckduckgo_discovery(query, max_results=max_results, fetcher=fetcher)
+    return ddg_candidates, [*warnings, *ddg_warnings]
+
+
+def research_discovery(
+    query: str,
+    *,
+    provider: str = "auto",
+    max_results: int = 10,
+    research_client: Any | None = None,
+    search_fetcher: Callable[[str], str] | None = None,
+    criteria_markdown: str = "",
+) -> tuple[list[DiscoveryCandidate], list[str], str]:
+    """Provider-aware company discovery with a graceful fallback cascade.
+
+    Dispatches to the Perplexity research engine, the Serper SERP API, or the
+    DuckDuckGo HTML path. ``auto`` mirrors today's cascade (Perplexity if a key
+    or injected client is present, then Serper if keyed, then DuckDuckGo) so a
+    set key "just works"; an explicit ``provider`` forces that engine first but
+    still falls through to search on failure. Returns the candidates, accumulated
+    warnings, and the provider that actually produced them (or ``"none"``).
+    """
+    if not query.strip():
+        return [], ["Search query is empty."], "none"
+    provider = (provider or "auto").strip().lower()
+    if provider not in {"auto", "perplexity", "serper", "duckduckgo"}:
+        provider = "auto"
+    warnings: list[str] = []
+
+    perplexity_enabled = provider == "perplexity" or (
+        provider == "auto"
+        and (research_client is not None or bool(os.environ.get("PERPLEXITY_API_KEY")))
+    )
+    if perplexity_enabled:
+        candidates, perplexity_warnings = _perplexity_discovery(
+            query, max_results=max_results, research_client=research_client, criteria_markdown=criteria_markdown
+        )
+        warnings.extend(perplexity_warnings)
+        if candidates:
+            return candidates, warnings, "perplexity"
+        warnings.append("Falling back to search-provider discovery.")
+
+    if provider == "duckduckgo":
+        candidates, ddg_warnings = _duckduckgo_discovery(query, max_results=max_results, fetcher=search_fetcher)
+        warnings.extend(ddg_warnings)
+        return candidates, warnings, ("duckduckgo" if candidates else "none")
+
+    serper_key = os.environ.get("SERPER_API_KEY") or os.environ.get("SERP_API_KEY")
+    if provider in {"auto", "serper"} and search_fetcher is None and serper_key:
+        candidates, serper_warnings = discover_companies_with_serper(
+            query, max_results=max_results, api_key=serper_key
+        )
+        warnings.extend(serper_warnings)
+        if candidates:
+            return candidates, warnings, "serper"
+        warnings.append("Falling back to DuckDuckGo HTML search.")
+
+    candidates, ddg_warnings = _duckduckgo_discovery(query, max_results=max_results, fetcher=search_fetcher)
+    warnings.extend(ddg_warnings)
+    return candidates, warnings, ("duckduckgo" if candidates else "none")
+
+
+def _perplexity_discovery(
+    query: str,
+    *,
+    max_results: int,
+    research_client: Any | None,
+    criteria_markdown: str,
+) -> tuple[list[DiscoveryCandidate], list[str]]:
+    # Lazy import: perplexity.py imports DiscoveryCandidate from this module, so a
+    # top-level import would form a cycle.
+    from .perplexity import PerplexityUnavailable, research_companies
+
+    try:
+        return research_companies(
+            query, max_results=max_results, criteria_markdown=criteria_markdown, client=research_client
+        )
+    except PerplexityUnavailable as exc:
+        return [], [f"Perplexity research provider unavailable: {exc}"]
+
+
+def _duckduckgo_discovery(
+    query: str,
+    *,
+    max_results: int,
+    fetcher: Callable[[str], str] | None,
+) -> tuple[list[DiscoveryCandidate], list[str]]:
     url = f"https://duckduckgo.com/html/?q={quote_plus(query)}"
     fetch = fetcher or _fetch_url
     try:
         body = fetch(url)
     except Exception as exc:
-        return [], [*warnings, f"Search provider failed: {exc}"]
+        return [], [f"Search provider failed: {exc}"]
 
     links = extract_search_links(body)
     candidates = candidates_from_links(links, max_results=max_results)
-    if not candidates:
-        warnings.append("No company domains were discovered from search results.")
+    warnings = [] if candidates else ["No company domains were discovered from search results."]
     return candidates, warnings
 
 

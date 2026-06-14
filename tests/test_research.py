@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,7 @@ from unittest.mock import patch
 
 from icp_engine.app_store import AppStore
 from icp_engine.claude import ClaudeUnavailable
+from icp_engine.enrichment import normalize_domain
 from icp_engine.k2_backend import K2Backend
 from icp_engine.models import Classification, CompanyInput, Evidence
 from icp_engine.research import ResearchPipeline
@@ -52,6 +54,95 @@ def fake_classifier(company: CompanyInput, evidence: list[Evidence], *, criteria
         source="claude:test",
         ai_narrative="Builds an embedded dispatch assistant on proprietary fleet data.",
     )
+
+
+class _StubResearchClient:
+    """Mimics PerplexityRestClient.chat_completion offline."""
+
+    def __init__(self, companies: list[dict[str, object]]) -> None:
+        self._companies = companies
+        self.calls = 0
+
+    def chat_completion(self, **kwargs: object) -> dict[str, object]:
+        self.calls += 1
+        return {"choices": [{"message": {"content": json.dumps({"companies": self._companies})}}], "citations": []}
+
+
+# DuckDuckGo HTML carrying one discoverable company domain, for fallback tests.
+_DDG_HTML = (
+    '<html><body><a class="result__a" href="/l/?uddg=https%3A%2F%2Fwww.moj.io%2F">'
+    "Mojio - Connected Mobility</a></body></html>"
+)
+
+
+class DiscoveryProviderPipelineTest(unittest.TestCase):
+    def test_perplexity_provider_sources_candidates_and_records_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            store.save_settings({"discovery_provider": "perplexity"})
+            client = _StubResearchClient([{"company": "Mojio", "domain": "moj.io", "reason": "Fleet AI."}])
+            pipeline = ResearchPipeline(store, evidence_fetcher=fake_evidence, research_client=client)
+
+            run = pipeline.create_run(query="fleet AI companies", include_github=False, use_apollo=False)
+
+            self.assertEqual(run["discovery"]["provider"], "perplexity")
+            self.assertEqual([lead["score"]["company"]["domain"] for lead in run["leads"]], ["moj.io"])
+            self.assertEqual(run["leads"][0]["candidate"]["source_title"], "Perplexity research result")
+            self.assertEqual(client.calls, 1)
+
+    def test_perplexity_unavailable_falls_back_to_search_with_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            store.save_settings({"discovery_provider": "perplexity"})
+            # No research client + no key -> Perplexity is unavailable; the search fetcher covers fallback.
+            pipeline = ResearchPipeline(store, evidence_fetcher=fake_evidence, search_fetcher=lambda _: _DDG_HTML)
+
+            run = pipeline.create_run(query="fleet software", include_github=False, use_apollo=False)
+
+            self.assertEqual(run["status"], "completed")
+            self.assertEqual(run["discovery"]["provider"], "duckduckgo")
+            self.assertEqual([lead["score"]["company"]["domain"] for lead in run["leads"]], ["moj.io"])
+            self.assertTrue(any("unavailable" in warning.lower() for warning in run["warnings"]))
+
+    def test_auto_without_key_uses_search_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))  # default discovery_provider is "auto"
+            client = _StubResearchClient([{"company": "Should", "domain": "ignored.com"}])
+            # research_client present but provider=auto with no key still prefers it via injection seam.
+            pipeline = ResearchPipeline(store, evidence_fetcher=fake_evidence, search_fetcher=lambda _: _DDG_HTML, research_client=client)
+
+            run = pipeline.create_run(query="fleet software", include_github=False, use_apollo=False)
+
+            # auto treats an injected research client as "key present", so Perplexity wins.
+            self.assertEqual(run["discovery"]["provider"], "perplexity")
+            self.assertEqual([lead["score"]["company"]["domain"] for lead in run["leads"]], ["ignored.com"])
+
+    def test_k2_known_domains_are_skipped_with_warning(self) -> None:
+        class _DedupK2Backend(K2Backend):
+            def __init__(self, known: set[str]) -> None:
+                super().__init__(api_key="")
+                self._known = known
+
+            def known_domains(self, domains, *, run=None, client=None):  # type: ignore[no-untyped-def]
+                return {normalize_domain(d) for d in domains if normalize_domain(d) in self._known}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            store.save_settings({"discovery_provider": "perplexity"})
+            client = _StubResearchClient(
+                [{"company": "A", "domain": "a.com"}, {"company": "B", "domain": "b.com"}]
+            )
+            pipeline = ResearchPipeline(
+                store,
+                evidence_fetcher=fake_evidence,
+                research_client=client,
+                k2_backend=_DedupK2Backend({"b.com"}),
+            )
+
+            run = pipeline.create_run(query="fleet AI companies", include_github=False, use_apollo=False)
+
+            self.assertEqual([lead["score"]["company"]["domain"] for lead in run["leads"]], ["a.com"])
+            self.assertTrue(any("already in the K2 corpus" in warning for warning in run["warnings"]))
 
 
 class QualifierPipelineTest(unittest.TestCase):
@@ -249,7 +340,7 @@ class ResearchPipelineTest(unittest.TestCase):
             store = AppStore(Path(tmp))
             pipeline = ResearchPipeline(store, search_fetcher=lambda _: "<html></html>")
 
-            candidates, warnings = pipeline.discover(
+            candidates, warnings, provider = pipeline.discover(
                 "workflow SaaS",
                 seed_text="Mojio, moj.io",
                 max_companies=3,
@@ -257,6 +348,8 @@ class ResearchPipelineTest(unittest.TestCase):
 
             self.assertEqual([item.domain for item in candidates], ["moj.io"])
             self.assertEqual(warnings, ["No additional company domains were discovered from search results."])
+            # The seed supplied the only candidate; search returned nothing, so no provider sourced it.
+            self.assertEqual(provider, "none")
 
     def test_answer_question_returns_citations_from_stored_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -447,6 +447,67 @@ class WebApiTest(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=2)
 
+    def test_discovery_provider_round_trips_through_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = GTMApp(store=AppStore(Path(tmp)))
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_port}"
+            try:
+                self.assertEqual(_json_get(f"{base_url}/api/settings")["settings"]["discovery_provider"], "auto")
+
+                saved = _json_post(f"{base_url}/api/settings", {"discovery_provider": "perplexity"})
+                self.assertEqual(saved["settings"]["discovery_provider"], "perplexity")
+                self.assertEqual(
+                    _json_get(f"{base_url}/api/settings")["settings"]["discovery_provider"], "perplexity"
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+    def test_discovery_budget_denial_returns_429(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            store.ensure()
+            store.settings_path.write_text(
+                json.dumps(
+                    {
+                        "discovery_provider": "perplexity",
+                        "provider_limits": {
+                            "enabled": True,
+                            "daily": {"search": 100, "discovery": 1},
+                            "rate_per_minute": {"search": 100, "discovery": 100},
+                            "per_run": {"max_companies": 100},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            # Consume the single discovery unit so the next research call is denied.
+            store.record_provider_usage("discovery", status="allowed", amount=1, details={"source": "seed"})
+            pipeline = ResearchPipeline(store, evidence_fetcher=fake_evidence, search_fetcher=lambda _: "<html></html>")
+            app = GTMApp(store=store, pipeline=pipeline)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_port}"
+            try:
+                with self.assertRaises(HTTPError) as denied:
+                    _json_post(f"{base_url}/api/search", {"query": "fleet AI", "max_companies": 2})
+                self.assertEqual(denied.exception.code, 429)
+                body = json.loads(denied.exception.read().decode("utf-8"))
+                self.assertEqual(body["provider_control"]["action"], "discovery")
+                self.assertEqual(body["provider_control"]["limit_type"], "daily")
+
+                health = _json_get(f"{base_url}/api/health")
+                self.assertEqual(health["provider_controls"]["denied_counts"]["discovery"], 1)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
     def test_api_auth_when_admin_token_configured(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = AppStore(Path(tmp))

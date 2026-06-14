@@ -3,13 +3,13 @@ from __future__ import annotations
 import re
 import uuid
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from .apollo import ApolloClient
 from .app_store import AppStore, now_iso
 from .claude import ClaudeUnavailable, classify_with_claude
 from .criteria import build_criteria_profile
-from .discovery import DiscoveryCandidate, discover_companies, discover_companies_from_url, parse_seed_companies
+from .discovery import DiscoveryCandidate, discover_companies_from_url, parse_seed_companies, research_discovery
 from .enrichment import fetch_company_evidence, normalize_domain
 from .github import search_github_metadata
 from .k2_backend import K2Backend
@@ -32,6 +32,7 @@ class ResearchPipeline:
         *,
         evidence_fetcher: EvidenceFetcher | None = None,
         search_fetcher: Callable[[str], str] | None = None,
+        research_client: Any | None = None,
         apollo_client: ApolloClient | None = None,
         k2_backend: K2Backend | None = None,
         classifier: Classifier | None = None,
@@ -39,18 +40,50 @@ class ResearchPipeline:
         self.store = store
         self.evidence_fetcher = evidence_fetcher
         self.search_fetcher = search_fetcher
+        self.research_client = research_client
         self.apollo = apollo_client or ApolloClient.from_env()
         self.k2 = k2_backend or K2Backend()
         self.classifier = classifier
 
-    def discover(self, query: str, *, seed_text: str = "", max_companies: int = 10) -> tuple[list[DiscoveryCandidate], list[str]]:
+    def discover(
+        self,
+        query: str,
+        *,
+        seed_text: str = "",
+        max_companies: int = 10,
+        criteria_markdown: str = "",
+    ) -> tuple[list[DiscoveryCandidate], list[str], str]:
         candidates = parse_seed_companies(seed_text)
         warnings: list[str] = []
+        provider_used = "none"
         if query.strip():
-            discovered, search_warnings = discover_companies(query, max_results=max_companies, fetcher=self.search_fetcher)
+            discovered, search_warnings, provider_used = research_discovery(
+                query,
+                provider=_resolve_discovery_provider(self.store.load_settings()),
+                max_results=max_companies,
+                research_client=self.research_client,
+                search_fetcher=self.search_fetcher,
+                criteria_markdown=criteria_markdown,
+            )
+            discovered, skip_warning = self._drop_known_domains(discovered)
             candidates.extend(discovered)
             warnings.extend(_search_warnings_for_candidates(search_warnings, bool(candidates)))
-        return _dedupe_candidates(candidates)[:max_companies], warnings
+            if skip_warning:
+                warnings.append(skip_warning)
+        return _dedupe_candidates(candidates)[:max_companies], warnings, provider_used
+
+    def _drop_known_domains(self, candidates: list[DiscoveryCandidate]) -> tuple[list[DiscoveryCandidate], str | None]:
+        """Skip net-new candidates already ingested in the K2 corpus (cost lever)."""
+        if not candidates:
+            return candidates, None
+        known = self.k2.known_domains([candidate.domain for candidate in candidates])
+        if not known:
+            return candidates, None
+        kept = [candidate for candidate in candidates if normalize_domain(candidate.domain) not in known]
+        skipped = len(candidates) - len(kept)
+        if not skipped:
+            return candidates, None
+        return kept, f"Skipped {skipped} companies already in the K2 corpus."
 
     def scan_source(self, source: dict[str, object], *, max_companies: int = 25) -> tuple[list[DiscoveryCandidate], list[str]]:
         source_type = str(source.get("type") or "serp_query")
@@ -62,7 +95,7 @@ class ResearchPipeline:
             source_label = "CSV source text" if source_type == "csv_upload" else "manual seed text"
             warnings = [] if candidates else [f"No company domains were discovered from {source_label}."]
         else:
-            candidates, warnings = self.discover(value, max_companies=max_companies)
+            candidates, warnings, _ = self.discover(value, max_companies=max_companies)
             if source_type == "apollo_query" and not self.apollo.configured:
                 warnings = ["APOLLO_API_KEY is not configured; used search-provider discovery instead.", *warnings]
         return _dedupe_candidates(candidates)[:max_companies], warnings
@@ -91,10 +124,13 @@ class ResearchPipeline:
         qualified_count = 0
         run_id = f"run-{uuid.uuid4().hex[:10]}"
         if candidate_payloads is None:
-            candidates, warnings = self.discover(query, seed_text=seed_text, max_companies=max_companies)
+            candidates, warnings, discovery_provider = self.discover(
+                query, seed_text=seed_text, max_companies=max_companies, criteria_markdown=criteria_markdown
+            )
         else:
             candidates = _dedupe_candidates(_candidates_from_payload(candidate_payloads))[:max_companies]
             warnings = []
+            discovery_provider = "selected"
             if not candidates:
                 warnings.append("No selected candidates were provided for this run.")
         cache_dir = self.store.state_dir / "cache" / run_id
@@ -155,6 +191,7 @@ class ResearchPipeline:
             "created_at": now_iso(),
             "status": "completed",
             "qualifier": qualifier,
+            "discovery": {"provider": discovery_provider},
             "criteria": {
                 "hash": criteria["hash"],
                 "source": criteria["source"],
@@ -171,6 +208,13 @@ class ResearchPipeline:
                 status="allowed",
                 amount=qualified_count,
                 details={"qualifier": qualifier, "criteria_hash": criteria["hash"]},
+            )
+        if discovery_provider not in {"none", "selected"}:
+            self.store.record_provider_usage(
+                "discovery",
+                status="allowed",
+                amount=1,
+                details={"provider": discovery_provider, "query": query},
             )
         run["k2"] = self.k2.sync_run(run)
         self.store.save_run(run)
@@ -305,6 +349,11 @@ class ResearchPipeline:
 def _resolve_qualifier(settings: dict[str, object]) -> str:
     value = str(settings.get("qualifier") or "rules").strip().lower()
     return value if value in {"rules", "claude"} else "rules"
+
+
+def _resolve_discovery_provider(settings: dict[str, object]) -> str:
+    value = str(settings.get("discovery_provider") or "auto").strip().lower()
+    return value if value in {"auto", "perplexity", "serper", "duckduckgo"} else "auto"
 
 
 def _qualification_metadata(qualifier: str, score: object) -> dict[str, object]:
