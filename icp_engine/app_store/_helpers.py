@@ -461,6 +461,17 @@ def _normalize_status(status: str) -> str:
     return normalized
 
 
+def _coerce_lead_status(value: Any) -> str:
+    """Load-time defense: map a persisted status onto the enum, defaulting an
+    unknown/corrupt value to "New" instead of raising. _normalize_status still
+    rejects bad *input* at write time; this only guards already-stored data so a
+    hand-edited or partially-written lead_states.json can't 500 the dashboard."""
+    try:
+        return _normalize_status(str(value))
+    except (ValueError, TypeError):
+        return "New"
+
+
 def _normalize_quality_dimension(dimension: str) -> str:
     normalized = dimension.strip().lower().replace("-", "_").replace(" ", "_") or "score"
     if normalized not in QUALITY_DIMENSIONS:

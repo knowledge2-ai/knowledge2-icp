@@ -35,7 +35,14 @@ class AppStoreTest(unittest.TestCase):
             self.assertGreaterEqual(len(state["latest_run"]["leads"]), 428)
             self.assertEqual(state["latest_run"]["leads"][0]["score"]["company"]["company"], "ServiceTitan")
             self.assertEqual(state["latest_run"]["leads"][0]["score"]["total_score"], 86)
-            self.assertEqual(state["latest_run"]["leads"][0]["metadata"]["qualification"]["classification_source"], "rules")
+            seed_qualification = state["latest_run"]["leads"][0]["metadata"]["qualification"]
+            # Seed leads expose the same 6-field shape as live leads (research._qualification_metadata).
+            self.assertEqual(
+                set(seed_qualification),
+                {"qualifier", "source", "confidence", "ai_narrative", "reasons", "evidence_ids"},
+            )
+            self.assertEqual(seed_qualification["qualifier"], "rules")
+            self.assertEqual(seed_qualification["source"], "rules")
             self.assertGreaterEqual(len(state["sources"]), 3)
             self.assertGreaterEqual(state["source_coverage"]["source_count"], 3)
 
@@ -160,6 +167,66 @@ class AppStoreTest(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 reloaded.save_lead_state("run-workflow", "moj.io", status="not-a-status")
+
+    def test_corrupt_on_disk_lead_status_is_coerced_instead_of_crashing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            run = {
+                "id": "run-workflow",
+                "query": "fleet software",
+                "created_at": "2026-06-11T00:00:00+00:00",
+                "status": "completed",
+                "warnings": [],
+                "leads": [{"score": {"company": {"company": "Mojio", "domain": "moj.io"}, "tier": "A"}}],
+            }
+            store.save_run(run)
+            store.save_lead_state("run-workflow", "moj.io", company="Mojio", status="Qualified")
+
+            # Simulate a hand-edited / partially-written file with an out-of-enum status.
+            payload = json.loads(store.lead_states_path.read_text(encoding="utf-8"))
+            payload["run-workflow"]["moj.io"]["status"] = "Gibberish"
+            store.lead_states_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            reloaded = AppStore(Path(tmp))
+            # state() must not raise; the corrupt status is coerced to the safe default.
+            counts = reloaded.state()["runs"][0]["lead_status_counts"]
+            self.assertEqual(counts["New"], 1)
+            self.assertEqual(reloaded.load_lead_states("run-workflow")["moj.io"]["status"], "New")
+
+    def test_corrupt_on_disk_outreach_status_is_coerced_instead_of_crashing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            run = {
+                "id": "run-eval",
+                "query": "fleet software",
+                "created_at": "2026-06-11T00:00:00+00:00",
+                "status": "completed",
+                "criteria": {"hash": "criteria-eval"},
+                "leads": [
+                    {
+                        "id": "lead-mojio",
+                        "score": {"company": {"company": "Mojio", "domain": "moj.io"}, "tier": "A", "total_score": 82},
+                        "strategy": {
+                            "outreach_angle": "Workflow AI opportunity map.",
+                            "first_step": "Send VP Engineering brief.",
+                            "personas": [{"title": "VP Engineering", "priority": "primary"}],
+                        },
+                        "metadata": {"criteria_profile": {"hash": "criteria-eval"}},
+                    }
+                ],
+            }
+            store.save_run(run)
+            drafts = store.list_outreach_drafts(run_id="run-eval", domain="moj.io")
+            store.save_outreach_status("run-eval", drafts[0]["prospect_id"], domain="moj.io", status="Approved")
+
+            payload = json.loads(store.outreach_status_path.read_text(encoding="utf-8"))
+            payload["run-eval"][drafts[0]["prospect_id"]]["status"] = "Gibberish"
+            store.outreach_status_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            reloaded = AppStore(Path(tmp))
+            # Draft rendering must not raise; the corrupt status is coerced to the safe default.
+            reloaded_drafts = reloaded.list_outreach_drafts(run_id="run-eval", domain="moj.io")
+            self.assertEqual(reloaded_drafts[0]["status"], "Draft")
 
     def test_account_detail_combines_workflow_prospects_evidence_and_audit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
