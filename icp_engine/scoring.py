@@ -225,6 +225,7 @@ def score_company(
         total_score=total_score,
         tier=tier,
         next_action=next_action,
+        ai_narrative=classification.ai_narrative,
         warnings=warnings,
     )
 
@@ -433,6 +434,7 @@ def _merge_classification(rules: Classification, model: Classification | None) -
         evidence_ids={**rules.evidence_ids, **model.evidence_ids},
         confidence=min(1.0, max(0.0, model.confidence)),
         source=model.source,
+        ai_narrative=model.ai_narrative,
     )
 
 

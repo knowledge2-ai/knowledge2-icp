@@ -50,6 +50,7 @@ class Classification:
     evidence_ids: dict[str, list[str]] = field(default_factory=dict)
     confidence: float = 0.0
     source: str = "rules"
+    ai_narrative: str = ""
 
 
 @dataclass
@@ -65,6 +66,7 @@ class ScoreResult:
     total_score: int
     tier: str
     next_action: str
+    ai_narrative: str = ""
     warnings: list[str] = field(default_factory=list)
 
     @property

@@ -17,6 +17,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from .app_store import AppStore
+from .claude import ClaudeUnavailable, suggest_criteria
 from .k2_client import K2ApiError
 from .k2_workspace_status import build_k2_workspace_status, run_k2_pipeline_action
 from .outreach import summarize_outreach_drafts
@@ -273,6 +274,22 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                     self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
                     return
                 self._send_json(impact)
+                return
+            if parsed.path == "/api/criteria/suggest":
+                guard = app.store.authorize_provider_action("criteria_suggest")
+                if not guard.get("allowed", True):
+                    self._send_provider_denied(guard)
+                    return
+                payload = self._read_json()
+                current = str(payload.get("markdown") or "") or str(app.store.load_criteria().get("markdown", ""))
+                run_ids = payload.get("run_ids") if isinstance(payload.get("run_ids"), list) else None
+                sample_runs = _sample_runs_for_suggestion(app.store, run_ids)
+                try:
+                    proposal = suggest_criteria(current, sample_runs)
+                except ClaudeUnavailable as exc:
+                    self._send_json({"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                self._send_json({"proposal": proposal, "current_hash": app.store.load_criteria().get("hash")})
                 return
             if parsed.path == "/api/criteria/restore":
                 payload = self._read_json()
@@ -909,6 +926,15 @@ def _base64url_decode(value: str) -> bytes:
 
 def _iso_from_epoch(epoch_seconds: int) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch_seconds))
+
+
+def _sample_runs_for_suggestion(store: AppStore, run_ids: list[Any] | None) -> list[dict[str, Any]]:
+    if run_ids:
+        runs = [store.load_run(str(run_id)) for run_id in run_ids[:5]]
+        return [run for run in runs if isinstance(run, dict)]
+    recent = store.list_runs()[:3]
+    runs = [store.load_run(str(item.get("id"))) for item in recent if isinstance(item, dict) and item.get("id")]
+    return [run for run in runs if isinstance(run, dict)]
 
 
 def _candidate_payloads(candidates: list[Any]) -> list[dict[str, Any]]:

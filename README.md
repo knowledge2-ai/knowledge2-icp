@@ -297,6 +297,43 @@ clamps all model output.
 This repo defaults to `gemini-3.5-flash` with `GEMINI_THINKING_BUDGET=0` for
 minimal thinking/low-latency classification.
 
+## Claude qualifier (web pipeline LLM judge)
+
+The web research pipeline can qualify each company with a Claude judge instead of
+the deterministic rules. The judge reads scraped evidence, scores the five ICP
+dimensions with per-dimension citations, and returns a short "what are they
+building in AI" narrative. Output is confidence-gated (≥0.35) and clamped by the
+local scorer, so a low-confidence or unavailable judge falls back to rules and the
+run completes with a warning — a run never fails because the judge is down.
+
+The judge reads the ICP rubric from the **versioned criteria markdown** (the same
+artifact the dashboard edits), not a hardcoded prompt, so retargeting the ICP is a
+criteria edit, not a code change. Each run records the `qualifier` and the
+`criteria` hash it ran under.
+
+Enable it:
+
+```bash
+pip install -e ".[claude]"
+export ANTHROPIC_API_KEY=...            # do not commit
+export ICP_CLAUDE_MODEL=claude-haiku-4-5-20251001   # optional; default
+# then set the "qualifier" setting to "claude":
+curl -sS -X POST localhost:8787/api/settings \
+  -H 'content-type: application/json' \
+  -d '{"qualifier":"claude"}'
+```
+
+Claude can also propose an improved ICP rubric: `POST /api/criteria/suggest`
+returns a proposed markdown + rationale + diff summary. It persists nothing — the
+proposal feeds the existing criteria preview/versioning flow so a human approves
+the new version through the normal save path. The judge output (`source`,
+per-dimension reasons, `evidence_ids` citations, `ai_narrative`) is written into
+lead metadata and the K2 document manifest so the existing K2 sync/eval flow can
+grade it later.
+
+> The Cloudflare Worker is a frozen, read-only demo mirror. All qualification
+> logic here is Python-only; the Worker is out of scope for this feature.
+
 ## Validate
 
 ```bash

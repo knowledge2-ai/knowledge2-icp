@@ -48,6 +48,7 @@ def score_to_dict(result: ScoreResult) -> dict[str, Any]:
         "total_score": result.total_score,
         "tier": result.tier,
         "next_action": result.next_action,
+        "ai_narrative": result.ai_narrative,
         "warnings": list(result.warnings),
         "hard_gate_failed": result.hard_gate_failed,
         "hard_gate_unknown": result.hard_gate_unknown,

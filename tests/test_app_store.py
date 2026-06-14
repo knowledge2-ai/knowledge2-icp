@@ -443,6 +443,19 @@ class AppStoreTest(unittest.TestCase):
             self.assertIn("provider_action.allowed", audit_actions)
             self.assertIn("provider_action.denied", audit_actions)
 
+    def test_qualifier_setting_defaults_to_rules_and_validates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+
+            self.assertEqual(store.load_settings()["qualifier"], "rules")
+
+            saved = store.save_settings({"qualifier": "claude"})
+            self.assertEqual(saved["qualifier"], "claude")
+            self.assertEqual(store.load_settings()["qualifier"], "claude")
+
+            with self.assertRaises(ValueError):
+                store.save_settings({"qualifier": "gpt"})
+
 
 if __name__ == "__main__":
     unittest.main()
