@@ -59,6 +59,37 @@ class SeededLeadQualityTests(unittest.TestCase):
         for lead in self.leads:
             self.assertIn("ai_narrative", lead["score"])
 
+    def test_metadata_carries_nonempty_vertical(self) -> None:
+        # The mining/lookalike/facet stack reads metadata["vertical"]; an empty
+        # value silently degrades the vertical facet, lookalike ranking, and the
+        # mining CSV column. Every seeded lead must carry a non-empty vertical.
+        for lead in self.leads:
+            vertical = str(lead["metadata"].get("vertical") or "").strip()
+            self.assertTrue(
+                vertical,
+                msg=f"{lead['score']['company']['company']} has empty metadata.vertical",
+            )
+
+    def test_ai_gap_audit_profile_matches_seeded_records(self) -> None:
+        # The seeded "AI gap audit" query profile must select real accounts.
+        # ai_posture is stored as a numeric level (lower = bigger AI gap), so a
+        # filter written against a string taxonomy (e.g. == "none") would match
+        # nothing and ship a dead button.
+        from icp_engine.mining import _match_clause, normalize_clauses
+        from icp_engine.seed_defaults import SEEDED_QUERY_PROFILES
+
+        profile = next(p for p in SEEDED_QUERY_PROFILES if p["id"] == "ai-gap-audit")
+        clauses = normalize_clauses(profile["filters"])
+        matched = [
+            lead
+            for lead in self.leads
+            if all(
+                _match_clause(lead["score"]["classification"].get(key), op, value)
+                for key, op, value in clauses
+            )
+        ]
+        self.assertTrue(matched, msg="ai-gap-audit profile filter matched zero seeded leads")
+
     def test_hard_gate_flags_derive_from_gates(self) -> None:
         for lead in self.leads:
             score = lead["score"]

@@ -29,8 +29,8 @@
     "filters": [
       {
         "key": "ai_posture",
-        "op": "==",
-        "value": "none"
+        "op": "<=",
+        "value": 1
       }
     ]
   },
