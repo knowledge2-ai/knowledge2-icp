@@ -125,7 +125,10 @@ class K2WorkspaceTest(unittest.TestCase):
         self.assertEqual(len(documents["source"]), 428)
         self.assertEqual(len(documents["candidate"]), 428)
         self.assertEqual(len(documents["evidence"]), 856)
-        self.assertEqual(len(documents["prospect"]), 1700)
+        # Seed personas now come from strategy.build_strategy (live parity), which
+        # yields 3 base + optional vertical/CEO personas capped at 5 per lead, instead
+        # of the old hand-built fixed list. Prospect docs are one-per-persona.
+        self.assertEqual(len(documents["prospect"]), 1607)
         self.assertEqual(len(documents["criteria"]), 7)
 
         for key, docs in documents.items():
