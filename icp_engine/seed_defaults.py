@@ -318,6 +318,11 @@ def _seed_lead(
     metadata = {
         "company": company,
         "domain": domain,
+        # The mining/lookalike/facet stack (mining.FACET_KEYS, _LOCAL_FIELDS,
+        # _lead_record, _seed_profile) all read metadata["vertical"]; without it
+        # the vertical facet renders empty, lookalikes lose their top-weighted
+        # feature, and the mining CSV's vertical column is blank.
+        "vertical": vertical,
         "criteria_profile": {
             "source": "icp.md",
             "hash": "seeded-icp-v1",

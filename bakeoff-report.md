@@ -9,43 +9,43 @@
 
 | Case | Source | Gold | Local P | Local R | Local F1 | Local ms | Coverage gap |
 |---|---|---:|---:|---:|---:|---:|---|
-| profile:portfolio-expansion | seeded_profile | 402 | 1.0 | 1.0 | 1.0 | 135.54 | — |
-| profile:ai-gap-audit | seeded_profile | 0 | 1.0 | 1.0 | 1.0 | 127.428 | — |
-| profile:workflow-moat | seeded_profile | 424 | 1.0 | 1.0 | 1.0 | 136.513 | — |
-| profile:budget-access | seeded_profile | 424 | 1.0 | 1.0 | 1.0 | 127.792 | `has_contact_path` |
-| profile:prospect-role-tree | seeded_profile | 424 | 1.0 | 1.0 | 1.0 | 132.68 | — |
-| adv:tier-a-high-score | adversarial | 7 | 1.0 | 1.0 | 1.0 | 139.947 | — |
-| adv:ab-tier-midscore | adversarial | 367 | 1.0 | 1.0 | 1.0 | 130.384 | — |
-| adv:posture-level-1 | adversarial | 382 | 1.0 | 1.0 | 1.0 | 135.262 | — |
-| adv:company-contains | adversarial | 6 | 1.0 | 1.0 | 1.0 | 127.311 | — |
-| adv:unevaluable-contact-path | adversarial | 424 | 1.0 | 1.0 | 1.0 | 137.371 | `has_contact_path` |
+| profile:portfolio-expansion | seeded_profile | 402 | 1.0 | 1.0 | 1.0 | 133.217 | — |
+| profile:ai-gap-audit | seeded_profile | 382 | 1.0 | 1.0 | 1.0 | 129.665 | — |
+| profile:workflow-moat | seeded_profile | 424 | 1.0 | 1.0 | 1.0 | 130.317 | — |
+| profile:budget-access | seeded_profile | 424 | 1.0 | 1.0 | 1.0 | 126.297 | `has_contact_path` |
+| profile:prospect-role-tree | seeded_profile | 424 | 1.0 | 1.0 | 1.0 | 132.893 | — |
+| adv:tier-a-high-score | adversarial | 7 | 1.0 | 1.0 | 1.0 | 133.482 | — |
+| adv:ab-tier-midscore | adversarial | 367 | 1.0 | 1.0 | 1.0 | 124.54 | — |
+| adv:posture-level-1 | adversarial | 382 | 1.0 | 1.0 | 1.0 | 131.265 | — |
+| adv:company-contains | adversarial | 6 | 1.0 | 1.0 | 1.0 | 125.442 | — |
+| adv:unevaluable-contact-path | adversarial | 424 | 1.0 | 1.0 | 1.0 | 131.486 | `has_contact_path` |
 
 ## Lookalikes (precision@k / MAP@k vs independent `category` label)
 
 | Seed | Category | Peers | Local P@k | Local R@k | Local MAP | Local ms |
 |---|---|---:|---:|---:|---:|---:|
-| abilis-solutions.com | mission-critical vertical market software | 96 | 0.3 | 0.0312 | 0.0726 | 125.364 |
-| aep-italia.it | People Transportation | 20 | 0.0 | 0.0 | 0.0 | 142.263 |
-| advantage360.com | vertical market software | 20 | 0.0 | 0.0 | 0.0 | 129.075 |
-| airsquirrels.com | Education | 17 | 0.0 | 0.0 | 0.0 | 136.86 |
-| bbtsoftware.ch | Financial Services | 15 | 0.0 | 0.0 | 0.0 | 130.788 |
+| abilis-solutions.com | mission-critical vertical market software | 96 | 1.0 | 0.1042 | 1.0 | 122.213 |
+| aep-italia.it | People Transportation | 20 | 0.6 | 0.3 | 0.3564 | 132.347 |
+| advantage360.com | vertical market software | 20 | 1.0 | 0.5 | 1.0 | 126.945 |
+| airsquirrels.com | Education | 17 | 1.0 | 0.5882 | 1.0 | 130.035 |
+| bbtsoftware.ch | Financial Services | 15 | 0.0 | 0.0 | 0.0 | 123.581 |
 
 ## Grounding (known-fact coverage − contradictions)
 
 | Account | Tier | Facts | Local coverage | Local score | Local ms |
 |---|---|---:|---:|---:|---:|
-| servicetitan.com | A | 6/6 | 1.0 | 1.0 | 128.897 |
-| limblecmms.com | A | 6/6 | 1.0 | 1.0 | 116.747 |
-| brandwatch.com | B | 6/6 | 1.0 | 1.0 | 118.508 |
-| dealersocket.com | B | 6/6 | 1.0 | 1.0 | 113.956 |
-| pulsarplatform.com | C | 6/6 | 1.0 | 1.0 | 124.49 |
-| opengov.com | C | 6/6 | 1.0 | 1.0 | 116.305 |
-| example.com | Reject | 6/6 | 1.0 | 1.0 | 113.528 |
+| servicetitan.com | A | 6/6 | 1.0 | 1.0 | 118.484 |
+| limblecmms.com | A | 6/6 | 1.0 | 1.0 | 112.745 |
+| brandwatch.com | B | 6/6 | 1.0 | 1.0 | 110.447 |
+| dealersocket.com | B | 6/6 | 1.0 | 1.0 | 108.507 |
+| pulsarplatform.com | C | 6/6 | 1.0 | 1.0 | 117.016 |
+| opengov.com | C | 6/6 | 1.0 | 1.0 | 111.831 |
+| example.com | Reject | 6/6 | 1.0 | 1.0 | 111.168 |
 
 ## Summary
 
 - Filtering: local mean F1 **1.0** over 10 cases; 2 case(s) hit the offline key-coverage gap.
-- Lookalikes: local mean precision@k **0.06**, MAP@k 0.0145.
+- Lookalikes: local mean precision@k **0.72**, MAP@k 0.6713.
 - Grounding: local mean coverage **1.0**, grounding score 1.0.
 
 _To populate the K2 columns: `python -m icp_engine.k2_sync --apply` to provision + upload the corpus, export the returned `K2_*_CORPUS_ID` values + `K2_API_KEY`, then re-run this command._
