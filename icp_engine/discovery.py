@@ -324,23 +324,35 @@ def parse_seed_companies(seed_text: str) -> list[DiscoveryCandidate]:
         parts = [part.strip() for part in re.split(r"[,|\t]", cleaned) if part.strip()]
         if _looks_like_seed_header(parts):
             continue
-        if len(parts) == 1:
-            domain = normalize_domain(parts[0])
-            company = _company_name_from_title_or_domain("", domain)
-        else:
-            company = parts[0]
-            domain = normalize_domain(parts[1])
-        if domain:
-            candidates.append(
-                DiscoveryCandidate(
-                    company=company or _company_name_from_title_or_domain("", domain),
-                    domain=domain,
-                    source_url=f"https://{domain}",
-                    source_title="Manual seed",
-                    notes="Manually seeded by operator.",
+        pairs: list[tuple[str, str]] = []
+        if len(parts) >= 2 and all(_looks_like_domain(part) for part in parts):
+            # A bare list of domains on one line (e.g. "moj.io, automate.co.za") is one
+            # candidate per domain, not a single Name/domain pair.
+            pairs = [("", normalize_domain(part)) for part in parts]
+        elif len(parts) >= 2 and _looks_like_domain(parts[1]):
+            # The documented "Name, domain" form.
+            pairs = [(parts[0], normalize_domain(parts[1]))]
+        elif len(parts) == 1:
+            pairs = [("", normalize_domain(parts[0]))]
+        for company, domain in pairs:
+            if domain:
+                candidates.append(
+                    DiscoveryCandidate(
+                        company=company or _company_name_from_title_or_domain("", domain),
+                        domain=domain,
+                        source_url=f"https://{domain}",
+                        source_title="Manual seed",
+                        notes="Manually seeded by operator.",
+                    )
                 )
-            )
     return candidates
+
+
+def _looks_like_domain(part: str) -> bool:
+    if "." not in part:
+        return False
+    normalized = normalize_domain(part)
+    return "." in normalized
 
 
 def _looks_like_seed_header(parts: list[str]) -> bool:
