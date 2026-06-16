@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from icp_engine.app_store import AppStore
+from icp_engine.seed_defaults import SEED_RUN_ID
 
 
 class AppStoreTest(unittest.TestCase):
@@ -82,19 +83,20 @@ class AppStoreTest(unittest.TestCase):
                 "status": "completed",
                 "warnings": [],
                 "leads": [
-                    {
-                        "score": {
-                            "tier": "A",
-                            "total_score": 81,
-                        }
-                    }
+                    {"score": {"tier": "A", "total_score": 81}},
+                    {"score": {"tier": "B", "total_score": 70}},
+                    {"score": {"tier": "C", "total_score": 55}},
                 ],
             }
 
             store.save_run(run)
 
             self.assertEqual(store.load_run("run-123")["query"], "fleet software")
-            self.assertEqual(store.list_runs()[0]["top_score"], 81)
+            # The seeded showcase run is pinned first; the user run follows it.
+            self.assertEqual(store.list_runs()[0]["id"], SEED_RUN_ID)
+            user_summary = next(item for item in store.list_runs() if item["id"] == "run-123")
+            self.assertEqual(user_summary["top_score"], 81)
+            # A substantive user run (>= 3 leads) becomes the default landing view.
             self.assertEqual(store.state()["latest_run"]["id"], "run-123")
             workspace_state = store.workspace_state_status()
             runs = next(item for item in workspace_state["collections"] if item["key"] == "runs")
@@ -162,7 +164,10 @@ class AppStoreTest(unittest.TestCase):
             self.assertEqual(hydrated["workflow"]["status_counts"]["Qualified"], 1)
             self.assertEqual(hydrated["workflow"]["status_counts"]["Rejected"], 1)
             self.assertEqual(hydrated["leads"][0]["workflow"]["status"], "Qualified")
-            self.assertEqual(reloaded.state()["runs"][0]["lead_status_counts"]["Rejected"], 1)
+            workflow_summary = next(
+                item for item in reloaded.state()["runs"] if item["id"] == "run-workflow"
+            )
+            self.assertEqual(workflow_summary["lead_status_counts"]["Rejected"], 1)
             self.assertGreaterEqual(len(reloaded.list_audit_events()), 3)
 
             with self.assertRaises(ValueError):
@@ -189,7 +194,10 @@ class AppStoreTest(unittest.TestCase):
 
             reloaded = AppStore(Path(tmp))
             # state() must not raise; the corrupt status is coerced to the safe default.
-            counts = reloaded.state()["runs"][0]["lead_status_counts"]
+            workflow_summary = next(
+                item for item in reloaded.state()["runs"] if item["id"] == "run-workflow"
+            )
+            counts = workflow_summary["lead_status_counts"]
             self.assertEqual(counts["New"], 1)
             self.assertEqual(reloaded.load_lead_states("run-workflow")["moj.io"]["status"], "New")
 
