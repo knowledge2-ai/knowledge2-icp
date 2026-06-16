@@ -69,3 +69,16 @@ def compact_snippet(text: str, max_chars: int = 700) -> str:
 def keyword_hits(text: str, keywords: list[str]) -> list[str]:
     lower = text.lower()
     return [keyword for keyword in keywords if keyword.lower() in lower]
+
+
+def keyword_hits_boundary(text: str, keywords: list[str]) -> list[str]:
+    """Like ``keyword_hits`` but matches on word boundaries, so a short term such
+    as ``erp`` does not falsely match inside ``enterprise``. Used for the vertical
+    signal, where substring collisions would otherwise fire for almost every B2B
+    company and wash out the vertical-focus signal entirely."""
+    lower = text.lower()
+    return [
+        keyword
+        for keyword in keywords
+        if re.search(rf"\b{re.escape(keyword.lower())}\b", lower)
+    ]

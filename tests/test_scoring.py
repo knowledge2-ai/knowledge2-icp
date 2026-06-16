@@ -32,6 +32,52 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(result.classification.ai_posture, 0)
         self.assertFalse(result.hard_gate_failed)
 
+    def test_vertical_focus_outweighs_horizontal_data_breadth(self):
+        # Two AI-light, pre-2025, in-budget incumbents that are identical on every
+        # signal except one: the first serves a target vertical, the second is a
+        # horizontal data-rich platform. The ICP is "vertical software incumbents,
+        # not broad SaaS," so the vertical company must score the deeper moat and
+        # clearly outrank the horizontal one — not merely tie it.
+        shared = "Real-time automation improves efficiency for enterprise customers."
+        vertical = CompanyInput(
+            company="Vertical VMS",
+            domain="vertical.example.com",
+            category="construction compliance software",
+            founded_year=2008,
+            employee_count=300,
+        )
+        vertical_evidence = [
+            Evidence(
+                "v1",
+                "https://vertical.example.com",
+                "Construction compliance",
+                "Software platform for construction firms with compliance workflows, work "
+                f"orders, inspections, documents, api integrations, analytics, reporting. {shared}",
+            )
+        ]
+        horizontal = CompanyInput(
+            company="Horizontal Fintech",
+            domain="horizontal.example.com",
+            category="accounts receivable automation",
+            founded_year=2008,
+            employee_count=300,
+        )
+        horizontal_evidence = [
+            Evidence(
+                "h1",
+                "https://horizontal.example.com",
+                "AR automation",
+                "Software platform for businesses with payment workflows, transactions, "
+                f"invoices, documents, api integrations, analytics, reporting. {shared}",
+            )
+        ]
+
+        vertical_result = score_company(vertical, vertical_evidence)
+        horizontal_result = score_company(horizontal, horizontal_evidence)
+
+        self.assertGreater(vertical_result.data_workflow_score, horizontal_result.data_workflow_score)
+        self.assertGreaterEqual(vertical_result.total_score, horizontal_result.total_score + 8)
+
     def test_ai_native_fails_hard_gate(self):
         company = CompanyInput(
             company="AI Native",
