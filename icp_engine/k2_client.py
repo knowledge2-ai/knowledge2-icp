@@ -13,9 +13,12 @@ from .tenant import Branding
 _BRANDING = Branding()
 
 
-# The /search:batch endpoint hard-caps top_k server-side; mirror it here so callers
-# can size their requests to what the API will actually return (no silent truncation).
-SEARCH_BATCH_MAX_TOP_K = 20
+# The /search:batch endpoint hard-caps top_k server-side (requests above this return
+# HTTP 422); mirror the real ceiling here so callers can size requests to what the API
+# will actually return (no silent truncation). Measured against api-dev: 100 is accepted,
+# 150 is rejected. K2 is a top-k semantic retriever, so this also bounds how many
+# metadata-filter matches a single mining query can surface.
+SEARCH_BATCH_MAX_TOP_K = 100
 
 
 class K2ApiError(RuntimeError):

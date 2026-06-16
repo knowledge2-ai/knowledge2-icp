@@ -349,10 +349,23 @@ def _search_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _result_metadata(item: dict[str, Any]) -> dict[str, Any]:
+    """Flatten a K2 search hit's metadata containers into one dict.
+
+    Live K2 hits carry their business fields (``company``/``domain``/``tier``/…) under
+    ``custom_metadata`` and provenance (``source_uri``/``document_id``) under
+    ``system_metadata``; older/local shapes use a plain ``metadata`` block, sometimes
+    nested under ``document``/``chunk``. Merge every variant so the shaper sees the real
+    fields regardless of provider shape — reading only ``metadata`` blanks every live hit.
+    """
+    merged: dict[str, Any] = {}
     for container in (item, item.get("document"), item.get("chunk")):
-        if isinstance(container, dict) and isinstance(container.get("metadata"), dict):
-            return container["metadata"]
-    return {}
+        if not isinstance(container, dict):
+            continue
+        for key in ("metadata", "customMetadata", "custom_metadata", "systemMetadata", "system_metadata"):
+            value = container.get(key)
+            if isinstance(value, dict):
+                merged.update(value)
+    return merged
 
 
 def _result_snippet(item: dict[str, Any]) -> str:
@@ -363,7 +376,13 @@ def _result_snippet(item: dict[str, Any]) -> str:
 
 def _result_citations(item: dict[str, Any], metadata: dict[str, Any]) -> list[str]:
     document = item.get("document") if isinstance(item.get("document"), dict) else {}
-    candidates = [metadata.get("source_url"), document.get("source_uri"), document.get("sourceUri"), item.get("source_uri")]
+    candidates = [
+        metadata.get("source_url"),
+        metadata.get("source_uri"),
+        document.get("source_uri"),
+        document.get("sourceUri"),
+        item.get("source_uri"),
+    ]
     return [str(value) for value in candidates if value]
 
 

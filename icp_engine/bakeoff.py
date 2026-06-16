@@ -458,7 +458,9 @@ def bakeoff_to_markdown(report: dict[str, Any]) -> str:
         "",
         f"- Run: `{report['run_id']}` · {report['record_count']} persisted lead records",
         f"- {k2_note}",
-        f"- Filtering measured at top_k={report['config']['filter_top_k']} (correctness); product default is 20 (truncates large result sets).",
+        f"- Filtering requested at top_k={report['config']['filter_top_k']}: the local mine is exhaustive "
+        "(returns every WHERE match), but K2 is a top-k semantic retriever the API hard-caps at 100 — so on "
+        "gold sets larger than 100, K2 recall is bounded by that cap, not the metadata filter.",
         f"- Local miner evaluates {len(report['config']['local_evaluable_keys'])} of 48 §14.3 filter keys offline: "
         + ", ".join(f"`{key}`" for key in report["config"]["local_evaluable_keys"])
         + ".",

@@ -7,6 +7,7 @@ from icp_engine.mining import (
     mine_local,
     mining_to_csv,
     normalize_clauses,
+    shape_live_results,
 )
 
 
@@ -129,6 +130,58 @@ class HelpersTest(unittest.TestCase):
         csv_text = mining_to_csv(payload)
         self.assertIn("company,domain,vertical,tier,ai_posture", csv_text.splitlines()[0])
         self.assertIn("moj.io", csv_text)
+
+
+class ShapeLiveResultsTest(unittest.TestCase):
+    # Live K2 search hits carry their business fields under ``custom_metadata`` and
+    # provenance under ``system_metadata`` — NOT a plain ``metadata`` block. Reading only
+    # ``metadata`` blanks every hit's domain/tier (the bug that tanked K2 mining/lookalikes
+    # in the bake-off while grounding, which merged the variants, still worked).
+    def _k2_payload(self) -> dict:
+        return {
+            "responses": [
+                {
+                    "results": [
+                        {
+                            "id": "chunk-1",
+                            "text": "Fleet Complete telematics platform",
+                            "score": 0.91,
+                            "custom_metadata": {
+                                "company": "Fleet Complete",
+                                "domain": "fleetcomplete.com",
+                                "vertical": "People Transportation",
+                                "tier": "B",
+                                "ai_posture": "1",
+                                "total_score": 64,
+                                "outreach_status": "queued",
+                                "run_id": "run-seeded-icp",
+                            },
+                            "system_metadata": {"source_uri": "https://fleetcomplete.com/about"},
+                        }
+                    ]
+                }
+            ]
+        }
+
+    def test_extracts_custom_metadata_fields(self) -> None:
+        results = shape_live_results(self._k2_payload(), top_k=20)
+        self.assertEqual(len(results), 1)
+        record = results[0]
+        self.assertEqual(record["company"], "Fleet Complete")
+        self.assertEqual(record["domain"], "fleetcomplete.com")
+        self.assertEqual(record["tier"], "B")
+        self.assertEqual(record["ai_posture"], "1")
+        self.assertEqual(record["run_id"], "run-seeded-icp")
+
+    def test_source_uri_from_system_metadata_becomes_citation(self) -> None:
+        record = shape_live_results(self._k2_payload(), top_k=20)[0]
+        self.assertIn("https://fleetcomplete.com/about", record["citations"])
+
+    def test_plain_metadata_shape_still_supported(self) -> None:
+        payload = {"responses": [{"results": [{"metadata": {"company": "Acme", "domain": "acme.com", "tier": "A"}}]}]}
+        record = shape_live_results(payload, top_k=20)[0]
+        self.assertEqual(record["domain"], "acme.com")
+        self.assertEqual(record["tier"], "A")
 
 
 if __name__ == "__main__":
