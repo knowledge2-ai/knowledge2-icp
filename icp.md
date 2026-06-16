@@ -60,6 +60,14 @@ Your sweet spot is usually **0–2**. Score **3** can be good if you sell deeper
 
 **Tier A:** 75–100 **Tier B:** 60–74 **Reject/nurture:** below 60
 
+**Vertical focus is part of the data/workflow moat, not a separate line.** This
+dimension rewards *depth in one industry*, not breadth across many. A company that
+describes itself as serving everyone (“for businesses of all sizes,” “across
+industries”) is read as horizontal and capped on this dimension; a focused
+vertical incumbent earns full credit plus a specialization bonus. That is why a
+broad horizontal platform should not outrank a niche vertical incumbent that shows
+the same raw data signals — the ICP is vertical software incumbents, not broad SaaS.
+
 Mojio-like and Automate-like companies are Tier A because they appear data-rich, vertical, mature, and under-positioned on AI. Hootsuite-like companies can be Tier A or B depending on whether your offer is “build the first AI feature” or “make AI core to product strategy.”
 
 ---

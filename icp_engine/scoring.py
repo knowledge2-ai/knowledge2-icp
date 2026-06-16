@@ -11,7 +11,7 @@ from .models import (
     GateStatus,
     ScoreResult,
 )
-from .text import keyword_hits, normalize_whitespace
+from .text import keyword_hits, keyword_hits_boundary, normalize_whitespace
 
 
 AI_KEYWORDS = [
@@ -147,6 +147,28 @@ FEASIBILITY_KEYWORDS = [
     "roles",
     "sso",
     "security",
+]
+
+# Broad-audience phrasing a horizontal platform uses about itself. Presence of
+# these (with no target-vertical match) caps the data/workflow moat, since the
+# ICP favors focused vertical incumbents over breadth-first horizontal SaaS.
+HORIZONTAL_AUDIENCE_KEYWORDS = [
+    "for businesses",
+    "any business",
+    "all businesses",
+    "businesses of all sizes",
+    "any industry",
+    "all industries",
+    "across industries",
+    "every industry",
+    "any team",
+    "every team",
+    "any company",
+    "any organization",
+    "organizations of all",
+    "teams of all sizes",
+    "companies of all sizes",
+    "for everyone",
 ]
 
 HIGH_PRIORITY_VERTICALS = [
@@ -320,7 +342,7 @@ def _rules_classification(company: CompanyInput, evidence: list[Evidence], text:
     data_hits = keyword_hits(text, DATA_WORKFLOW_KEYWORDS)
     urgency_hits = keyword_hits(text, URGENCY_KEYWORDS)
     feasibility_hits = keyword_hits(text, FEASIBILITY_KEYWORDS)
-    vertical_hits = keyword_hits(f"{company.category} {text}", profile.priority_terms or HIGH_PRIORITY_VERTICALS)
+    vertical_hits = keyword_hits_boundary(f"{company.category} {text}", profile.priority_terms or HIGH_PRIORITY_VERTICALS)
 
     if len(native_hits) >= 2:
         ai_posture = 5
@@ -335,9 +357,23 @@ def _rules_classification(company: CompanyInput, evidence: list[Evidence], text:
     else:
         ai_posture = 0
 
-    data_workflow = min(5, max(0, len(set(data_hits)) // 2))
-    if vertical_hits and data_workflow < 4:
-        data_workflow += 1
+    horizontal_hits = keyword_hits(text, HORIZONTAL_AUDIENCE_KEYWORDS)
+    raw_data_workflow = min(5, max(0, len(set(data_hits)) // 2))
+    if vertical_hits:
+        # A recognized target vertical: the data is genuine domain depth
+        # ("proprietary operational data inside recurring customer workflows"),
+        # so award full moat credit plus a focus bonus for clear specialization.
+        data_workflow = min(5, raw_data_workflow + 1)
+    elif horizontal_hits and not vertical_hits:
+        # Explicitly horizontal ("for any business", "across industries"): broad
+        # data breadth without vertical focus is not the ICP ("vertical software
+        # incumbents, not broad SaaS"), so cap the moat. We gate on the company's
+        # own broad-audience language rather than on "not in our vertical list",
+        # so a niche incumbent we simply didn't enumerate is not penalized.
+        data_workflow = min(3, raw_data_workflow)
+    else:
+        # Neither a listed vertical nor self-described as horizontal: stay neutral.
+        data_workflow = raw_data_workflow
     commercial_urgency = min(5, len(set(urgency_hits)) + (1 if ai_posture in {0, 1, 2} else 0))
     budget_access = _budget_points(company, text, profile)
     feasibility = min(5, max(1 if evidence else 0, len(set(feasibility_hits)) // 2))
