@@ -31,15 +31,25 @@ from ._helpers import (
 class LeadsMixin:
     def list_runs(self) -> list[dict[str, Any]]:
         self.ensure()
-        if not self.index_path.exists():
-            return [_run_summary(seeded_run())]
-        try:
-            items = json.loads(self.index_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return [_run_summary(seeded_run())]
-        if not isinstance(items, list):
-            return [_run_summary(seeded_run())]
-        return sorted(items, key=lambda item: str(item.get("created_at") or ""), reverse=True)
+        items: list[dict[str, Any]] = []
+        if self.index_path.exists():
+            try:
+                parsed = json.loads(self.index_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                parsed = []
+            if isinstance(parsed, list):
+                items = parsed
+        user_runs = sorted(
+            (item for item in items if item.get("id") != SEED_RUN_ID),
+            key=lambda item: str(item.get("created_at") or ""),
+            reverse=True,
+        )
+        # The 400+-lead seeded showcase run is always surfaced (pinned first) so the
+        # dense operational UI — ranked leads, facets, mining, grounding, exports —
+        # has real data to render even once the user has created their own (often
+        # small) runs. Without this the run is evicted the moment any real run exists
+        # and every screen degrades to a one-row table.
+        return [_run_summary(seeded_run()), *user_runs]
 
     def save_run(self, run: dict[str, Any]) -> dict[str, Any]:
         self.ensure()

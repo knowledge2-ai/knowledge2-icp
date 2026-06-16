@@ -54,10 +54,15 @@ class AppStore(CriteriaMixin, ConfigMixin, EngagementMixin, LeadsMixin, Platform
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.runs_dir.mkdir(parents=True, exist_ok=True)
 
+    # A user run is "substantive" enough to open by default once it carries a real
+    # batch of leads; below this the dashboard lands on the seeded showcase run so the
+    # first thing the operator sees is a dense, ranked list rather than a one-row table.
+    _SUBSTANTIVE_RUN_LEADS = 3
+
     def state(self) -> dict[str, Any]:
         runs = self.list_runs()
         summaries = [self._summary_with_workflow(item) for item in runs]
-        latest_run = self.load_run(runs[0]["id"]) if runs else None
+        latest_run = self.load_run(self._default_landing_run_id(runs)) if runs else None
         return {
             "criteria": self.load_criteria(),
             "criteria_versions": self.list_criteria_versions(),
@@ -80,6 +85,16 @@ class AppStore(CriteriaMixin, ConfigMixin, EngagementMixin, LeadsMixin, Platform
             "workspace_state": self.workspace_state_status(),
             "latest_run": latest_run,
         }
+
+    def _default_landing_run_id(self, summaries: list[dict[str, Any]]) -> str:
+        """Pick the run the dashboard opens on: the most recent substantive user run,
+        else the seeded showcase run so the operator never lands on a near-empty view."""
+        for summary in summaries:
+            if summary.get("id") == SEED_RUN_ID:
+                continue
+            if int(summary.get("lead_count") or 0) >= self._SUBSTANTIVE_RUN_LEADS:
+                return str(summary["id"])
+        return SEED_RUN_ID
 
     def workspace_state_status(self) -> dict[str, Any]:
         self.ensure()
