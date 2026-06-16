@@ -89,6 +89,20 @@ class CloudflareWorkerRuntimeTest(unittest.TestCase):
               include_github: false,
             }, token);
 
+            // A substantive run (>= 3 leads) whose candidates exercise the ported
+            // vertical-focus moat scoring: a vertical-market incumbent, an
+            // explicitly horizontal platform, and an unrecognized niche.
+            const moatRun = await request(workerOne, env, "/api/runs", {
+              query: "vertical focus moat",
+              candidates: [
+                { company: "Vertical VMS", domain: "vert.example", notes: "Construction compliance permitting workflow software for field service crews" },
+                { company: "Horizontal SaaS", domain: "horiz.example", notes: "Workflow automation software for businesses of all sizes across industries" },
+                { company: "Niche Ops", domain: "niche.example", notes: "Funeral home management records platform" },
+              ],
+              fetch: false,
+              include_github: false,
+            }, token);
+
             const workerTwo = await loadWorker("two");
             const settings = await request(workerTwo, env, "/api/settings", undefined, token);
             const sources = await request(workerTwo, env, "/api/sources", undefined, token);
@@ -99,13 +113,29 @@ class CloudflareWorkerRuntimeTest(unittest.TestCase):
             assert.equal(settings.settings.default_query, "durable state query");
             assert.ok(sources.sources.some((source) => source.name === "Durable source"));
             assert.ok(state.runs.some((item) => item.id === run.id));
+
+            // Ported #19: the seeded showcase is pinned first in the run list and
+            // is the default landing run until a substantive user run exists; the
+            // dashboard then lands on the most recent substantive run.
+            assert.equal(state.runs[0].id, "run-seeded-icp");
+            assert.equal(state.latest_run.id, moatRun.id);
+
+            // Ported #18: vertical-market focus deepens the moat, explicit
+            // horizontal-audience language caps it, and an unrecognized niche
+            // stays neutral (vertical > niche > horizontal).
+            const byCompany = Object.fromEntries(state.latest_run.leads.map((lead) => [lead.score.company.company, lead.score]));
+            assert.equal(byCompany["Vertical VMS"].data_workflow_score, 25);
+            assert.equal(byCompany["Horizontal SaaS"].data_workflow_score, 15);
+            assert.ok(byCompany["Vertical VMS"].total_score > byCompany["Niche Ops"].total_score);
+            assert.ok(byCompany["Niche Ops"].total_score > byCompany["Horizontal SaaS"].total_score);
+
             assert.equal(workspaceState.durable, true);
             assert.equal(workspaceState.store, "cloudflare-kv");
             const collectionCounts = Object.fromEntries(workspaceState.collections.map((item) => [item.key, item]));
             assert.equal(collectionCounts.settings.persisted, true);
             assert.equal(collectionCounts.sources.persisted, true);
             assert.equal(collectionCounts.runs.persisted, true);
-            assert.equal(collectionCounts.runs.count, 1);
+            assert.equal(collectionCounts.runs.count, 2);
             """
         )
         env = {**os.environ, "NODE_NO_WARNINGS": "1"}
