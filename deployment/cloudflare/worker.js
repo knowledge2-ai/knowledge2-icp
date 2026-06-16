@@ -1,5 +1,29 @@
 const SEED_CREATED_AT = "2026-06-12T00:00:00+00:00";
 const SEED_RUN_ID = "run-seeded-icp";
+// A user run needs at least this many leads before the dashboard lands on it
+// instead of the seeded showcase. Mirrors icp_engine.app_store._core.
+const SUBSTANTIVE_RUN_LEADS = 3;
+// Explicit horizontal-audience language. Live candidates that pitch "any
+// business / all industries" get their workflow-moat capped, mirroring
+// scoring.HORIZONTAL_AUDIENCE_KEYWORDS in the Python engine.
+const HORIZONTAL_AUDIENCE_KEYWORDS = [
+  "for businesses",
+  "any business",
+  "all businesses",
+  "businesses of all sizes",
+  "any industry",
+  "all industries",
+  "across industries",
+  "every industry",
+  "any team",
+  "every team",
+  "any company",
+  "any organization",
+  "organizations of all",
+  "teams of all sizes",
+  "companies of all sizes",
+  "for everyone",
+];
 const MAX_APOLLO_ENRICH_LEADS = 12;
 const K2_WORKSPACE_PROJECT_DEFAULT = "Knowledge2 ICP GTM Dev";
 const K2_WORKSPACE_PIPELINE_NAME = "ICP Expansion Pipeline";
@@ -788,7 +812,7 @@ async function currentState(env, lists) {
     eval_summary: evalSummary(await listEvalRuns(env)),
     provider_status: providerStatus(env),
     workspace_state: await workspaceStateStatus(env),
-    latest_run: await loadRun(env, runs[0]?.id || SEED_RUN_ID, lists),
+    latest_run: await loadRun(env, defaultLandingRunId(runs), lists),
   };
 }
 
@@ -1711,11 +1735,25 @@ async function saveRun(env, run) {
 
 async function listRuns(env, lists) {
   const runs = await loadRuntimeRuns(env);
-  const summaries = Array.from(runs.values()).map(runSummary);
-  if (!runtime.runs.has(SEED_RUN_ID)) {
-    summaries.push(runSummary(seedRun(lists)));
-  }
-  return summaries.sort((left, right) => String(right.created_at || "").localeCompare(String(left.created_at || "")));
+  // Pin the seeded showcase first so it is always reachable, then user runs
+  // newest-first. Mirrors icp_engine.app_store._leads.list_runs.
+  const seedSummary = runtime.runs.has(SEED_RUN_ID)
+    ? runSummary(runs.get(SEED_RUN_ID))
+    : runSummary(seedRun(lists));
+  const userSummaries = Array.from(runs.values())
+    .filter((run) => run.id !== SEED_RUN_ID)
+    .map(runSummary)
+    .sort((left, right) => String(right.created_at || "").localeCompare(String(left.created_at || "")));
+  return [seedSummary, ...userSummaries];
+}
+
+function defaultLandingRunId(summaries) {
+  // Land on the most recent substantive user run; otherwise the seeded
+  // showcase. Mirrors icp_engine.app_store._core._default_landing_run_id.
+  const substantive = summaries.find(
+    (run) => run.id !== SEED_RUN_ID && Number(run.lead_count || 0) >= SUBSTANTIVE_RUN_LEADS,
+  );
+  return substantive ? substantive.id : SEED_RUN_ID;
 }
 
 async function loadRun(env, runId, lists) {
@@ -2940,9 +2978,14 @@ function seedLead(runId, account, candidate) {
   const vertical = verticalFor(account);
   const highPriority = isHighPriorityVertical(vertical);
   const tier = qualifiedTier || (reject ? "Reject" : highPriority ? "A" : "B");
-  const score = qualifiedNumber(qualification, "total_score", reject ? 24 : account.domain === "moj.io" ? 82 : highPriority ? 79 : 68);
+  // Runtime candidates without a baked qualification block get vertical-focus
+  // moat scoring; the seeded 428 keep their pre-rendered scores untouched.
+  const moat = !reject && !Object.keys(qualification).length ? liveMoat(account, candidate) : null;
+  const dataWorkflowDefault = reject ? 5 : account.domain === "moj.io" ? 25 : moat ? moat.dataWorkflowScore : 22;
+  const totalDefault = reject ? 24 : account.domain === "moj.io" ? 82 : (highPriority ? 79 : 68) + (moat ? moat.totalDelta : 0);
+  const score = qualifiedNumber(qualification, "total_score", totalDefault);
   const aiPosture = qualifiedNumber(qualification, "ai_posture", reject ? 5 : 0);
-  const dataWorkflow = Math.max(0, Math.min(5, Math.round(qualifiedNumber(qualification, "data_workflow_score", reject ? 5 : account.domain === "moj.io" ? 25 : 22) / 5)));
+  const dataWorkflow = Math.max(0, Math.min(5, Math.round(qualifiedNumber(qualification, "data_workflow_score", dataWorkflowDefault) / 5)));
   const feasibility = Math.max(0, Math.min(5, Math.round(qualifiedNumber(qualification, "feasibility_score", reject ? 4 : 8) / 2)));
   const docsUrl = account.domain === "moj.io"
     ? "https://moj.io/docs/api"
@@ -3004,7 +3047,7 @@ function seedLead(runId, account, candidate) {
         source: qualification.classification_source || "seed",
       },
       ai_gap_score: qualifiedNumber(qualification, "ai_gap_score", reject ? 0 : 30),
-      data_workflow_score: qualifiedNumber(qualification, "data_workflow_score", reject ? 5 : account.domain === "moj.io" ? 25 : 22),
+      data_workflow_score: qualifiedNumber(qualification, "data_workflow_score", dataWorkflowDefault),
       commercial_urgency_score: qualifiedNumber(qualification, "commercial_urgency_score", reject ? 3 : 14),
       budget_access_score: qualifiedNumber(qualification, "budget_access_score", reject ? 2 : 12),
       feasibility_score: qualifiedNumber(qualification, "feasibility_score", reject ? 4 : 8),
@@ -3088,6 +3131,26 @@ function seedLead(runId, account, candidate) {
       qualification,
     },
   };
+}
+
+function boundaryKeywordHit(text, term) {
+  const needle = String(term || "").toLowerCase().trim();
+  if (!needle) return false;
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b${escaped}\\b`).test(text);
+}
+
+// Live-candidate moat scoring, mirroring scoring.score_company: vertical-market
+// focus deepens the workflow moat, explicit horizontal-audience language caps it,
+// and unrecognized niches stay neutral. Only applied to runtime candidates that
+// lack a baked qualification block (the seeded 428 carry their own scores).
+function liveMoat(account, candidate) {
+  const text = `${account.category || ""} ${account.notes || candidate?.notes || ""}`.toLowerCase();
+  const verticalHit = (SEED_LISTS.priority_verticals || []).some((term) => boundaryKeywordHit(text, term));
+  const horizontalHit = HORIZONTAL_AUDIENCE_KEYWORDS.some((keyword) => text.includes(keyword));
+  if (verticalHit) return { dataWorkflowScore: 25, totalDelta: 3, kind: "vertical" };
+  if (horizontalHit) return { dataWorkflowScore: 15, totalDelta: -7, kind: "horizontal" };
+  return { dataWorkflowScore: 22, totalDelta: 0, kind: "neutral" };
 }
 
 function verticalFor(account) {
