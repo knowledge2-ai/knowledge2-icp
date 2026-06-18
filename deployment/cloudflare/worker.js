@@ -3318,7 +3318,9 @@ async function apolloBulkMatchPeople(env, people) {
     .map((person) => ({ id: person.id }));
   if (!details.length) return [];
   const baseUrl = String(env.APOLLO_BASE_URL || "https://api.apollo.io/api/v1").replace(/\/+$/, "");
-  const response = await fetch(`${baseUrl}/people/bulk_match?reveal_personal_emails=false&reveal_phone_number=false`, {
+  // Reveal the real personal email — this is the point of People Match and spends
+  // one credit per matched contact. Phones stay off (we don't surface them).
+  const response = await fetch(`${baseUrl}/people/bulk_match?reveal_personal_emails=true&reveal_phone_number=false`, {
     method: "POST",
     headers: {
       accept: "application/json",
@@ -3339,6 +3341,20 @@ function mergeApolloPeople(searchPeople, enrichedPeople) {
   return searchPeople.map((person) => ({ ...person, ...(enrichedById.get(person.id) || {}) }));
 }
 
+// Email availability for a person record, mirroring the gtm-icp plugin's
+// _email_status: a revealed record carries a real email (-> "verified" unless
+// Apollo already labeled it); the search teaser only has has_email, surfaced as
+// "available_unrevealed" so a slot reads honestly rather than looking verified.
+function apolloEmailStatus(item, contact) {
+  const email = item.email || contact.email || "";
+  if (email && !email.includes("email_not_unlocked")) {
+    return item.email_status || contact.email_status || "verified";
+  }
+  if (item.email_status || contact.email_status) return item.email_status || contact.email_status;
+  if (item.has_email || contact.has_email) return "available_unrevealed";
+  return "";
+}
+
 function compactApolloPeople(payload) {
   const rawItems = Array.isArray(payload.people) ? payload.people : Array.isArray(payload.contacts) ? payload.contacts : [];
   return rawItems.slice(0, 20).filter((item) => item && typeof item === "object").map((item) => {
@@ -3347,12 +3363,17 @@ function compactApolloPeople(payload) {
     const phone = Array.isArray(contact.phone_numbers) && contact.phone_numbers[0]?.sanitized_number
       ? contact.phone_numbers[0].sanitized_number
       : contact.sanitized_phone || item.sanitized_phone || "";
+    let email = item.email || contact.email || "";
+    // Apollo returns a locked "email_not_unlocked@domain" placeholder until a
+    // reveal credit is spent — never surface it as a real address.
+    if (email.includes("email_not_unlocked")) email = "";
     return {
       id: item.id || "",
       name: item.name || contact.name || "",
       title: item.title || contact.title || "",
-      email: item.email || contact.email || "",
-      email_status: item.email_status || contact.email_status || "",
+      email,
+      email_status: apolloEmailStatus(item, contact),
+      revealed: Boolean(email),
       linkedin_url: item.linkedin_url || contact.linkedin_url || "",
       phone,
       city: item.city || "",
@@ -3439,6 +3460,7 @@ function personProspect(run, lead, person, index) {
     linkedin_url: person.linkedin_url || "",
     email: person.email || "",
     email_status: person.email_status || "",
+    revealed: Boolean(person.email),
     phone: person.phone || "",
     location,
     organization_name: person.organization?.name || company.company,
