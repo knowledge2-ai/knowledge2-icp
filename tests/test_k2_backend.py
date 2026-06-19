@@ -104,6 +104,35 @@ class MineCorpusTest(unittest.TestCase):
         # The metadata filter actually reached the client.
         self.assertEqual(client.calls[0]["filters"]["filters"][0]["key"], "tier")
 
+    def test_filter_ops_drop_semantic_query(self) -> None:
+        # When metadata clauses are present, the operation is an exact filter: the
+        # free-text query must NOT ride along, or K2's semantic ranker narrows the
+        # result off the exact match set (bake-off: F1 1.0 -> 0.05). The query is
+        # dropped to "" so the metadata filter behaves as a pure WHERE.
+        client = _FakeSearchClient([_hit("Mojio", "moj.io", tier="A", posture="none", vertical="telematics")])
+        backend = K2Backend(api_key="test-key")
+        backend.corpus_ids["candidate"] = "corpus-cand"
+
+        backend.mine_corpus(
+            query="telematics workflow platform",
+            filters=[{"key": "tier", "op": "==", "value": "A"}],
+            corpus_key="candidate",
+            client=client,
+        )
+
+        self.assertEqual(client.calls[0]["queries"], [""])
+        self.assertEqual(client.calls[0]["filters"]["filters"][0]["key"], "tier")
+
+    def test_filter_free_mining_keeps_semantic_query(self) -> None:
+        # No clauses -> pure semantic mining: the query must reach the ranker.
+        client = _FakeSearchClient([_hit("Mojio", "moj.io", tier="A", posture="none", vertical="telematics")])
+        backend = K2Backend(api_key="test-key")
+        backend.corpus_ids["candidate"] = "corpus-cand"
+
+        backend.mine_corpus(query="telematics platforms", filters=[], corpus_key="candidate", client=client)
+
+        self.assertEqual(client.calls[0]["queries"], ["telematics platforms"])
+
     def test_bad_filter_key_raises(self) -> None:
         backend = K2Backend(api_key="test-key")
         backend.corpus_ids["candidate"] = "corpus-cand"

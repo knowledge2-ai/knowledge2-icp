@@ -273,8 +273,16 @@ class K2Backend:
         warnings: list[str] = []
         if corpus_id and (self.configured or client is not None):
             live_client = client or K2RestClient(api_key=self.api_key or "", base_url=self.base_url)
+            # A free-text query rides K2's semantic ranker, which reranks and narrows
+            # the result away from the exact metadata match set — the bake-off measured
+            # filtering F1 collapsing 1.0 -> 0.05 when a query accompanied a
+            # `tier in [A,B]`-style filter, while the same filter with an empty query
+            # stayed exact. So when the caller supplies metadata clauses, treat it as an
+            # exact filter and drop the semantic query (K2's empty-query metadata
+            # filtering is exact). Keep the query only for filter-free semantic mining.
+            search_query = "" if clauses else (query or "")
             try:
-                payload = live_client.search_batch(corpus_id, [query or ""], top_k=top_k, filters=metadata_filter)
+                payload = live_client.search_batch(corpus_id, [search_query], top_k=top_k, filters=metadata_filter)
             except Exception as exc:  # noqa: BLE001 - never fail mining because K2 is unreachable
                 warnings.append(f"K2 mining failed ({exc}); using local fallback.")
             else:
