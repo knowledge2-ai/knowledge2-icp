@@ -150,6 +150,105 @@ class CloudflareWorkerRuntimeTest(unittest.TestCase):
         if result.returncode != 0:
             self.fail(f"Worker runtime durability check failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}")
 
+    def test_apollo_people_match_reveals_real_email(self) -> None:
+        # Ported from the gtm-icp plugin: People Match runs with
+        # reveal_personal_emails=true so the cloud demo surfaces real emails, the
+        # locked "email_not_unlocked" placeholder is stripped, and a revealed
+        # contact carries email_status + revealed=true.
+        script = textwrap.dedent(
+            r"""
+            import assert from "node:assert/strict";
+            import { pathToFileURL } from "node:url";
+
+            const workerUrl = pathToFileURL(`${process.cwd()}/deployment/cloudflare/worker.js`).href;
+
+            class FakeKV {
+              constructor() { this.values = new Map(); }
+              async get(key, type) {
+                const raw = this.values.has(key) ? this.values.get(key) : null;
+                if (raw === null || raw === undefined) return null;
+                return type === "json" ? JSON.parse(raw) : raw;
+              }
+              async put(key, value) { this.values.set(key, String(value)); }
+            }
+
+            const apolloCalls = [];
+            globalThis.fetch = async (input) => {
+              const requestUrl = typeof input === "string" ? input : input.url;
+              apolloCalls.push(requestUrl);
+              if (requestUrl.includes("/mixed_people/api_search")) {
+                // Search teaser: obfuscated last name, locked placeholder email.
+                return new Response(JSON.stringify({ people: [
+                  { id: "p1", first_name: "Dana", last_name_obfuscated: "L.",
+                    title: "VP Product", email: "email_not_unlocked@domain.com",
+                    has_email: true, organization: { name: "Durable Fleet" } },
+                ] }), { status: 200, headers: { "content-type": "application/json" } });
+              }
+              if (requestUrl.includes("/people/bulk_match")) {
+                // Match reveal: full name + real verified email.
+                return new Response(JSON.stringify({ matches: [
+                  { id: "p1", name: "Dana Lopez", title: "VP Product",
+                    email: "dana@durable.example", email_status: "verified",
+                    linkedin_url: "https://www.linkedin.com/in/dana-lopez" },
+                ] }), { status: 200, headers: { "content-type": "application/json" } });
+              }
+              throw new Error(`unexpected fetch ${requestUrl}`);
+            };
+
+            const worker = (await import(`${workerUrl}?apollo=reveal`)).default;
+            const env = { ICP_STATE: new FakeKV(), ICP_ADMIN_TOKEN: "admin-secret", APOLLO_API_KEY: "test-key" };
+
+            async function request(path, payload, token) {
+              const headers = { "content-type": "application/json" };
+              if (token) headers.authorization = `Bearer ${token}`;
+              const init = payload === undefined ? { headers } : { method: "POST", headers, body: JSON.stringify(payload) };
+              const response = await worker.fetch(new Request(`https://worker.test${path}`, init), env);
+              const body = await response.json();
+              if (!response.ok) throw new Error(`${path} failed ${response.status}: ${JSON.stringify(body)}`);
+              return body;
+            }
+
+            const session = await request("/api/auth/session", { token: "admin-secret" });
+            const token = session.session_token;
+            const run = await request("/api/runs", {
+              query: "apollo reveal run",
+              candidates: [{ company: "Durable Fleet", domain: "durable.example",
+                notes: "Fleet telematics and dispatch workflow software for transport operators" }],
+              fetch: false,
+              include_github: false,
+            }, token);
+
+            const prospects = await request(`/api/runs/${run.id}/prospects`, undefined, token);
+
+            // People Match was asked to reveal the personal email.
+            const matchCall = apolloCalls.find((url) => url.includes("/people/bulk_match"));
+            assert.ok(matchCall, "bulk_match was not called");
+            assert.match(matchCall, /reveal_personal_emails=true/);
+
+            const apolloProspect = prospects.prospects.find((item) => item.source === "apollo");
+            assert.ok(apolloProspect, "no apollo-sourced prospect");
+            assert.equal(apolloProspect.name, "Dana Lopez");
+            assert.equal(apolloProspect.email, "dana@durable.example");
+            assert.equal(apolloProspect.email_status, "verified");
+            assert.equal(apolloProspect.revealed, true);
+            // The locked placeholder never leaks as a real address.
+            for (const item of prospects.prospects) {
+              assert.ok(!String(item.email || "").includes("email_not_unlocked"), JSON.stringify(item));
+            }
+            """
+        )
+        env = {**os.environ, "NODE_NO_WARNINGS": "1"}
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            check=False,
+            cwd=os.getcwd(),
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            self.fail(f"Apollo reveal check failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}")
+
 
 if __name__ == "__main__":
     unittest.main()
