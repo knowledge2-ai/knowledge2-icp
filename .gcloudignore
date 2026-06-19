@@ -1,0 +1,34 @@
+# Keep the Cloud Build upload small and, above all, never ship secrets.
+.git/
+.gitignore
+
+# Secrets — must never enter the build context.
+.env
+.env.*
+*.env
+secrets/
+**/*secret*
+**/*token*
+**/*credential*
+**/*.key
+**/*.pem
+
+# Local-only tooling and assistant scaffolding.
+.dlc/
+tools/
+.mcp.json
+.claude/
+.agents/
+
+# Build/runtime cruft.
+node_modules/
+.venv/
+venv/
+**/__pycache__/
+*.pyc
+
+# Not needed in the image (Dockerfile only COPYs icp_engine/).
+deployment/cloudflare/
+docs/
+skills/
+tests/
