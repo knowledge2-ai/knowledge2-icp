@@ -299,7 +299,8 @@ class AppStoreTest(unittest.TestCase):
             self.assertEqual(detail["role_groups"][0]["role"], "VP Engineering")
             self.assertEqual(detail["prospects"][0]["status"], "persona_target")
             self.assertEqual(detail["outreach_summary"]["total"], 2)
-            self.assertIn("AI workflow opportunity map", detail["outreach_drafts"][0]["subject"])
+            # Deterministic fallback renders the persona-routed template scaffold.
+            self.assertIn("An AI opportunity in Mojio's workflows", detail["outreach_drafts"][0]["subject"])
             self.assertIn("Platform", detail["outreach_drafts"][0]["evidence_titles"])
             self.assertEqual(detail["evidence_timeline"][0]["title"], "Platform")
             self.assertEqual(detail["source_counts"]["website"], 1)

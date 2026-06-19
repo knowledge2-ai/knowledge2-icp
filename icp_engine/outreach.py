@@ -4,6 +4,7 @@ import csv
 import io
 from typing import Any
 
+from .outreach_templates import render_template, select_template
 from .prospects import build_lead_prospects
 
 
@@ -44,6 +45,7 @@ def build_lead_outreach_drafts(
     strategy = lead.get("strategy", {}) if isinstance(lead.get("strategy"), dict) else {}
     metadata = lead.get("metadata", {}) if isinstance(lead.get("metadata"), dict) else {}
     messages = _outreach_messages_by_title(metadata.get("outreach_messages"))
+    signal_tags = [str(tag) for tag in metadata.get("signal_tags", []) if isinstance(tag, str)]
     prospects = build_lead_prospects(run, lead)
     return [
         _draft_for_prospect(
@@ -55,6 +57,7 @@ def build_lead_outreach_drafts(
             prospect,
             statuses.get(str(prospect.get("id") or "")),
             messages,
+            signal_tags,
         )
         for prospect in prospects
     ]
@@ -127,6 +130,7 @@ def _draft_for_prospect(
     prospect: dict[str, Any],
     status_record: dict[str, Any] | None,
     messages: dict[str, dict[str, Any]] | None = None,
+    signal_tags: list[str] | None = None,
 ) -> dict[str, Any]:
     prospect_id = str(prospect.get("id") or "")
     evidence_refs = _evidence_refs(evidence)
@@ -137,17 +141,22 @@ def _draft_for_prospect(
     offer = str(strategy.get("offer") or "Propose a 2-week AI opportunity map grounded in existing product data and evidence.")
     first_step = str(strategy.get("first_step") or prospect.get("first_step") or "Share a short account-specific brief.")
     evidence_line = _evidence_line(evidence_refs)
-    subject = f"{company_name} AI workflow opportunity map"
-    body = "\n\n".join(
-        [
-            f"Hi {first_name or 'there'},",
-            f"I was reviewing {company_name} and noticed {evidence_line}.",
-            angle,
-            f"A practical next step would be: {offer}",
-            f"Would it be useful to compare this against one workflow where {company_name} already has proprietary operational data?",
-        ]
+    # Deterministic fallback renders the same template scaffold the LLM path follows,
+    # picked from the prospect's persona + signal tags, so both paths share a shape.
+    template = select_template(prospect, signal_tags)
+    rendered = render_template(
+        template,
+        {
+            "first_name": first_name or "there",
+            "company": company_name,
+            "evidence_line": evidence_line,
+            "angle": angle,
+            "offer": offer,
+        },
     )
-    cta = first_step
+    subject = rendered["subject"] or f"{company_name} AI workflow opportunity map"
+    body = rendered["body"]
+    cta = rendered["cta"] or first_step
     # Prefer the Claude-personalized copy cached at run creation; fall back to the
     # deterministic template above byte-for-byte when no cached message exists.
     cached = _cached_message_for(prospect, messages)

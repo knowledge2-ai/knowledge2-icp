@@ -3,10 +3,20 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
+from datetime import date
 from urllib.parse import urlparse
 
 from .models import Evidence
 from .text import compact_snippet, normalize_whitespace
+
+
+# Recency shaping for outreach selection (soft downweight): a fresh page gets up
+# to +RECENCY_BONUS, decaying to 0 at the window edge; an older page is penalized
+# up to -2*RECENCY_PENALTY. Tuned so recency reorders the term ranking without
+# zeroing it — a strong old page still outranks a weak fresh one.
+RECENCY_BONUS = 8
+RECENCY_PENALTY = 6
+DEFAULT_RECENCY_WINDOW_DAYS = 365
 
 
 AI_TERMS = [
@@ -103,6 +113,7 @@ class EvidencePromptItem:
     title: str
     signal_score: int
     text: str
+    published_at: str | None = None
 
 
 def dedupe_evidence(items: list[Evidence]) -> list[Evidence]:
@@ -127,8 +138,27 @@ def dedupe_evidence(items: list[Evidence]) -> list[Evidence]:
     ]
 
 
-def select_prompt_evidence(items: list[Evidence], *, limit: int = 10, snippet_chars: int = 900) -> list[EvidencePromptItem]:
-    ranked = sorted(items, key=_evidence_rank, reverse=True)
+def select_prompt_evidence(
+    items: list[Evidence],
+    *,
+    limit: int = 10,
+    snippet_chars: int = 900,
+    reference_date: date | None = None,
+    recency_window_days: int = DEFAULT_RECENCY_WINDOW_DAYS,
+) -> list[EvidencePromptItem]:
+    """Rank evidence for an outreach prompt by signal strength, downweighted by age.
+
+    Recency is a soft force (see ``_recency_adjustment``): fresh pages rise, stale
+    pages sink, undated pages are neutral — but a strong old page can still surface
+    if nothing fresher carries the signal. ``reference_date`` is injectable so the
+    ranking is deterministic in tests; it defaults to today in production.
+    """
+    reference_date = reference_date or date.today()
+    ranked = sorted(
+        items,
+        key=lambda item: _evidence_rank(item) + _recency_adjustment(item, reference_date, recency_window_days),
+        reverse=True,
+    )
     selected: list[EvidencePromptItem] = []
     seen_snippets: set[str] = set()
     for item in ranked:
@@ -137,6 +167,7 @@ def select_prompt_evidence(items: list[Evidence], *, limit: int = 10, snippet_ch
         if fingerprint in seen_snippets:
             continue
         seen_snippets.add(fingerprint)
+        published_at = item.metadata.get("published_at") if isinstance(item.metadata, dict) else None
         selected.append(
             EvidencePromptItem(
                 evidence_id=item.evidence_id,
@@ -144,11 +175,33 @@ def select_prompt_evidence(items: list[Evidence], *, limit: int = 10, snippet_ch
                 title=item.title,
                 signal_score=_evidence_rank(item),
                 text=snippet,
+                published_at=str(published_at) if published_at else None,
             )
         )
         if len(selected) >= limit:
             break
     return selected
+
+
+def _parse_iso_date(value: object) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def _recency_adjustment(item: Evidence, reference_date: date, window_days: int) -> int:
+    """Soft recency shaping for the sort key. Neutral (0) when the page has no date."""
+    published = _parse_iso_date(item.metadata.get("published_at") if isinstance(item.metadata, dict) else None)
+    if published is None or window_days <= 0:
+        return 0
+    age_days = max((reference_date - published).days, 0)
+    if age_days <= window_days:
+        return round(RECENCY_BONUS * (1 - age_days / window_days))
+    overage = min((age_days - window_days) / window_days, 2.0)
+    return -round(RECENCY_PENALTY * overage)
 
 
 def _evidence_rank(item: Evidence) -> int:

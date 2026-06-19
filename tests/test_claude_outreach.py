@@ -107,6 +107,25 @@ class ClaudeOutreachTest(unittest.TestCase):
         self.assertIn(rubric_marker, str(call["system"]))
         self.assertIn(context_marker, str(call["messages"]))
 
+    def test_selected_template_structure_reaches_prompt_and_payload(self) -> None:
+        client = _Client(_Response([_outreach_block()]))
+
+        draft = generate_outreach(
+            _company(),
+            {"title": "Chief Executive Officer", "role": "economic_buyer"},
+            _evidence(),
+            signal_tags=["ai-native"],
+            client=client,
+        )
+
+        # CEO persona routes to the exec scaffold; its name rides on the payload...
+        self.assertEqual(draft["template"], "exec-ai-urgency")
+        # ...and its numbered beats are injected into the user prompt for the LLM to fill.
+        user_prompt = str(client.messages.calls[0]["messages"])
+        self.assertIn("exec-ai-urgency", user_prompt)
+        self.assertIn("category positioning", user_prompt)
+        self.assertIn("published_at", user_prompt)
+
     def test_missing_tool_call_raises_claude_unavailable(self) -> None:
         client = _Client(_Response([_Block("write_outreach", {}, block_type="text")]))
 
