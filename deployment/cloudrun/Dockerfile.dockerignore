@@ -1,0 +1,32 @@
+# Keep the build context tiny — the image only needs the icp_engine package.
+# Everything below is either dev-only, generated, or the surface we're retiring.
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.ruff_cache/
+
+# Local persisted state and caches (the demo run is code-resident, not here).
+out/
+.dlc/
+
+# Dev/test surfaces not needed at runtime.
+tests/
+icp_engine/**/tests/
+docs/
+*.md
+
+# The frontend source/build tooling — built assets already live in
+# icp_engine/web_assets/, which IS copied by the Dockerfile.
+node_modules/
+frontend/
+
+# The surface we're replacing.
+deployment/cloudflare/
+
+# VCS / tooling
+.git/
+.github/
+.venv/
+venv/
+.env
+.env.*

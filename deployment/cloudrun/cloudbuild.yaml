@@ -1,0 +1,21 @@
+# Cloud Build: build the engine image from the repo root with the subdir
+# Dockerfile, then push it. Submitted context is the repo root (so `icp_engine/`
+# is reachable); `gcloud builds submit` honors .gitignore when no .gcloudignore
+# exists, so .env / out/ / .venv are never uploaded.
+#
+# Usage (see deploy.sh, which wraps this):
+#   gcloud builds submit --config deployment/cloudrun/cloudbuild.yaml \
+#     --substitutions=_IMAGE=REGION-docker.pkg.dev/PROJECT/REPO/gtm-engine:TAG .
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - deployment/cloudrun/Dockerfile
+      - -t
+      - ${_IMAGE}
+      - .
+images:
+  - ${_IMAGE}
+options:
+  logging: CLOUD_LOGGING_ONLY
