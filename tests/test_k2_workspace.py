@@ -124,7 +124,9 @@ class K2WorkspaceTest(unittest.TestCase):
 
         self.assertEqual(len(documents["source"]), 428)
         self.assertEqual(len(documents["candidate"]), 428)
-        self.assertEqual(len(documents["evidence"]), 856)
+        # evidence (== research/grounding corpus) carries every doc plus the new
+        # per-account dossier (+428): 428 summaries + 428 evidence pages + 428 dossiers.
+        self.assertEqual(len(documents["evidence"]), 1284)
         # Seed personas now come from strategy.build_strategy (live parity), which
         # yields 3 base + optional vertical/CEO personas capped at 5 per lead, instead
         # of the old hand-built fixed list. Prospect docs are one-per-persona.

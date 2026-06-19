@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from icp_engine.k2_backend import K2Backend, build_metadata_filter
+from icp_engine.k2_backend import (
+    K2Backend,
+    _account_dossier_document,
+    _excerpt,
+    build_metadata_filter,
+)
 
 
 class _FakeSearchClient:
@@ -203,6 +208,109 @@ class FindLookalikesTest(unittest.TestCase):
         self.assertEqual(payload["provider"], "local")
         self.assertEqual(payload["results"][0]["domain"], "fleetco.com")
         self.assertTrue(any("k2 down" in warning for warning in payload["warnings"]))
+
+
+def _dossier_lead() -> dict[str, object]:
+    return {
+        "score": {
+            "tier": "A",
+            "total_score": 82,
+            "company": {"company": "Mojio", "domain": "moj.io"},
+            "classification": {"ai_posture": "none"},
+        },
+        "metadata": {
+            "vertical": "telematics",
+            "signal_tags": ["telematics", "workflow-data"],
+            "criteria_profile": {"tier_a_threshold": 75, "tier_b_threshold": 60, "min_employee_count": 25, "max_employee_count": 2000},
+            "qualification": {"qualifier": "claude", "source": "llm", "ai_narrative": "Mojio runs connected-vehicle telematics with a workflow-data backbone, a strong fit for the data wedge."},
+            "source_refs": {"github_urls": ["https://github.com/mojio"], "docs_urls": ["https://moj.io/docs"]},
+        },
+        "strategy": {
+            "outreach_angle": "telematics data wedge",
+            "offer": "pilot integration",
+            "personas": [{"title": "VP Engineering", "why": "owns the data platform"}, {"title": "Head of Data"}],
+        },
+        "evidence": [
+            {"url": "https://moj.io/about", "title": "About Mojio", "text": "Mojio is a connected-car platform. " * 20},
+            {"url": "https://moj.io/product", "title": "Product", "text": "Short evidence note."},
+        ],
+    }
+
+
+class AccountDossierDocumentTest(unittest.TestCase):
+    def _build(self) -> dict[str, object]:
+        lead = _dossier_lead()
+        return _account_dossier_document(
+            {"id": "run-1", "query": "telematics", "criteria": {"hash": "h1"}},
+            lead,
+            lead["score"],
+            lead["score"]["company"],
+            lead["strategy"],
+            lead["metadata"],
+        )
+
+    def test_text_carries_every_section_and_known_facts(self) -> None:
+        doc = self._build()
+        text = doc["text"]
+        for header in ("# Mojio — moj.io", "## Classification", "## Why they fit the ICP", "## Evidence", "## Outreach posture", "## Public footprint"):
+            self.assertIn(header, text)
+        # The bake-off grounding facts must be present in prose, not just metadata.
+        self.assertIn("telematics", text)
+        self.assertIn("none", text)  # ai_posture
+        self.assertIn("A (score 82)", text)
+        self.assertIn("workflow-data", text)  # top signal
+        self.assertIn("connected-vehicle telematics", text)  # ai_narrative woven in
+        self.assertIn("VP Engineering — owns the data platform", text)
+        self.assertIn("https://moj.io/about", text)
+
+    def test_metadata_marks_dossier_type(self) -> None:
+        meta = self._build()["metadata"]
+        self.assertEqual(meta["source_type"], "account_dossier")
+        self.assertEqual(meta["evidence_id"], "account-dossier")
+        self.assertEqual(meta["tier"], "A")
+        self.assertEqual(meta["vertical"], "telematics")
+        self.assertEqual(meta["signal_tags"], ["telematics", "workflow-data"])
+
+    def test_id_is_stable_and_account_scoped(self) -> None:
+        self.assertEqual(self._build()["id"], "run-1:moj.io:account-dossier")
+
+    def test_dossier_is_substantially_richer_than_a_label_dump(self) -> None:
+        # The whole point: more than the ~400-char summary the grounding ties on.
+        self.assertGreater(len(self._build()["text"]), 600)
+
+    def test_missing_evidence_does_not_break_the_section(self) -> None:
+        lead = _dossier_lead()
+        lead["evidence"] = []
+        doc = _account_dossier_document(
+            {"id": "run-1"}, lead, lead["score"], lead["score"]["company"], lead["strategy"], lead["metadata"]
+        )
+        self.assertIn("No scraped page content captured", doc["text"])
+
+
+class ExcerptTest(unittest.TestCase):
+    def test_short_text_passes_through_with_whitespace_collapsed(self) -> None:
+        self.assertEqual(_excerpt("a   b\n c"), "a b c")
+
+    def test_truncates_at_sentence_boundary(self) -> None:
+        # Boundary in the back half (>= limit/2) is honored; a too-early period is
+        # ignored so the excerpt isn't truncated to a tiny fragment.
+        text = "a" * 150 + ". " + "b" * 200
+        out = _excerpt(text, limit=280)
+        self.assertTrue(out.endswith("."))
+        self.assertLessEqual(len(out), 280)
+
+    def test_hard_cut_when_no_boundary(self) -> None:
+        out = _excerpt("x" * 400, limit=280)
+        self.assertTrue(out.endswith("…"))
+        self.assertLessEqual(len(out), 281)
+
+
+class BuildDocumentsDossierTest(unittest.TestCase):
+    def test_emits_one_dossier_per_lead(self) -> None:
+        run = {"id": "run-1", "leads": [_dossier_lead(), _dossier_lead()]}
+        docs = K2Backend(api_key="test-key").build_documents(run)
+        dossiers = [d for d in docs if d["metadata"].get("evidence_id") == "account-dossier"]
+        self.assertEqual(len(dossiers), 2)
 
 
 class _FakeStore:
