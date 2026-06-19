@@ -150,7 +150,8 @@ class K2SyncTest(unittest.TestCase):
 
         dry_run = backend.sync_manifest(sample_run())
         self.assertEqual(dry_run["status"], "dry_run")
-        self.assertEqual(dry_run["document_count"], 3)
+        # 4 docs per lead: account-summary + account-dossier + 1 evidence page + 1 prospect.
+        self.assertEqual(dry_run["document_count"], 4)
 
         manifest = backend.build_manifest(sample_run())
         self.assertIn("linkedin_urls", manifest["metadata_keys"])
@@ -160,8 +161,8 @@ class K2SyncTest(unittest.TestCase):
         client = FakeK2Client()
         applied = backend.sync_manifest(sample_run(), apply=True, client=client)
         self.assertEqual(applied["status"], "uploaded")
-        self.assertEqual(applied["document_count"], 3)
-        self.assertEqual(len(client.uploaded[0][1]), 3)
+        self.assertEqual(applied["document_count"], 4)
+        self.assertEqual(len(client.uploaded[0][1]), 4)
 
     def test_backend_answer_question_uses_k2_corpus_metadata_filter(self) -> None:
         run = sample_run()

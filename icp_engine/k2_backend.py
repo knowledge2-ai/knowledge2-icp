@@ -49,6 +49,7 @@ class K2Backend:
             strategy = lead.get("strategy", {})
             lead_metadata = lead.get("metadata", {})
             documents.append(_account_summary_document(run, lead, score, company, strategy, lead_metadata))
+            documents.append(_account_dossier_document(run, lead, score, company, strategy, lead_metadata))
             for item in lead.get("evidence", []):
                 item_metadata = item.get("metadata", {}) if isinstance(item.get("metadata"), dict) else {}
                 source_type = item.get("source_type") or item_metadata.get("source_type") or _source_type(item.get("url", ""))
@@ -542,6 +543,122 @@ def _account_summary_document(
             "public_profile_count": lead_metadata.get("public_profile_count", 0),
             "public_resource_count": lead_metadata.get("public_resource_count", 0),
             "persona_titles": [persona.get("title") for persona in strategy.get("personas", [])],
+            "outreach_angle": strategy.get("outreach_angle"),
+        },
+    }
+
+
+def _excerpt(text: object, limit: int = 280) -> str:
+    """Collapse whitespace and truncate to ``limit`` chars at a sentence boundary."""
+    collapsed = " ".join(str(text or "").split())
+    if len(collapsed) <= limit:
+        return collapsed
+    cut = collapsed[:limit]
+    boundary = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+    if boundary >= limit // 2:
+        return cut[: boundary + 1]
+    return cut.rstrip(" ,;:") + "…"
+
+
+def _account_dossier_document(
+    run: dict[str, Any],
+    lead: dict[str, Any],
+    score: dict[str, Any],
+    company: dict[str, Any],
+    strategy: dict[str, Any],
+    lead_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    """One self-contained per-account markdown brief for grounding retrieval.
+
+    Recomposes data already in the run (qualification narrative, criteria fit,
+    scraped evidence, outreach strategy, public footprint) into a single coherent
+    document. Deterministic — no LLM call; the ``ai_narrative`` is generated
+    upstream during qualification, here it is only reformatted.
+    """
+    source_refs = lead_metadata.get("source_refs", {}) if isinstance(lead_metadata.get("source_refs"), dict) else {}
+    criteria_profile = lead_metadata.get("criteria_profile", {}) if isinstance(lead_metadata.get("criteria_profile"), dict) else {}
+    qualification = lead_metadata.get("qualification", {}) if isinstance(lead_metadata.get("qualification"), dict) else {}
+    ai_narrative = str(qualification.get("ai_narrative", "") or score.get("ai_narrative", "") or "")
+    ai_posture = score.get("classification", {}).get("ai_posture")
+    vertical = lead_metadata.get("vertical") or score.get("classification", {}).get("vertical")
+    signal_tags = [str(tag) for tag in lead_metadata.get("signal_tags", []) if tag]
+    personas = [persona for persona in strategy.get("personas", []) if isinstance(persona, dict)]
+
+    sections: list[str] = [f"# {company.get('company')} — {company.get('domain')}"]
+
+    classification = [
+        "## Classification",
+        f"{score.get('tier')} (score {score.get('total_score')}). "
+        f"AI posture: {ai_posture or 'unknown'}. Vertical: {vertical or 'unspecified'}.",
+    ]
+    if ai_narrative:
+        classification.append(ai_narrative)
+    sections.append("\n".join(classification))
+
+    fit = [
+        "## Why they fit the ICP",
+        f"Criteria: Tier A ≥ {criteria_profile.get('tier_a_threshold', 75)}, "
+        f"Tier B ≥ {criteria_profile.get('tier_b_threshold', 60)}, "
+        f"employee range {criteria_profile.get('min_employee_count', 25)}-{criteria_profile.get('max_employee_count', 2000)}.",
+    ]
+    if signal_tags:
+        fit.append(f"Matched signals: {', '.join(signal_tags)}.")
+    sections.append("\n".join(fit))
+
+    evidence_lines = ["## Evidence"]
+    evidence_pages = [item for item in lead.get("evidence", []) if isinstance(item, dict) and str(item.get("text", "")).strip()]
+    for item in evidence_pages[:4]:
+        title = item.get("title") or item.get("url") or "page"
+        evidence_lines.append(f"### {title}")
+        evidence_lines.append(_excerpt(item.get("text")))
+        if item.get("url"):
+            evidence_lines.append(f"Source: {item.get('url')}")
+    if len(evidence_lines) == 1:
+        evidence_lines.append("No scraped page content captured for this account.")
+    sections.append("\n".join(evidence_lines))
+
+    outreach = [
+        "## Outreach posture",
+        f"Angle: {strategy.get('outreach_angle') or 'n/a'}. Offer: {strategy.get('offer') or 'n/a'}.",
+    ]
+    for persona in personas:
+        rationale = persona.get("why") or persona.get("rationale") or persona.get("priority")
+        line = f"- {persona.get('title')}"
+        if rationale:
+            line += f" — {rationale}"
+        outreach.append(line)
+    sections.append("\n".join(outreach))
+
+    footprint = ["## Public footprint", _source_ref_summary(source_refs)]
+    sections.append("\n".join(footprint))
+
+    text = "\n\n".join(sections)
+    return {
+        "id": f"{run.get('id')}:{company.get('domain')}:account-dossier",
+        "text": text,
+        "metadata": {
+            "run_id": run.get("id"),
+            "query": run.get("query"),
+            "criteria_hash": run.get("criteria", {}).get("hash"),
+            "company": company.get("company"),
+            "domain": company.get("domain"),
+            "tier": score.get("tier"),
+            "total_score": score.get("total_score"),
+            "ai_posture": ai_posture,
+            "vertical": vertical,
+            "source_type": "account_dossier",
+            "page_category": "dossier",
+            "source_url": company.get("domain"),
+            "evidence_id": "account-dossier",
+            "qualifier": qualification.get("qualifier", "rules"),
+            "qualifier_source": qualification.get("source", "rules"),
+            "ai_narrative": ai_narrative,
+            "signal_tags": signal_tags,
+            "criteria_tier_a_threshold": criteria_profile.get("tier_a_threshold"),
+            "criteria_tier_b_threshold": criteria_profile.get("tier_b_threshold"),
+            "criteria_min_employee_count": criteria_profile.get("min_employee_count"),
+            "criteria_max_employee_count": criteria_profile.get("max_employee_count"),
+            "persona_titles": [persona.get("title") for persona in personas],
             "outreach_angle": strategy.get("outreach_angle"),
         },
     }

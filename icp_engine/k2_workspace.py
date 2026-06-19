@@ -245,7 +245,10 @@ def build_seeded_workspace_documents(
             continue
         if evidence_id == "account-summary":
             candidate_docs.append(_with_metadata(document, entity_type="company", k2_settings=settings))
-        if source_type != "account_summary":
+        # The dossier is a per-account brief for grounding; it rides the evidence
+        # (== research) corpus only. Keep it out of source (raw pages) and candidate
+        # (one account doc, the summary, for mining/filtering).
+        if source_type not in ("account_summary", "account_dossier"):
             source_docs.append(_with_metadata(document, entity_type="source_page", k2_settings=settings))
         evidence_docs.append(_with_metadata(document, entity_type="evidence", k2_settings=settings))
 
