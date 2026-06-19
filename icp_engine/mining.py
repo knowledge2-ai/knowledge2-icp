@@ -349,9 +349,18 @@ def _search_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _result_metadata(item: dict[str, Any]) -> dict[str, Any]:
+    # K2 search hits carry their structured fields under ``custom_metadata``
+    # (domain, company, tier, ai_posture, …); local and legacy shapes use plain
+    # ``metadata``. Read custom_metadata first, falling back to metadata, so a
+    # live K2 result is not silently blanked. (Same fix applied to the gtm-icp
+    # plugin's k2_query.py.)
     for container in (item, item.get("document"), item.get("chunk")):
-        if isinstance(container, dict) and isinstance(container.get("metadata"), dict):
-            return container["metadata"]
+        if not isinstance(container, dict):
+            continue
+        for key in ("custom_metadata", "metadata"):
+            meta = container.get(key)
+            if isinstance(meta, dict) and meta:
+                return meta
     return {}
 
 

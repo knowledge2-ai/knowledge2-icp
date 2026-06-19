@@ -7,6 +7,7 @@ from icp_engine.mining import (
     mine_local,
     mining_to_csv,
     normalize_clauses,
+    shape_live_results,
 )
 
 
@@ -117,6 +118,50 @@ class LookalikesLocalTest(unittest.TestCase):
         payload = lookalikes_local(_store(), seed_domains=[], top_k=20)
         self.assertEqual(payload["results"], [])
         self.assertTrue(payload["warnings"])
+
+
+class ShapeLiveResultsTest(unittest.TestCase):
+    def test_reads_fields_from_custom_metadata(self) -> None:
+        # Live K2 `search:batch` hits carry structured fields under
+        # `custom_metadata`, not `metadata`. Reading only `metadata` silently
+        # blanked every hit (domain/score empty), zeroing live mining and
+        # lookalikes. Lock the custom_metadata path so the regression can't recur.
+        payload = {
+            "responses": [
+                {
+                    "results": [
+                        {
+                            "text": "Mojio — telematics workflow platform",
+                            "score": 0.91,
+                            "custom_metadata": {
+                                "company": "Mojio",
+                                "domain": "moj.io",
+                                "tier": "A",
+                                "vertical": "telematics",
+                                "ai_posture": "none",
+                                "total_score": 82,
+                            },
+                            "system_metadata": {"provenance": {"source_uri": "https://moj.io/about"}},
+                        }
+                    ]
+                }
+            ]
+        }
+
+        results = shape_live_results(payload, top_k=20)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["domain"], "moj.io")
+        self.assertEqual(results[0]["company"], "Mojio")
+        self.assertEqual(results[0]["tier"], "A")
+
+    def test_falls_back_to_plain_metadata(self) -> None:
+        # Local/legacy shapes still use plain `metadata` — the fallback must hold.
+        payload = {"results": [{"text": "FleetCo", "metadata": {"company": "FleetCo", "domain": "fleetco.com"}}]}
+
+        results = shape_live_results(payload, top_k=20)
+
+        self.assertEqual(results[0]["domain"], "fleetco.com")
 
 
 class HelpersTest(unittest.TestCase):
