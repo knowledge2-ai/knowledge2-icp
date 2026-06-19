@@ -1,0 +1,19 @@
+# Cloudflare Worker that fronts gtm-dev.knowledge2.ai with the private Cloud Run
+# `gtm-demo` service. Deploy with `wrangler deploy` after setting the secrets
+# below (see README.md). This REPLACES the seeded demo worker in
+# deployment/cloudflare/ — point the gtm-dev route here, verify, then retire that.
+name = "gtm-dev-proxy"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+# The public Cloud Run URL is the ID-token audience. Not a secret.
+[vars]
+CLOUD_RUN_URL = "https://gtm-demo-tpl2qqmb4a-uc.a.run.app"
+
+# Bind the hostname. Set zone_name to the knowledge2.ai zone in Cloudflare.
+[[routes]]
+pattern = "gtm-dev.knowledge2.ai/*"
+zone_name = "knowledge2.ai"
+
+# Secrets (NOT here — set via `wrangler secret put`, see README):
+#   GCP_SA_EMAIL, GCP_SA_PRIVATE_KEY, GCP_SA_PRIVATE_KEY_ID
