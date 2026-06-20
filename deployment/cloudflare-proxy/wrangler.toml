@@ -1,7 +1,7 @@
 # Cloudflare Worker that fronts gtm-dev.knowledge2.ai with the private Cloud Run
 # `gtm-demo` service. Deploy with `wrangler deploy` after setting the secrets
-# below (see README.md). This REPLACES the seeded demo worker in
-# deployment/cloudflare/ — point the gtm-dev route here, verify, then retire that.
+# below (see README.md). This replaced the seeded demo worker that used to live
+# in deployment/cloudflare/ (retired in #46); it now owns the gtm-dev route.
 name = "gtm-dev-proxy"
 main = "worker.js"
 compatibility_date = "2025-01-01"

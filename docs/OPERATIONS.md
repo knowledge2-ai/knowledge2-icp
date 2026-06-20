@@ -163,10 +163,10 @@ python3 -m icp_engine.k2_sync \
   --apply
 ```
 
-Cloudflare shell validation:
+Cloudflare proxy validation:
 
 ```bash
-wrangler deploy --dry-run --config deployment/cloudflare/wrangler.toml
+cd deployment/cloudflare-proxy && wrangler deploy --dry-run
 ```
 
 ## Security Notes

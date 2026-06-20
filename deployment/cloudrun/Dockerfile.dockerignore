@@ -20,9 +20,6 @@ docs/
 node_modules/
 frontend/
 
-# The surface we're replacing.
-deployment/cloudflare/
-
 # VCS / tooling
 .git/
 .github/

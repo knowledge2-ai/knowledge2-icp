@@ -240,26 +240,19 @@ curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
   http://127.0.0.1:8765/api/health
 ```
 
-Cloudflare Worker validation:
+Cloudflare proxy validation:
 
 ```bash
-wrangler deploy --dry-run --config deployment/cloudflare/wrangler.toml
+make cloudflare-proxy-dry-run
 ```
 
-The Worker serves the dashboard assets and seeded dashboard API directly. It
-uses the `ICP_STATE` KV binding to persist criteria edits, saved sources/scans,
-provider usage, runtime runs, lead workflow states, saved lead views, and
-quality feedback across Worker isolates. It does not require a local tunnel or a separate
-`ICP_API_ORIGIN`.
-
-For a live environment, render an ignored Wrangler config from environment
-variables instead of editing committed placeholders:
-
-```bash
-export CLOUDFLARE_ACCOUNT_ID=<account-id>
-export ICP_CLOUDFLARE_ROUTE=gtm-dev.knowledge2.ai
-make cloudflare-dry-run
-```
+`gtm-dev.knowledge2.ai` is fronted by the Cloudflare Worker in
+`deployment/cloudflare-proxy/`, which mints a Google ID token and forwards
+requests to the private Cloud Run service running this Python engine
+(`deployment/cloudrun/`). On Cloud Run the engine runs in
+`ICP_PUBLIC_READ_ONLY` mode: read-only demo endpoints are public and writes
+return 401. See `deployment/cloudflare-proxy/README.md` for the deploy and
+one-time cutover steps (`cutover.sh`).
 
 ## Input CSV
 

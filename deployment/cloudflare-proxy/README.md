@@ -1,9 +1,10 @@
 # gtm-dev Cloudflare proxy → private Cloud Run
 
 Fronts `gtm-dev.knowledge2.ai` with the `gtm-demo` Cloud Run service (the Python
-engine in `ICP_PUBLIC_READ_ONLY` mode). Replaces the self-contained demo worker
-in `deployment/cloudflare/` — this Worker holds no app logic; it just gets
-anonymous browser traffic past Cloud Run's edge auth.
+engine in `ICP_PUBLIC_READ_ONLY` mode). Replaced the self-contained demo worker
+that used to live in `deployment/cloudflare/` (retired in #46) — this Worker
+holds no app logic; it just gets anonymous browser traffic past Cloud Run's
+edge auth.
 
 ## Why a token-minting proxy (not allUsers)
 
@@ -68,13 +69,15 @@ curl -s -o /dev/null -w '%{http_code}\n' \
   -X POST https://gtm-dev.knowledge2.ai/api/criteria -d '{}'   # expect 401
 ```
 
-**Rollback:** re-publish the old `deployment/cloudflare/` worker on the
-`gtm-dev` route (or revert the route binding). Nothing is deleted by this step.
+**Rollback:** `wrangler rollback` reverts this Worker to its previous version,
+or revert the route binding. To restore the old demo worker (deleted in #46),
+`git revert` the retirement PR to bring back `deployment/cloudflare/`, then
+re-publish it on the `gtm-dev` route.
 
-## Retire the old worker (#46)
+## Retire the old worker (#46) — done
 
-Only after the checks above pass: remove the old demo worker and drop
-`deployment/cloudflare/` in a separate PR.
+The old demo worker (`knowledge2-icp-gtm-dashboard`) was deleted from Cloudflare
+and `deployment/cloudflare/` removed from the repo once the checks above passed.
 
 ## Notes
 
