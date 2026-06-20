@@ -175,7 +175,7 @@ class ResearchPipeline:
                 )
             if outreach_mode == "claude":
                 messages, outreach_warning = self._generate_outreach(
-                    run_id, company, evidence, strategy, criteria_markdown
+                    run_id, company, evidence, strategy, criteria_markdown, metadata
                 )
                 if messages:
                     metadata["outreach_messages"] = messages
@@ -269,6 +269,7 @@ class ResearchPipeline:
         evidence: list[Evidence],
         strategy: dict[str, Any],
         criteria_markdown: str,
+        metadata: dict[str, Any] | None = None,
     ) -> tuple[dict[str, dict[str, str]], str | None]:
         """Draft Claude-personalized outreach per buying-committee role.
 
@@ -281,6 +282,7 @@ class ResearchPipeline:
         if not isinstance(committee, list) or not committee:
             return {}, None
         generator = self.outreach_generator or generate_outreach
+        signal_tags = _string_values((metadata or {}).get("signal_tags", []))
         run_stub = {"id": run_id}
         messages: dict[str, dict[str, str]] = {}
         for role in committee[:3]:
@@ -295,6 +297,7 @@ class ResearchPipeline:
                     role=str(role.get("role") or ""),
                     account_context=account_context,
                     criteria_markdown=criteria_markdown,
+                    signal_tags=signal_tags,
                 )
             except ClaudeUnavailable as exc:
                 return {}, f"Claude outreach unavailable; using templates instead ({exc})."

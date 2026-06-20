@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 from .evidence import dedupe_evidence, is_high_value_url
 from .models import CompanyInput, Evidence
 from .tenant import Branding
-from .text import compact_snippet, html_to_text_and_links
+from .text import compact_snippet, extract_published_date, html_to_text_and_links
 
 
 _BRANDING = Branding()
@@ -172,12 +172,22 @@ def _fetch_or_read_cache(url: str, cache_dir: Path, timeout_seconds: float) -> d
         raw = response.read(1_000_000)
         charset = response.headers.get_content_charset() or "utf-8"
         body = raw.decode(charset, errors="replace")
+        last_modified = response.headers.get("Last-Modified")
         if "html" in content_type:
             title, text, links = html_to_text_and_links(body, url)
+            published_at, date_source = extract_published_date(body, last_modified)
         else:
             title, text, links = "", body, []
+            published_at, date_source = extract_published_date("", last_modified)
 
-    item = {"url": url, "title": title, "text": compact_snippet(text, 5000), "links": links}
+    item = {
+        "url": url,
+        "title": title,
+        "text": compact_snippet(text, 5000),
+        "links": links,
+        "published_at": published_at,
+        "date_source": date_source,
+    }
     cache_path.write_text(json.dumps(item, indent=2, sort_keys=True), encoding="utf-8")
     return item
 
@@ -190,6 +200,10 @@ def _evidence_metadata(item: dict[str, object]) -> dict[str, object]:
         "page_category": _page_category(url),
         "links": links[:80],
         "external_links": _external_links(url, links)[:40],
+        # Recency signal for outreach selection. Absent on pre-recency cache files
+        # (.get -> None), which is treated as neutral, not stale, downstream.
+        "published_at": item.get("published_at"),
+        "date_source": item.get("date_source") or "none",
     }
 
 

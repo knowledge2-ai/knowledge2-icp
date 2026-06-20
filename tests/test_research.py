@@ -425,9 +425,11 @@ class _GroundingK2Backend(K2Backend):
 class OutreachPipelineTest(unittest.TestCase):
     def test_claude_outreach_mode_generates_messages_grounded_and_metered(self) -> None:
         seen_context: list[str] = []
+        seen_signal_tags: list[list[str]] = []
 
-        def fake_generator(company, persona, evidence, *, role="", account_context="", criteria_markdown=""):
+        def fake_generator(company, persona, evidence, *, role="", account_context="", criteria_markdown="", signal_tags=None):
             seen_context.append(account_context)
+            seen_signal_tags.append(signal_tags or [])
             return {
                 "subject": f"{company.company} :: {role}",
                 "body": "Grounded body.",
@@ -455,11 +457,13 @@ class OutreachPipelineTest(unittest.TestCase):
             self.assertEqual(first["grounded"], "k2")
             # K2 account context reached the generator.
             self.assertIn("K2-ACCOUNT-CONTEXT-MARK", seen_context)
+            # The lead's signal tags were threaded through for template selection.
+            self.assertTrue(any(seen_signal_tags))
             summary = store.provider_usage_summary()
             self.assertGreaterEqual(summary["allowed_counts"].get("outreach", 0), 1)
 
     def test_outreach_unavailable_leaves_lead_clean_for_template(self) -> None:
-        def boom(company, persona, evidence, *, role="", account_context="", criteria_markdown=""):
+        def boom(company, persona, evidence, *, role="", account_context="", criteria_markdown="", signal_tags=None):
             raise ClaudeUnavailable("no key")
 
         with tempfile.TemporaryDirectory() as tmp:

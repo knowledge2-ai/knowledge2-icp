@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from urllib.parse import urljoin
 
@@ -64,6 +66,76 @@ def compact_snippet(text: str, max_chars: int = 700) -> str:
     if len(text) <= max_chars:
         return text
     return text[: max_chars - 3].rstrip() + "..."
+
+
+_META_TAG_RE = re.compile(r"<meta\b[^>]*>", re.IGNORECASE)
+_ATTR_RE = re.compile(r"""([a-zA-Z:.\-_]+)\s*=\s*["']([^"']*)["']""")
+_JSONLD_DATE_RE = re.compile(r'"datePublished"\s*:\s*"([^"]+)"', re.IGNORECASE)
+_TIME_RE = re.compile(r"""<time\b[^>]*\bdatetime\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
+_DATE_META_KEYS = {
+    "article:published_time",
+    "date",
+    "pubdate",
+    "publishdate",
+    "publication_date",
+    "dc.date",
+    "dc.date.issued",
+    "datepublished",
+}
+
+
+def _to_iso_date(raw: str | None) -> str | None:
+    """Normalize a date string (ISO 8601 or RFC 2822/Last-Modified) to YYYY-MM-DD."""
+    if not raw or not raw.strip():
+        return None
+    text = raw.strip()
+    candidate = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        return datetime.fromisoformat(candidate).date().isoformat()
+    except ValueError:
+        pass
+    try:
+        parsed = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return None
+    return parsed.date().isoformat() if parsed is not None else None
+
+
+def _meta_published_date(html: str) -> str | None:
+    for tag in _META_TAG_RE.findall(html):
+        attrs = {key.lower(): value for key, value in _ATTR_RE.findall(tag)}
+        key = attrs.get("property") or attrs.get("name") or attrs.get("itemprop") or ""
+        if key.lower() in _DATE_META_KEYS:
+            iso = _to_iso_date(attrs.get("content"))
+            if iso:
+                return iso
+    return None
+
+
+def extract_published_date(html: str, last_modified: str | None = None) -> tuple[str | None, str]:
+    """Best-effort publish date for a fetched page.
+
+    Prefers an in-page published date (the blog/news/changelog/press pages that
+    actually go stale): ``<meta property="article:published_time">`` and kin,
+    JSON-LD ``datePublished``, then ``<time datetime>``. Falls back to the HTTP
+    ``Last-Modified`` header. Returns ``(YYYY-MM-DD, source)`` or ``(None, "none")``
+    when nothing parseable is found — undated pages are neutral downstream, not stale.
+    """
+    meta = _meta_published_date(html)
+    if meta:
+        return meta, "meta"
+    for match in _JSONLD_DATE_RE.findall(html):
+        iso = _to_iso_date(match)
+        if iso:
+            return iso, "jsonld"
+    for match in _TIME_RE.findall(html):
+        iso = _to_iso_date(match)
+        if iso:
+            return iso, "time"
+    header = _to_iso_date(last_modified)
+    if header:
+        return header, "last-modified"
+    return None, "none"
 
 
 def keyword_hits(text: str, keywords: list[str]) -> list[str]:

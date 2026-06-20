@@ -73,15 +73,19 @@ def main() -> int:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(headless=not args.headed and bool(manifest.get("execution", {}).get("headless", True)))
                 context = browser.new_context(viewport=manifest.get("execution", {}).get("viewport") or {"width": 1440, "height": 980})
+                # The local smoke server runs in open mode (no admin token), so /api/* is
+                # unauthenticated. The admin-only tabs (K2, evals) are gated purely by a
+                # client-side session flag; seed one so the diagnostics stages stay reachable.
+                context.add_init_script("window.localStorage.setItem('knowledge2.icp.sessionToken', 'e2e-local-session');")
                 page = context.new_page()
                 page.on("console", lambda message: console_errors.append(message.text) if message.type == "error" else None)
                 timeout = int(manifest.get("execution", {}).get("timeoutMs") or 10000)
 
                 page.goto(base_url, wait_until="domcontentloaded", timeout=timeout)
                 expect(page.get_by_role("heading", name="Lead Discovery Dashboard")).to_be_visible(timeout=timeout)
-                expect(page.locator("#lead-rows .lead-row")).to_contain_text("Mojio", timeout=timeout)
+                expect(page.locator("#lead-rows .lead-row").filter(has_text="Mojio").first).to_contain_text("Mojio", timeout=timeout)
                 page.locator("#lead-page-size").select_option("25")
-                expect(page.locator("#lead-pagination")).to_contain_text("of 1", timeout=timeout)
+                expect(page.locator("#lead-pagination")).to_contain_text("of 3", timeout=timeout)
                 page.locator("#lead-sort-field").select_option("company")
                 page.locator("#lead-sort-direction").click()
                 mojio_row = page.locator("#lead-rows .lead-row").filter(has_text="Mojio").first
@@ -125,7 +129,10 @@ def main() -> int:
                 expect(page.locator("#account-drilldown .account-title")).to_contain_text("Mojio", timeout=timeout)
                 expect(page.locator("#account-drilldown .account-role-tree")).to_contain_text("VP Engineering", timeout=timeout)
                 expect(page.locator("#account-drilldown .outreach-card")).to_contain_text("Outreach Drafts", timeout=timeout)
-                expect(page.locator("#account-drilldown .outreach-draft").first).to_contain_text("AI workflow opportunity map", timeout=timeout)
+                # The fallback draft now renders the persona-routed template scaffold
+                # (workflow-efficiency for the engineering/product personas).
+                expect(page.locator("#account-drilldown .outreach-draft").first).to_contain_text("An AI opportunity in Mojio's workflows", timeout=timeout)
+                expect(page.locator("#account-drilldown .outreach-draft").first).to_contain_text("Mojio", timeout=timeout)
                 expect(page.locator("#account-drilldown .evidence-timeline")).to_contain_text("Platform", timeout=timeout)
                 expect(page.locator("#account-workflow-form")).to_be_visible(timeout=timeout)
 
@@ -203,6 +210,7 @@ def main() -> int:
             _assert(research.get("citations"), "Expected research citations.")
             _assert(account.get("role_groups"), "Expected account detail role groups.")
             _assert(account.get("outreach_drafts"), "Expected account detail outreach drafts.")
+            _validate_outreach_content(account.get("outreach_drafts", []))
             _assert(account.get("evidence_timeline"), "Expected account detail evidence timeline.")
             _assert(state.get("eval_summary", {}).get("latest_status") in {"passed", "needs_review"}, "Expected latest eval status.")
             provider_failure = _expect_provider_failure(base_url)
@@ -212,7 +220,7 @@ def main() -> int:
                 "status": "passed",
                 "base_url": base_url,
                 "run_id": run["id"],
-                "validations": ["ui", "api", "console", "mobile-screenshots", "provider-failure"],
+                "validations": ["ui", "api", "console", "outreach-content", "mobile-screenshots", "provider-failure"],
                 "matched_leads": research.get("matched_leads", []),
                 "citation_count": len(research.get("citations", [])),
                 "mobile_screenshots": mobile_screenshots,
@@ -362,7 +370,14 @@ def _wait_for_health(base_url: str, health_path: str, timeout_seconds: int) -> N
 def _seed_run(state_dir: Path) -> dict[str, Any]:
     store = AppStore(state_dir)
     pipeline = ResearchPipeline(store, evidence_fetcher=_fake_evidence)
-    return pipeline.create_run(query="", seed_text="Mojio, moj.io", include_github=False, use_apollo=False)
+    # Seed >= _SUBSTANTIVE_RUN_LEADS (3) companies so the dashboard lands on this
+    # user run rather than the 424-lead seeded showcase (app_store _default_landing_run_id).
+    return pipeline.create_run(
+        query="",
+        seed_text="Mojio, moj.io\nAutomate, automate.co.za\nDispatch, dispatch.me",
+        include_github=False,
+        use_apollo=False,
+    )
 
 
 def _fake_evidence(company: CompanyInput, cache_dir: Path) -> tuple[list[Evidence], list[str]]:
@@ -402,6 +417,37 @@ def _capture_mobile_screenshots(page: Any, artifact_dir: Path, *, expect: Any, t
         page.screenshot(path=str(path), full_page=True)
         screenshots.append(str(path.relative_to(ROOT)))
     return screenshots
+
+
+def _validate_outreach_content(drafts: list[dict[str, Any]]) -> None:
+    """Content validation for the recency-aware template scaffold (offline path).
+
+    With no Anthropic key the deterministic fallback renders the persona-routed
+    template, so this stage asserts the content is real: template variety across
+    personas, grounded in the seeded evidence, and no unrendered merge fields.
+    """
+    _assert(len(drafts) >= 2, "Expected multiple outreach drafts for the account.")
+    subjects = [str(draft.get("subject") or "") for draft in drafts]
+    # Persona routing produces template variety: the engineering/product persona
+    # lands on workflow-efficiency, the chief-level persona on exec-ai-urgency.
+    _assert(
+        any("An AI opportunity in" in subject for subject in subjects),
+        f"Expected a workflow-efficiency subject; got {subjects}.",
+    )
+    _assert(
+        any("turning your workflow data into an AI edge" in subject for subject in subjects),
+        f"Expected an exec-ai-urgency subject; got {subjects}.",
+    )
+    for draft in drafts:
+        subject = str(draft.get("subject") or "")
+        body = str(draft.get("body") or "")
+        cta = str(draft.get("cta") or "")
+        label = draft.get("persona") or draft.get("title") or "?"
+        _assert(bool(subject), f"Empty outreach subject for {label}.")
+        _assert(bool(cta), f"Empty outreach CTA for {label}.")
+        _assert("Mojio" in body, f"Outreach body for {label} is not grounded in the company.")
+        _assert("Platform" in body, f"Outreach body for {label} does not cite the seeded evidence.")
+        _assert("{" not in body and "{" not in subject, f"Unrendered merge field leaked for {label}.")
 
 
 def _expect_provider_failure(base_url: str) -> dict[str, Any]:

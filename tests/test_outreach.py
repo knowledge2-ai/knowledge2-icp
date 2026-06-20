@@ -29,9 +29,11 @@ class OutreachDraftTest(unittest.TestCase):
         self.assertEqual(cpo["cta"], "Open to a 20-minute look?")
         self.assertTrue(cpo["personalized"])
         self.assertEqual(cpo["grounded"], "k2")
-        # No cached copy for the engineering persona -> template fallback.
+        # No cached copy for the engineering persona -> template fallback. The
+        # persona routes to the workflow-efficiency scaffold, rendered deterministically.
         self.assertFalse(vpe["personalized"])
-        self.assertEqual(vpe["subject"], "Mojio AI workflow opportunity map")
+        self.assertEqual(vpe["subject"], "An AI opportunity in Mojio's workflows")
+        self.assertIn("Mojio", vpe["body"])
 
     def test_template_output_is_byte_for_byte_without_cache(self) -> None:
         run = _run()
