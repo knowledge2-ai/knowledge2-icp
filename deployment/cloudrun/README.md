@@ -91,9 +91,12 @@ is reachable.
    same checks. **Rollback:** the worker still exists and still serves the same
    hostname config — repoint DNS back to the worker. Nothing is deleted in this
    step, so rollback is a DNS change only.
-3. **#46 retire worker** — done after #45 was verified stable: the Cloudflare
-   worker (`knowledge2-icp-gtm-dashboard`) was deleted and `deployment/cloudflare/`
-   dropped from the repo. This was the irreversible step, done last.
+3. **#46 retire worker** — repo side done (`deployment/cloudflare/` dropped).
+   The live worker (`knowledge2-icp-gtm-dashboard`) is deleted only *after*
+   `gtm-dev-proxy` claims `gtm-dev.knowledge2.ai` as its own custom domain — the
+   old worker owned the host's DNS record, so deleting it before the proxy owns
+   the domain would take gtm-dev offline. See `deployment/cloudflare-proxy/README.md`
+   for the safe deploy-then-delete sequence. This is the irreversible step, done last.
 
 ## Not done here
 

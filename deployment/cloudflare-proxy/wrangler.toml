@@ -10,10 +10,15 @@ compatibility_date = "2025-01-01"
 [vars]
 CLOUD_RUN_URL = "https://gtm-demo-tpl2qqmb4a-uc.a.run.app"
 
-# Bind the hostname. Set zone_name to the knowledge2.ai zone in Cloudflare.
+# Own the hostname via a custom domain (not a bare route). A custom_domain
+# binding makes Cloudflare reassign gtm-dev.knowledge2.ai from the old demo
+# worker to this Worker and manage the DNS record + edge cert itself, so this
+# proxy no longer rides on the retiring worker's DNS record. Pattern is the bare
+# host (no /*); the zone is inferred. After this deploys and verifies, the old
+# worker holds nothing and is safe to delete.
 [[routes]]
-pattern = "gtm-dev.knowledge2.ai/*"
-zone_name = "knowledge2.ai"
+pattern = "gtm-dev.knowledge2.ai"
+custom_domain = true
 
 # Secrets (NOT here — set via `wrangler secret put`, see README):
 #   GCP_SA_EMAIL, GCP_SA_PRIVATE_KEY, GCP_SA_PRIVATE_KEY_ID
