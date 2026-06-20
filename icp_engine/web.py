@@ -8,6 +8,7 @@ import ipaddress
 import json
 import mimetypes
 import os
+import re
 import secrets
 import time
 from http import HTTPStatus
@@ -32,16 +33,53 @@ APP_VERSION = "0.1.0"
 API_SESSION_TTL_SECONDS = 8 * 60 * 60
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes"}
+
+
+# Public read-only demo allowlist — ported verbatim from the Cloudflare worker's
+# isPublicReadRequest (worker.js). In ICP_PUBLIC_READ_ONLY mode these GETs are
+# served without a token; every other /api request (all writes, other reads) is
+# blocked, matching the worker's reads-open/writes-503 demo. /api/health is added
+# because the engine gates it (the worker answered health before its auth gate).
+_PUBLIC_READ_PATHS = frozenset({
+    "/api/health",
+    "/api/state",
+    "/api/sources",
+    "/api/expansion/runs",
+    "/api/criteria/versions",
+})
+_PUBLIC_READ_PATTERNS = (
+    re.compile(r"^/api/runs/[^/]+$"),
+    re.compile(r"^/api/runs/[^/]+/workflow$"),
+    re.compile(r"^/api/runs/[^/]+/prospects$"),
+    re.compile(r"^/api/runs/[^/]+/accounts/[^/]+$"),
+)
+# Surfaced in /api/health for parity with the worker's payload.
+_PROTECTED_ACTIONS = ("mutations", "provider_runs", "exports", "admin_diagnostics", "k2_apply_sync")
+
+
+def _is_public_read_request(method: str, path: str) -> bool:
+    if method.upper() != "GET":
+        return False
+    if path in _PUBLIC_READ_PATHS:
+        return True
+    return any(pattern.match(path) for pattern in _PUBLIC_READ_PATTERNS)
+
+
 class GTMApp:
     def __init__(
         self,
         store: AppStore | None = None,
         pipeline: ResearchPipeline | None = None,
         admin_token: str | None = None,
+        *,
+        public_read_only: bool | None = None,
     ) -> None:
         self.store = store or AppStore()
         self.pipeline = pipeline or ResearchPipeline(self.store)
         self.admin_token = (admin_token if admin_token is not None else os.environ.get("ICP_ADMIN_TOKEN", "")).strip()
+        self.public_read_only = _env_flag("ICP_PUBLIC_READ_ONLY") if public_read_only is None else public_read_only
 
 
 def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
@@ -866,8 +904,20 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
             self.wfile.write(body)
 
         def _authorize_api(self) -> bool:
+            if app.public_read_only:
+                # Reads on the public allowlist flow without a token; a valid
+                # admin token (if one is configured) still unlocks writes.
+                path = urlparse(self.path).path
+                if _is_public_read_request(self.command, path):
+                    return True
+                return self._has_valid_token()
             if not app.admin_token:
                 return True
+            return self._has_valid_token()
+
+        def _has_valid_token(self) -> bool:
+            if not app.admin_token:
+                return False
             auth_header = self.headers.get("Authorization", "")
             scheme, _, token = auth_header.partition(" ")
             if scheme.lower() != "bearer" or not token:
@@ -953,6 +1003,9 @@ def _health_payload(app: GTMApp, *, detailed: bool) -> dict[str, Any]:
         "version": APP_VERSION,
         "auth_required": bool(app.admin_token),
     }
+    if app.public_read_only:
+        payload["public_read_only"] = True
+        payload["protected_actions"] = list(_PROTECTED_ACTIONS)
     if detailed:
         app.store.ensure()
         payload.update(
@@ -1129,12 +1182,16 @@ def run_server(
     *,
     tenant_id: str | None = None,
     allow_open_api: bool | None = None,
+    public_read_only: bool | None = None,
 ) -> ThreadingHTTPServer:
     token = (admin_token if admin_token is not None else os.environ.get("ICP_ADMIN_TOKEN", "")).strip()
-    if not token and not _open_api_allowed(host, allow_open_api):
+    read_only = _env_flag("ICP_PUBLIC_READ_ONLY") if public_read_only is None else public_read_only
+    # Read-only mode is a deliberate public bind (writes are blocked at the auth
+    # gate), so it satisfies the non-loopback guard the same way a token does.
+    if not token and not read_only and not _open_api_allowed(host, allow_open_api):
         raise ValueError("ICP_ADMIN_TOKEN is required when binding the API to a non-loopback host.")
     store = build_tenant_store(tenant_id, base_state_dir=store_dir)
-    app = GTMApp(store=store, admin_token=token)
+    app = GTMApp(store=store, admin_token=token, public_read_only=read_only)
     server = ThreadingHTTPServer((host, port), make_handler(app))
     print(f"{app.store.tenant_config.branding.service_name} web app running at http://{host}:{port}")
     server.serve_forever()
@@ -1169,8 +1226,22 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Allow unauthenticated /api/* routes on non-loopback hosts. Intended only for isolated local networks.",
     )
+    parser.add_argument(
+        "--public-read-only",
+        action="store_true",
+        default=None,
+        help="Public read-only demo: serve the read allowlist without a token, block every write (matches the retired Cloudflare worker). Defaults to ICP_PUBLIC_READ_ONLY.",
+    )
     args = parser.parse_args(argv)
-    run_server(args.host, args.port, args.state_dir, admin_token=args.admin_token, tenant_id=args.tenant, allow_open_api=args.allow_open_api)
+    run_server(
+        args.host,
+        args.port,
+        args.state_dir,
+        admin_token=args.admin_token,
+        tenant_id=args.tenant,
+        allow_open_api=args.allow_open_api,
+        public_read_only=args.public_read_only,
+    )
     return 0
 
 

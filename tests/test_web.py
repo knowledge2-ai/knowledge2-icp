@@ -13,7 +13,13 @@ from urllib.request import Request, urlopen
 from icp_engine.app_store import AppStore
 from icp_engine.models import CompanyInput, Evidence
 from icp_engine.research import ResearchPipeline
-from icp_engine.web import GTMApp, _is_loopback_bind_host, run_server, make_handler
+from icp_engine.web import (
+    GTMApp,
+    _is_loopback_bind_host,
+    _is_public_read_request,
+    make_handler,
+    run_server,
+)
 
 
 def fake_evidence(company: CompanyInput, cache_dir: Path) -> tuple[list[Evidence], list[str]]:
@@ -705,6 +711,66 @@ class WebApiTest(unittest.TestCase):
     def test_public_bind_requires_admin_token(self) -> None:
         with self.assertRaises(ValueError):
             run_server("0.0.0.0", 0, admin_token="", allow_open_api=False)
+
+    def test_public_read_only_allowlist_unit(self) -> None:
+        # GETs on the worker's allowlist are public; everything else is not.
+        for path in ("/api/state", "/api/sources", "/api/expansion/runs",
+                     "/api/criteria/versions", "/api/health",
+                     "/api/runs/run-seeded-icp",
+                     "/api/runs/run-seeded-icp/workflow",
+                     "/api/runs/run-seeded-icp/prospects",
+                     "/api/runs/run-seeded-icp/accounts/acme"):
+            self.assertTrue(_is_public_read_request("GET", path), path)
+        for path in ("/api/settings", "/api/audit-log", "/api/runs",
+                     "/api/runs/run-seeded-icp/accounts", "/api/criteria"):
+            self.assertFalse(_is_public_read_request("GET", path), path)
+        # Writes are never public, even on an allowlisted path.
+        self.assertFalse(_is_public_read_request("POST", "/api/state"))
+
+    def test_public_read_only_serves_reads_blocks_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            pipeline = ResearchPipeline(store, evidence_fetcher=fake_evidence)
+            app = GTMApp(store=store, pipeline=pipeline, public_read_only=True)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_port}"
+            try:
+                # Allowlisted reads flow without any token.
+                state = _json_get(f"{base_url}/api/state")
+                self.assertIn("criteria", state)
+                seed = _json_get(f"{base_url}/api/runs/run-seeded-icp")
+                self.assertEqual(seed["id"], "run-seeded-icp")
+
+                # Health advertises the read-only posture (worker parity).
+                health = _json_get(f"{base_url}/api/health")
+                self.assertTrue(health["public_read_only"])
+                self.assertIn("mutations", health["protected_actions"])
+
+                # A non-allowlisted read is blocked.
+                with self.assertRaises(HTTPError) as blocked_read:
+                    _json_get(f"{base_url}/api/settings")
+                self.assertEqual(blocked_read.exception.code, 401)
+
+                # Every write is blocked.
+                with self.assertRaises(HTTPError) as blocked_write:
+                    _json_post(f"{base_url}/api/criteria", {"markdown": "# Nope"})
+                self.assertEqual(blocked_write.exception.code, 401)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+    def test_public_read_only_allows_non_loopback_bind(self) -> None:
+        # Read-only is a deliberate public bind, so the non-loopback guard that
+        # rejects a tokenless bind must let it through.
+        with patch.object(ThreadingHTTPServer, "serve_forever", lambda self: None):
+            server = run_server("0.0.0.0", 0, admin_token="", public_read_only=True)
+            try:
+                self.assertTrue(server.RequestHandlerClass)
+            finally:
+                server.server_close()
 
     def test_loopback_bind_host_detection(self) -> None:
         self.assertTrue(_is_loopback_bind_host("127.0.0.1"))
