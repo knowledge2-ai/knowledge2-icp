@@ -62,16 +62,42 @@ class ApolloClient:
         for title in titles or DEFAULT_PERSONA_TITLES:
             params.append(("person_titles[]", title))
         payload = self._post_query("/mixed_people/api_search", params)
+        people = _compact_people(payload)
+        enriched = self._bulk_match_people(people)
         return {
             "status": "ok",
-            "people": _compact_people(payload),
+            "people": _merge_people(people, enriched) if enriched else people,
         }
 
-    def _post_query(self, path: str, params: list[tuple[str, str | int | bool]]) -> dict[str, object]:
+    def _bulk_match_people(self, people: list[dict[str, object]]) -> list[dict[str, object]]:
+        details = [{"id": person["id"]} for person in people if person.get("id")][:10]
+        if not details:
+            return []
+        # Reveal the real personal email — this is the point of People Match and
+        # spends one credit per matched contact. Phones stay off (unused).
+        params: list[tuple[str, str | int | bool]] = [
+            ("reveal_personal_emails", "true"),
+            ("reveal_phone_number", "false"),
+        ]
+        try:
+            payload = self._post_query("/people/bulk_match", params, body={"details": details})
+        except (OSError, ValueError):
+            return []
+        matches = payload.get("matches")
+        return _compact_people({"people": matches if isinstance(matches, list) else []})
+
+    def _post_query(
+        self,
+        path: str,
+        params: list[tuple[str, str | int | bool]],
+        *,
+        body: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         url = f"{self.base_url.rstrip('/')}{path}?{urlencode(params)}"
+        data = json.dumps(body).encode("utf-8") if body is not None else b"{}"
         request = Request(
             url,
-            data=b"{}",
+            data=data,
             method="POST",
             headers={
                 "accept": "application/json",
@@ -108,6 +134,26 @@ def _compact_organizations(payload: dict[str, object]) -> list[dict[str, object]
     return result
 
 
+def _merge_people(search_people: list[dict[str, object]], enriched: list[dict[str, object]]) -> list[dict[str, object]]:
+    enriched_by_id = {person.get("id"): person for person in enriched if person.get("id")}
+    return [{**person, **enriched_by_id.get(person.get("id"), {})} for person in search_people]
+
+
+# Email availability for a person record: a revealed record carries a real email
+# (-> "verified" unless Apollo already labeled it); the search teaser only has
+# has_email, surfaced as "available_unrevealed" so a slot reads honestly rather
+# than looking verified.
+def _email_status(item: dict[str, object], contact: dict[str, object]) -> str:
+    email = item.get("email") or contact.get("email") or ""
+    if email and "email_not_unlocked" not in str(email):
+        return str(item.get("email_status") or contact.get("email_status") or "verified")
+    if item.get("email_status") or contact.get("email_status"):
+        return str(item.get("email_status") or contact.get("email_status"))
+    if item.get("has_email") or contact.get("has_email"):
+        return "available_unrevealed"
+    return ""
+
+
 def _compact_people(payload: dict[str, object]) -> list[dict[str, object]]:
     raw_items = payload.get("people") or payload.get("contacts") or []
     items = raw_items if isinstance(raw_items, list) else []
@@ -116,14 +162,21 @@ def _compact_people(payload: dict[str, object]) -> list[dict[str, object]]:
         if not isinstance(item, dict):
             continue
         org = item.get("organization") if isinstance(item.get("organization"), dict) else {}
+        contact = item.get("contact") if isinstance(item.get("contact"), dict) else {}
+        email = item.get("email") or contact.get("email") or ""
+        # Apollo returns a locked "email_not_unlocked@domain" placeholder until a
+        # reveal credit is spent — never surface it as a real address.
+        if "email_not_unlocked" in str(email):
+            email = ""
         result.append(
             {
                 "id": item.get("id"),
-                "name": item.get("name"),
-                "title": item.get("title"),
-                "email": item.get("email"),
-                "email_status": item.get("email_status"),
-                "linkedin_url": item.get("linkedin_url"),
+                "name": item.get("name") or contact.get("name"),
+                "title": item.get("title") or contact.get("title"),
+                "email": email,
+                "email_status": _email_status(item, contact),
+                "revealed": bool(email),
+                "linkedin_url": item.get("linkedin_url") or contact.get("linkedin_url"),
                 "city": item.get("city"),
                 "state": item.get("state"),
                 "country": item.get("country"),
