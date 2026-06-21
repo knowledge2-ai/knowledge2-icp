@@ -75,11 +75,23 @@ class GTMApp:
         admin_token: str | None = None,
         *,
         public_read_only: bool | None = None,
+        access_trusted_domain: str | None = None,
     ) -> None:
         self.store = store or AppStore()
         self.pipeline = pipeline or ResearchPipeline(self.store)
         self.admin_token = (admin_token if admin_token is not None else os.environ.get("ICP_ADMIN_TOKEN", "")).strip()
         self.public_read_only = _env_flag("ICP_PUBLIC_READ_ONLY") if public_read_only is None else public_read_only
+        # Cloudflare Access mode: the edge has already done domain-restricted
+        # Google SSO and stamps the verified email in Cf-Access-Authenticated-User-Email.
+        # A request whose email is in this domain gets full read-write. Empty =
+        # mode off. Trust rests on the engine being reachable only through the
+        # Access-gated Worker (Cloud Run is private; the Worker has no workers.dev).
+        raw_domain = (
+            os.environ.get("ICP_ACCESS_TRUSTED_DOMAIN", "")
+            if access_trusted_domain is None
+            else access_trusted_domain
+        )
+        self.access_trusted_domain = raw_domain.strip().lstrip("@").lower()
 
 
 def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
@@ -904,6 +916,11 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
             self.wfile.write(body)
 
         def _authorize_api(self) -> bool:
+            if app.access_trusted_domain:
+                # Behind Cloudflare Access: a verified email in the allowed
+                # domain unlocks every route (read and write); anything else is
+                # rejected. This supersedes the token/read-only gates.
+                return self._access_email() is not None
             if app.public_read_only:
                 # Reads on the public allowlist flow without a token; a valid
                 # admin token (if one is configured) still unlocks writes.
@@ -924,6 +941,20 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                 return False
             presented = token.strip()
             return hmac.compare_digest(presented, app.admin_token) or _verify_session_token(app.admin_token, presented)
+
+        def _access_email(self) -> str | None:
+            # The verified email Cloudflare Access stamps on every request once
+            # the Google login + domain policy pass. Returns it only when it
+            # belongs to the trusted domain, else None. Access overwrites this
+            # header at the edge, so a client cannot forge it on the gated host.
+            if not app.access_trusted_domain:
+                return None
+            email = self.headers.get("Cf-Access-Authenticated-User-Email", "").strip().lower()
+            if "@" not in email:
+                return None
+            if email.rsplit("@", 1)[1] != app.access_trusted_domain:
+                return None
+            return email
 
         def _send_auth_session(self) -> None:
             if not app.admin_token:
@@ -1006,6 +1037,9 @@ def _health_payload(app: GTMApp, *, detailed: bool) -> dict[str, Any]:
     if app.public_read_only:
         payload["public_read_only"] = True
         payload["protected_actions"] = list(_PROTECTED_ACTIONS)
+    if app.access_trusted_domain:
+        payload["access_protected"] = True
+        payload["access_domain"] = app.access_trusted_domain
     if detailed:
         app.store.ensure()
         payload.update(
@@ -1183,15 +1217,27 @@ def run_server(
     tenant_id: str | None = None,
     allow_open_api: bool | None = None,
     public_read_only: bool | None = None,
+    access_trusted_domain: str | None = None,
 ) -> ThreadingHTTPServer:
     token = (admin_token if admin_token is not None else os.environ.get("ICP_ADMIN_TOKEN", "")).strip()
     read_only = _env_flag("ICP_PUBLIC_READ_ONLY") if public_read_only is None else public_read_only
-    # Read-only mode is a deliberate public bind (writes are blocked at the auth
-    # gate), so it satisfies the non-loopback guard the same way a token does.
-    if not token and not read_only and not _open_api_allowed(host, allow_open_api):
+    access_domain = (
+        os.environ.get("ICP_ACCESS_TRUSTED_DOMAIN", "")
+        if access_trusted_domain is None
+        else access_trusted_domain
+    ).strip().lstrip("@").lower()
+    # Read-only and Access modes are both deliberate public binds (read-only
+    # blocks writes at the gate; Access is fronted by domain-restricted SSO at
+    # the edge), so each satisfies the non-loopback guard the same way a token does.
+    if not token and not read_only and not access_domain and not _open_api_allowed(host, allow_open_api):
         raise ValueError("ICP_ADMIN_TOKEN is required when binding the API to a non-loopback host.")
     store = build_tenant_store(tenant_id, base_state_dir=store_dir)
-    app = GTMApp(store=store, admin_token=token, public_read_only=read_only)
+    app = GTMApp(
+        store=store,
+        admin_token=token,
+        public_read_only=read_only,
+        access_trusted_domain=access_domain,
+    )
     server = ThreadingHTTPServer((host, port), make_handler(app))
     print(f"{app.store.tenant_config.branding.service_name} web app running at http://{host}:{port}")
     server.serve_forever()
@@ -1232,6 +1278,11 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Public read-only demo: serve the read allowlist without a token, block every write (matches the retired Cloudflare worker). Defaults to ICP_PUBLIC_READ_ONLY.",
     )
+    parser.add_argument(
+        "--access-trusted-domain",
+        default=None,
+        help="Behind Cloudflare Access: grant full read-write to requests whose Cf-Access-Authenticated-User-Email is in this domain (e.g. posterity.ventures). Defaults to ICP_ACCESS_TRUSTED_DOMAIN.",
+    )
     args = parser.parse_args(argv)
     run_server(
         args.host,
@@ -1241,6 +1292,7 @@ def main(argv: list[str] | None = None) -> int:
         tenant_id=args.tenant,
         allow_open_api=args.allow_open_api,
         public_read_only=args.public_read_only,
+        access_trusted_domain=args.access_trusted_domain,
     )
     return 0
 

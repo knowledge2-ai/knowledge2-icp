@@ -772,6 +772,61 @@ class WebApiTest(unittest.TestCase):
             finally:
                 server.server_close()
 
+    def test_access_mode_grants_read_write_to_trusted_domain(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            pipeline = ResearchPipeline(store, evidence_fetcher=fake_evidence)
+            app = GTMApp(store=store, pipeline=pipeline, access_trusted_domain="posterity.ventures")
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_port}"
+            trusted = {"Cf-Access-Authenticated-User-Email": "Anton@Posterity.Ventures"}
+            try:
+                # No Access header -> rejected, even on an otherwise-public read.
+                with self.assertRaises(HTTPError) as anon:
+                    _json_get(f"{base_url}/api/state")
+                self.assertEqual(anon.exception.code, 401)
+
+                # An email outside the trusted domain -> rejected.
+                with self.assertRaises(HTTPError) as foreign:
+                    _json_get(
+                        f"{base_url}/api/state",
+                        headers={"Cf-Access-Authenticated-User-Email": "x@gmail.com"},
+                    )
+                self.assertEqual(foreign.exception.code, 401)
+
+                # A verified trusted email reads (case-insensitive on the domain).
+                state = _json_get(f"{base_url}/api/state", headers=trusted)
+                self.assertIn("criteria", state)
+
+                # ...and writes (full read-write behind the wall).
+                updated = _json_post(
+                    f"{base_url}/api/criteria",
+                    {"markdown": "# Access ICP"},
+                    headers=trusted,
+                )
+                self.assertEqual(updated["criteria"]["markdown"], "# Access ICP\n")
+
+                # Health advertises the access posture.
+                health = _json_get(f"{base_url}/api/health", headers=trusted)
+                self.assertTrue(health["access_protected"])
+                self.assertEqual(health["access_domain"], "posterity.ventures")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+    def test_access_mode_allows_non_loopback_bind(self) -> None:
+        # Access mode is a deliberate public bind (the edge gates it), so the
+        # non-loopback guard must let a tokenless bind through.
+        with patch.object(ThreadingHTTPServer, "serve_forever", lambda self: None):
+            server = run_server("0.0.0.0", 0, admin_token="", access_trusted_domain="posterity.ventures")
+            try:
+                self.assertTrue(server.RequestHandlerClass)
+            finally:
+                server.server_close()
+
     def test_loopback_bind_host_detection(self) -> None:
         self.assertTrue(_is_loopback_bind_host("127.0.0.1"))
         self.assertTrue(_is_loopback_bind_host("::1"))

@@ -56,6 +56,7 @@ close it — `deploy.sh AUTH=` selects between them:
 | `readonly` | public GET allowlist, writes 503           | ✅ yes          | needs a small code change in `web.py` (port `isPublicReadRequest`, gated on `ICP_PUBLIC_READ_ONLY`) |
 | `open`     | `ICP_ALLOW_OPEN_API=true`, reads+writes public | ❌ writable/vandalizable | none |
 | `token`    | `ICP_ADMIN_TOKEN` gates everything         | ❌ not a public demo | none |
+| `access`   | behind Cloudflare Access SSO; full read-write to any verified email in `ICP_ACCESS_TRUSTED_DOMAIN` | ❌ internal tool, not a public demo | needs the Access + Google SSO setup in `deployment/cloudflare-proxy/ACCESS_SSO.md` |
 
 `readonly` is the faithful cutover and the only one that preserves the current
 gtm-dev experience. It's a contained change: add an `ICP_PUBLIC_READ_ONLY` env

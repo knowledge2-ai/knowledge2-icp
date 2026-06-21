@@ -6,6 +6,12 @@ name = "gtm-dev-proxy"
 main = "worker.js"
 compatibility_date = "2025-01-01"
 
+# No workers.dev URL. The Worker forwards the Cf-Access-Authenticated-User-Email
+# header the engine trusts for SSO; that trust is only sound if the gated custom
+# domain is the ONLY way in. A live workers.dev route would let anyone reach the
+# Worker un-gated and forge that header, so it stays off.
+workers_dev = false
+
 # The public Cloud Run URL is the ID-token audience. Not a secret.
 [vars]
 CLOUD_RUN_URL = "https://gtm-demo-tpl2qqmb4a-uc.a.run.app"
