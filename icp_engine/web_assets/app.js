@@ -1682,6 +1682,7 @@ function renderAccountDrilldown(focusLead) {
   $("account-feedback-form")?.addEventListener("submit", saveAccountQualityFeedback);
   $("account-feedback-export")?.addEventListener("click", downloadQualityFeedback);
   $("account-outreach-export")?.addEventListener("click", downloadOutreachDrafts);
+  $("account-reveal-contacts")?.addEventListener("click", revealAccountContacts);
   root.querySelectorAll(".draft-status-form").forEach((form) => {
     form.addEventListener("submit", saveOutreachDraftStatus);
   });
@@ -1786,7 +1787,10 @@ function accountDetailMarkup(detail) {
       </div>
     </section>
     <section class="account-card account-role-tree">
-      <h3>Prospect Role Tree</h3>
+      <div class="card-heading-row">
+        <h3>Prospect Role Tree</h3>
+        <button id="account-reveal-contacts" type="button" class="secondary small" data-domain="${escapeAttribute(company.domain || workflow.domain || "")}">Reveal contacts</button>
+      </div>
       ${roleGroups.length ? roleGroups.map(accountRoleGroupMarkup).join("") : "<p>No prospects or personas available for this account.</p>"}
     </section>
     <section class="account-card outreach-card">
@@ -2031,6 +2035,30 @@ async function saveOutreachDraftStatus(event) {
       : draft
   ));
   renderAccountDrilldown(currentProspectFocusLead());
+}
+
+async function revealAccountContacts(event) {
+  if (!state.currentRun || !state.currentAccountDetail) return;
+  const button = event.currentTarget;
+  const domain = button.dataset.domain || state.currentAccountDetail.company?.domain || state.currentAccountDetail.workflow?.domain || "";
+  if (!domain) return;
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Revealing...";
+  try {
+    const payload = await api(`/api/runs/${encodeURIComponent(state.currentRun.id)}/prospects/reveal`, {
+      method: "POST",
+      body: JSON.stringify({ domain }),
+    });
+    setAuthStatus(`Revealed ${payload.revealed_count || 0} of ${payload.prospect_count || 0} contacts for ${domain}.`);
+    state.prospectsRunId = null;
+    clearAccountDetailState();
+    renderRun(state.currentRun);
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = original;
+    setAuthStatus(error.message);
+  }
 }
 
 async function downloadOutreachDrafts() {
