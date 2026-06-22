@@ -10,6 +10,7 @@ import mimetypes
 import os
 import re
 import secrets
+import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1215,8 +1216,32 @@ def run_server(
     app = GTMApp(store=store, admin_token=token, public_read_only=read_only)
     server = ThreadingHTTPServer((host, port), make_handler(app))
     print(f"{app.store.tenant_config.branding.service_name} web app running at http://{host}:{port}")
+    _maybe_auto_resume(app)
     server.serve_forever()
     return server
+
+
+def _maybe_auto_resume(app: GTMApp) -> None:
+    """Recover runs left ``running``/``failed`` by a prior recycle, in the background.
+
+    Runs in a daemon thread so it never delays serving, and only from ``run_server``
+    (the real entrypoint) — tests build the app via ``make_handler`` directly, so the
+    sweep won't fire under test. Opt out with ICP_AUTO_RESUME=0.
+    """
+    # Default-on; opt out with a falsey ICP_AUTO_RESUME.
+    if os.environ.get("ICP_AUTO_RESUME", "").strip().lower() in {"0", "false", "no"}:
+        return
+
+    def _sweep() -> None:
+        try:
+            summary = app.pipeline.auto_resume_runs()
+        except Exception as exc:  # noqa: BLE001 - recovery is best-effort, never crash boot
+            print(f"auto-resume sweep failed: {exc}")
+            return
+        if summary["resumed"] or summary["failed"]:
+            print(f"auto-resume: completed {summary['resumed']}, still failing {summary['failed']}")
+
+    threading.Thread(target=_sweep, name="auto-resume", daemon=True).start()
 
 
 def _open_api_allowed(host: str, allow_open_api: bool | None = None) -> bool:

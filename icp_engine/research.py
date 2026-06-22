@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -17,6 +18,7 @@ from .k2_backend import K2Backend
 from .metadata import lead_metadata_summary, refs_from_candidate
 from .models import Classification, CompanyInput, Evidence
 from .scoring import score_company
+from .seed_defaults import SEED_RUN_ID
 from .serialization import evidence_to_dict, score_to_dict
 from .strategy import build_strategy
 from .text import compact_snippet, normalize_whitespace
@@ -24,6 +26,12 @@ from .text import compact_snippet, normalize_whitespace
 
 EvidenceFetcher = Callable[[CompanyInput, Path], tuple[list[Evidence], list[str]]]
 Classifier = Callable[[CompanyInput, list[Evidence], str], Classification]
+
+# How long a resume lease is honored before another resumer may claim the run.
+# Bounds the window in which two resumers double-process the in-flight candidate;
+# the resume itself is idempotent (skips processed domains), so this only avoids
+# duplicated work and a double finalize-meter, not correctness.
+RESUME_LEASE_SECONDS = 300
 
 
 class ResearchPipeline:
@@ -198,12 +206,22 @@ class ResearchPipeline:
         self.store.save_run(run)
         return self._drive_run(run)
 
-    def resume_run(self, run_id: str) -> dict[str, object] | None:
+    def resume_run(
+        self,
+        run_id: str,
+        *,
+        owner: str | None = None,
+        lease_seconds: int = RESUME_LEASE_SECONDS,
+    ) -> dict[str, object] | None:
         """Finish a run that was left ``running``/``failed`` (e.g. by a Cloud Run recycle).
 
         Reloads the persisted run, skips the candidates already processed (the cursor),
         and drives the remainder to completion. Returns ``None`` if the run is unknown
         and the run unchanged if it is already ``completed``.
+
+        A best-effort lease guards against two resumers (boot auto-resume racing an
+        operator click) driving the same run at once: if another owner holds a lease
+        younger than ``lease_seconds``, this returns the run untouched.
         """
         run = self.store.load_run(run_id)
         if not run:
@@ -214,11 +232,54 @@ class ResearchPipeline:
         if not job.get("candidates"):
             # Pre-durability run with no captured candidates — nothing safe to resume.
             return run
+        owner = owner or f"resume-{uuid.uuid4().hex[:8]}"
+        held = job.get("lease") or {}
+        if held.get("owner") and held.get("owner") != owner and _lease_is_fresh(held, lease_seconds):
+            # Another resumer is actively working this run; don't double-drive it.
+            return run
+        job["lease"] = {"owner": owner, "at": now_iso()}
         job["attempts"] = int(job.get("attempts") or 0) + 1
         job["error"] = None
         run["status"] = "running"
         self.store.save_run(run)
         return self._drive_run(run)
+
+    def resumable_run_ids(self) -> list[str]:
+        """Run ids left ``running``/``failed`` with captured candidates — the resume work-list.
+
+        Filters on the cheap run-index summaries first (which carry ``status``), then
+        loads only the candidates to confirm there is something safe to resume. The
+        code-resident seed run is always excluded.
+        """
+        ids: list[str] = []
+        for summary in self.store.list_runs():
+            run_id = str(summary.get("id") or "")
+            if not run_id or run_id == SEED_RUN_ID:
+                continue
+            if summary.get("status") not in {"running", "failed"}:
+                continue
+            run = self.store.load_run(run_id)
+            if run and (run.get("job") or {}).get("candidates"):
+                ids.append(run_id)
+        return ids
+
+    def auto_resume_runs(self) -> dict[str, list[str]]:
+        """Drive every resumable run to completion — call once on server boot.
+
+        Best-effort: a run that fails again is recorded and skipped rather than
+        aborting the sweep, so one poisoned run can't block recovery of the rest.
+        """
+        resumed: list[str] = []
+        failed: list[str] = []
+        for run_id in self.resumable_run_ids():
+            try:
+                run = self.resume_run(run_id)
+            except Exception:  # noqa: BLE001 - the run is persisted as failed; keep sweeping
+                failed.append(run_id)
+                continue
+            if run and run.get("status") == "completed":
+                resumed.append(run_id)
+        return {"resumed": resumed, "failed": failed}
 
     def _drive_run(self, run: dict[str, Any]) -> dict[str, object]:
         """Process the run's remaining candidates, checkpointing after each, then finalize.
@@ -282,6 +343,7 @@ class ResearchPipeline:
         except Exception as exc:  # noqa: BLE001 - persist the partial run so it can be resumed
             job["error"] = str(exc)
             job["updated_at"] = now_iso()
+            job["lease"] = None  # release so a later resume can claim it
             run["status"] = "failed"
             self.store.save_run(run)
             raise
@@ -289,6 +351,7 @@ class ResearchPipeline:
         run["leads"].sort(key=lambda item: item["score"]["total_score"], reverse=True)
         job["stage"] = "done"
         job["updated_at"] = now_iso()
+        job["lease"] = None
         run["status"] = "completed"
 
         qualified_count = int(job.get("qualified_count") or 0)
@@ -624,6 +687,21 @@ def _search_warnings_for_candidates(warnings: list[str], has_candidates: bool) -
         else warning
         for warning in warnings
     ]
+
+
+def _lease_is_fresh(lease: dict[str, Any], lease_seconds: int) -> bool:
+    """True when ``lease['at']`` is within ``lease_seconds`` of now (clock-skew tolerant)."""
+    at = str(lease.get("at") or "")
+    if not at:
+        return False
+    try:
+        stamp = datetime.fromisoformat(at)
+    except ValueError:
+        return False
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - stamp).total_seconds()
+    return -lease_seconds < age < lease_seconds
 
 
 def _candidate_to_payload(candidate: DiscoveryCandidate) -> dict[str, Any]:

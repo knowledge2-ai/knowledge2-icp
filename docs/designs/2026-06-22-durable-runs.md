@@ -49,6 +49,19 @@ run["job"] = {
   pre-durability run with no captured candidates → returned untouched (nothing safe to resume).
 - `POST /api/runs/{id}/resume` exposes recovery to an operator. No new budget guard: the work
   was authorized at create time; resume only finishes captured work.
+- **Auto-resume on boot** (Phase 1.5, implemented): `run_server` spawns a daemon thread that
+  calls `auto_resume_runs()` — `resumable_run_ids()` filters the run index for
+  `running`/`failed` runs with captured candidates (seed excluded), and each is driven to
+  completion. Best-effort: a run that fails again is recorded and the sweep continues. Runs
+  only from the real `run_server` entrypoint (tests build the app via `make_handler`, so the
+  sweep never fires under test); opt out with `ICP_AUTO_RESUME=0`.
+- **Resume lease** (Phase 1.5, implemented): `resume_run` stamps `job.lease = {owner, at}`
+  before driving and clears it on finalize/failure. A second resumer (boot sweep racing an
+  operator click) finding a lease younger than `RESUME_LEASE_SECONDS` (300s) returns the run
+  untouched. The lease bounds — not eliminates — double-processing: resume is idempotent
+  (skips processed domains), so a stale-lease reclaim at worst duplicates the in-flight
+  candidate's work, which the cursor dedupes; the lease's real job is preventing a double
+  finalize-meter.
 
 ## Metering
 

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from icp_engine.app_store import AppStore
+from icp_engine.app_store import AppStore, now_iso
 from icp_engine.claude import ClaudeUnavailable
 from icp_engine.enrichment import normalize_domain
 from icp_engine.k2_backend import K2Backend
@@ -505,6 +505,76 @@ class DurableRunTest(unittest.TestCase):
             store = AppStore(Path(tmp))
             pipeline = ResearchPipeline(store, evidence_fetcher=fake_evidence)
             self.assertIsNone(pipeline.resume_run("run-does-not-exist"))
+
+
+class AutoResumeTest(unittest.TestCase):
+    def _crash_one_run(self, store: AppStore) -> tuple[ResearchPipeline, _StubResearchClient, str]:
+        store.save_settings({"discovery_provider": "perplexity"})
+        client = _StubResearchClient(
+            [{"company": "A", "domain": "a.com"}, {"company": "B", "domain": "b.com"}]
+        )
+        pipeline = ResearchPipeline(
+            store,
+            evidence_fetcher=flaky_evidence({"b.com"}),
+            research_client=client,
+        )
+        with self.assertRaises(RuntimeError):
+            pipeline.create_run(query="fleet AI companies", include_github=False, use_apollo=False)
+        ids = pipeline.resumable_run_ids()
+        self.assertEqual(len(ids), 1)
+        return pipeline, client, ids[0]
+
+    def test_auto_resume_finishes_a_crashed_run_without_rediscovery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            pipeline, client, run_id = self._crash_one_run(store)
+
+            summary = pipeline.auto_resume_runs()
+
+            self.assertEqual(summary["resumed"], [run_id])
+            self.assertEqual(summary["failed"], [])
+            completed = store.load_run(run_id)
+            self.assertEqual(completed["status"], "completed")
+            self.assertEqual(len(completed["leads"]), 2)
+            self.assertIsNone(completed["job"]["lease"])
+            self.assertEqual(client.calls, 1)  # discovery not re-run
+            self.assertEqual(pipeline.resumable_run_ids(), [])  # nothing left to resume
+
+    def test_resumable_ids_excludes_seed_and_completed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            pipeline = ResearchPipeline(store, evidence_fetcher=fake_evidence)
+            pipeline.create_run(query="", seed_text="Mojio, moj.io", include_github=False, use_apollo=False)
+            # The code-resident seed run (completed) and the new completed run are both excluded.
+            self.assertEqual(pipeline.resumable_run_ids(), [])
+
+    def test_fresh_lease_blocks_a_second_resumer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            pipeline, _client, run_id = self._crash_one_run(store)
+            # Another resumer holds a fresh lease — our resume must not drive the run.
+            run = store.load_run(run_id)
+            run["job"]["lease"] = {"owner": "other-instance", "at": now_iso()}
+            store.save_run(run)
+
+            blocked = pipeline.resume_run(run_id, owner="me")
+
+            self.assertEqual(blocked["status"], "failed")
+            self.assertEqual(blocked["job"]["processed_domains"], ["a.com"])
+            self.assertEqual(len(blocked["leads"]), 1)
+
+    def test_stale_lease_is_reclaimed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            pipeline, _client, run_id = self._crash_one_run(store)
+            run = store.load_run(run_id)
+            run["job"]["lease"] = {"owner": "dead-instance", "at": "2000-01-01T00:00:00+00:00"}
+            store.save_run(run)
+
+            resumed = pipeline.resume_run(run_id, owner="me")
+
+            self.assertEqual(resumed["status"], "completed")
+            self.assertEqual(len(resumed["leads"]), 2)
 
 
 class _GroundingK2Backend(K2Backend):
