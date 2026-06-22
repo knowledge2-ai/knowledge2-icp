@@ -10,6 +10,7 @@ import mimetypes
 import os
 import re
 import secrets
+import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -906,6 +907,27 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                     return
                 self._send_json(result)
                 return
+            if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/resume"):
+                run_id = parsed.path.split("/")[3]
+                run = app.store.load_run(run_id)
+                if not run:
+                    self._send_json({"error": "Run not found."}, status=HTTPStatus.NOT_FOUND)
+                    return
+                # No new budget guard: discovery + per-candidate metering were already
+                # authorized/recorded by create_run. Resume only finishes captured work.
+                try:
+                    resumed = app.pipeline.resume_run(run_id)
+                except Exception as exc:
+                    self._send_json(
+                        {"error": f"Resume failed: {exc}", "run": app.store.load_run(run_id)},
+                        status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                    )
+                    return
+                if resumed is None:
+                    self._send_json({"error": "Run not found."}, status=HTTPStatus.NOT_FOUND)
+                    return
+                self._send_json(resumed)
+                return
             if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/k2-export"):
                 run_id = parsed.path.split("/")[3]
                 run = app.store.load_run(run_id)
@@ -1315,8 +1337,32 @@ def run_server(
     )
     server = ThreadingHTTPServer((host, port), make_handler(app))
     print(f"{app.store.tenant_config.branding.service_name} web app running at http://{host}:{port}")
+    _maybe_auto_resume(app)
     server.serve_forever()
     return server
+
+
+def _maybe_auto_resume(app: GTMApp) -> None:
+    """Recover runs left ``running``/``failed`` by a prior recycle, in the background.
+
+    Runs in a daemon thread so it never delays serving, and only from ``run_server``
+    (the real entrypoint) — tests build the app via ``make_handler`` directly, so the
+    sweep won't fire under test. Opt out with ICP_AUTO_RESUME=0.
+    """
+    # Default-on; opt out with a falsey ICP_AUTO_RESUME.
+    if os.environ.get("ICP_AUTO_RESUME", "").strip().lower() in {"0", "false", "no"}:
+        return
+
+    def _sweep() -> None:
+        try:
+            summary = app.pipeline.auto_resume_runs()
+        except Exception as exc:  # noqa: BLE001 - recovery is best-effort, never crash boot
+            print(f"auto-resume sweep failed: {exc}")
+            return
+        if summary["resumed"] or summary["failed"]:
+            print(f"auto-resume: completed {summary['resumed']}, still failing {summary['failed']}")
+
+    threading.Thread(target=_sweep, name="auto-resume", daemon=True).start()
 
 
 def _open_api_allowed(host: str, allow_open_api: bool | None = None) -> bool:

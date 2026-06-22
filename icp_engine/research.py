@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -17,6 +18,7 @@ from .k2_backend import K2Backend
 from .metadata import lead_metadata_summary, refs_from_candidate
 from .models import Classification, CompanyInput, Evidence
 from .scoring import score_company
+from .seed_defaults import SEED_RUN_ID
 from .serialization import evidence_to_dict, score_to_dict
 from .strategy import build_strategy
 from .text import compact_snippet, normalize_whitespace
@@ -24,6 +26,12 @@ from .text import compact_snippet, normalize_whitespace
 
 EvidenceFetcher = Callable[[CompanyInput, Path], tuple[list[Evidence], list[str]]]
 Classifier = Callable[[CompanyInput, list[Evidence], str], Classification]
+
+# How long a resume lease is honored before another resumer may claim the run.
+# Bounds the window in which two resumers double-process the in-flight candidate;
+# the resume itself is idempotent (skips processed domains), so this only avoids
+# duplicated work and a double finalize-meter, not correctness.
+RESUME_LEASE_SECONDS = 300
 
 
 class ResearchPipeline:
@@ -115,6 +123,12 @@ class ResearchPipeline:
         include_github: bool = True,
         use_apollo: bool = False,
     ) -> dict[str, object]:
+        """Start a durable run: resolve candidates once, persist a resumable skeleton, then drive it.
+
+        Discovery (the metered, non-idempotent step) happens exactly here and the
+        resolved candidate list is captured on the run, so a crash mid-processing
+        can be finished by ``resume_run`` without re-discovering or re-charging.
+        """
         criteria = self.store.load_criteria()
         criteria_markdown = str(criteria.get("markdown", ""))
         criteria_profile = build_criteria_profile(
@@ -125,10 +139,6 @@ class ResearchPipeline:
         settings = self.store.load_settings()
         qualifier = _resolve_qualifier(settings)
         outreach_mode = _resolve_outreach_mode(settings)
-        qualifier_warned = False
-        outreach_warned = False
-        qualified_count = 0
-        outreach_count = 0
         run_id = f"run-{uuid.uuid4().hex[:10]}"
         if candidate_payloads is None:
             candidates, warnings, discovery_provider = self.discover(
@@ -140,73 +150,22 @@ class ResearchPipeline:
             discovery_provider = "selected"
             if not candidates:
                 warnings.append("No selected candidates were provided for this run.")
-        cache_dir = self.store.state_dir / "cache" / run_id
-        leads = []
 
-        for candidate in candidates:
-            company = CompanyInput(
-                company=candidate.company,
-                domain=candidate.domain,
-                notes=_candidate_notes(candidate),
-            )
-            evidence, fetch_warnings = self._collect_evidence(company, candidate, cache_dir, fetch=fetch, max_pages=max_pages)
-            metadata = self._collect_metadata(company, candidate, include_github=include_github, use_apollo=use_apollo)
-            metadata.update(lead_metadata_summary(company, evidence, refs_from_candidate(candidate)))
-            metadata["criteria_profile"] = criteria_profile.to_dict()
-            model_classification, qualify_warning = self._qualify(company, evidence, criteria_markdown, qualifier)
-            if model_classification is not None:
-                qualified_count += 1
-            if qualify_warning and not qualifier_warned:
-                warnings.append(qualify_warning)
-                qualifier_warned = True
-            score = score_company(
-                company,
-                evidence,
-                model_classification=model_classification,
-                fetch_warnings=fetch_warnings,
-                criteria_profile=criteria_profile,
-            )
-            metadata["qualification"] = _qualification_metadata(qualifier, score)
-            strategy = build_strategy(score, evidence, metadata)
-            if use_apollo and self.apollo.configured:
-                metadata["apollo_people"] = self.apollo.search_people(
-                    domain=company.domain,
-                    titles=strategy.get("apollo_titles", []),
-                )
-            if outreach_mode == "claude":
-                messages, outreach_warning = self._generate_outreach(
-                    run_id, company, evidence, strategy, criteria_markdown, metadata
-                )
-                if messages:
-                    metadata["outreach_messages"] = messages
-                    outreach_count += len(messages)
-                if outreach_warning and not outreach_warned:
-                    warnings.append(outreach_warning)
-                    outreach_warned = True
-
-            leads.append(
-                {
-                    "id": f"{run_id}:{company.domain}",
-                    "candidate": {
-                        "source_url": candidate.source_url,
-                        "source_title": candidate.source_title,
-                        "github_urls": candidate.github_urls,
-                        "linkedin_urls": candidate.linkedin_urls,
-                        "other_urls": candidate.other_urls,
-                    },
-                    "score": score_to_dict(score),
-                    "strategy": strategy,
-                    "evidence": [evidence_to_dict(item) for item in evidence],
-                    "metadata": metadata,
-                }
+        # Discovery has already happened (and may have hit a paid provider); record it
+        # once, here, so the charge is captured even if processing later crashes.
+        if discovery_provider not in {"none", "selected"}:
+            self.store.record_provider_usage(
+                "discovery",
+                status="allowed",
+                amount=1,
+                details={"provider": discovery_provider, "query": query},
             )
 
-        leads.sort(key=lambda item: item["score"]["total_score"], reverse=True)
         run = {
             "id": run_id,
             "query": query,
             "created_at": now_iso(),
-            "status": "completed",
+            "status": "running",
             "qualifier": qualifier,
             "discovery": {"provider": discovery_provider},
             "criteria": {
@@ -217,32 +176,280 @@ class ResearchPipeline:
                 "qualifier": qualifier,
             },
             "warnings": warnings,
-            "leads": leads,
+            "leads": [],
+            # Durable orchestration state. NOTE: must NOT be keyed "workflow" — the store
+            # reserves run["workflow"] for the lead-status UI block (stripped on save,
+            # regenerated on hydrate). "job" survives the save/hydrate round-trip.
+            "job": {
+                "stage": "processing",
+                "candidates": [_candidate_to_payload(candidate) for candidate in candidates],
+                "processed_domains": [],
+                "total": len(candidates),
+                "qualified_count": 0,
+                "outreach_count": 0,
+                "criteria_markdown": criteria_markdown,
+                "options": {
+                    "fetch": fetch,
+                    "max_pages": max_pages,
+                    "include_github": include_github,
+                    "use_apollo": use_apollo,
+                    "qualifier": qualifier,
+                    "outreach_mode": outreach_mode,
+                },
+                "started_at": now_iso(),
+                "updated_at": now_iso(),
+                "attempts": 1,
+                "error": None,
+            },
         }
+        # Persist before any candidate work — the run now survives a recycle.
+        self.store.save_run(run)
+        return self._drive_run(run)
+
+    def resume_run(
+        self,
+        run_id: str,
+        *,
+        owner: str | None = None,
+        lease_seconds: int = RESUME_LEASE_SECONDS,
+    ) -> dict[str, object] | None:
+        """Finish a run that was left ``running``/``failed`` (e.g. by a Cloud Run recycle).
+
+        Reloads the persisted run, skips the candidates already processed (the cursor),
+        and drives the remainder to completion. Returns ``None`` if the run is unknown
+        and the run unchanged if it is already ``completed``.
+
+        A best-effort lease guards against two resumers (boot auto-resume racing an
+        operator click) driving the same run at once: if another owner holds a lease
+        younger than ``lease_seconds``, this returns the run untouched.
+        """
+        run = self.store.load_run(run_id)
+        if not run:
+            return None
+        if run.get("status") == "completed":
+            return run
+        job = run.setdefault("job", {})
+        if not job.get("candidates"):
+            # Pre-durability run with no captured candidates — nothing safe to resume.
+            return run
+        owner = owner or f"resume-{uuid.uuid4().hex[:8]}"
+        held = job.get("lease") or {}
+        if held.get("owner") and held.get("owner") != owner and _lease_is_fresh(held, lease_seconds):
+            # Another resumer is actively working this run; don't double-drive it.
+            return run
+        job["lease"] = {"owner": owner, "at": now_iso()}
+        job["attempts"] = int(job.get("attempts") or 0) + 1
+        job["error"] = None
+        run["status"] = "running"
+        self.store.save_run(run)
+        return self._drive_run(run)
+
+    def resumable_run_ids(self) -> list[str]:
+        """Run ids left ``running``/``failed`` with captured candidates — the resume work-list.
+
+        Filters on the cheap run-index summaries first (which carry ``status``), then
+        loads only the candidates to confirm there is something safe to resume. The
+        code-resident seed run is always excluded.
+        """
+        ids: list[str] = []
+        for summary in self.store.list_runs():
+            run_id = str(summary.get("id") or "")
+            if not run_id or run_id == SEED_RUN_ID:
+                continue
+            if summary.get("status") not in {"running", "failed"}:
+                continue
+            run = self.store.load_run(run_id)
+            if run and (run.get("job") or {}).get("candidates"):
+                ids.append(run_id)
+        return ids
+
+    def auto_resume_runs(self) -> dict[str, list[str]]:
+        """Drive every resumable run to completion — call once on server boot.
+
+        Best-effort: a run that fails again is recorded and skipped rather than
+        aborting the sweep, so one poisoned run can't block recovery of the rest.
+        """
+        resumed: list[str] = []
+        failed: list[str] = []
+        for run_id in self.resumable_run_ids():
+            try:
+                run = self.resume_run(run_id)
+            except Exception:  # noqa: BLE001 - the run is persisted as failed; keep sweeping
+                failed.append(run_id)
+                continue
+            if run and run.get("status") == "completed":
+                resumed.append(run_id)
+        return {"resumed": resumed, "failed": failed}
+
+    def _drive_run(self, run: dict[str, Any]) -> dict[str, object]:
+        """Process the run's remaining candidates, checkpointing after each, then finalize.
+
+        Shared by ``create_run`` and ``resume_run``. Reads everything it needs from the
+        persisted run (captured candidates + criteria + options), so it is a pure function
+        of the run state and resumes deterministically regardless of concurrent store edits.
+        """
+        job = run["job"]
+        options = job.get("options") or {}
+        fetch = bool(options.get("fetch", True))
+        max_pages = int(options.get("max_pages", 8))
+        include_github = bool(options.get("include_github", True))
+        use_apollo = bool(options.get("use_apollo", False))
+        qualifier = str(options.get("qualifier") or "rules")
+        outreach_mode = str(options.get("outreach_mode") or "template")
+
+        criteria = run.get("criteria", {})
+        criteria_markdown = str(job.get("criteria_markdown", ""))
+        criteria_profile = build_criteria_profile(
+            criteria_markdown,
+            source=str(criteria.get("source", "")),
+            criteria_hash=str(criteria.get("hash", "")),
+        )
+
+        run_id = str(run["id"])
+        cache_dir = self.store.state_dir / "cache" / run_id
+        candidates = _candidates_from_payload(job.get("candidates") or [])
+        processed = set(job.get("processed_domains") or [])
+        warnings = run.setdefault("warnings", [])
+
+        try:
+            for candidate in candidates:
+                domain = normalize_domain(candidate.domain)
+                if domain in processed:
+                    continue
+                lead, qualified_inc, outreach_inc, new_warnings = self._process_candidate(
+                    run_id,
+                    candidate,
+                    criteria_markdown=criteria_markdown,
+                    criteria_profile=criteria_profile,
+                    qualifier=qualifier,
+                    outreach_mode=outreach_mode,
+                    cache_dir=cache_dir,
+                    fetch=fetch,
+                    max_pages=max_pages,
+                    include_github=include_github,
+                    use_apollo=use_apollo,
+                )
+                run["leads"].append(lead)
+                job["qualified_count"] = int(job.get("qualified_count") or 0) + qualified_inc
+                job["outreach_count"] = int(job.get("outreach_count") or 0) + outreach_inc
+                for warning in new_warnings:
+                    if warning not in warnings:
+                        warnings.append(warning)
+                processed.add(domain)
+                job["processed_domains"] = sorted(processed)
+                job["updated_at"] = now_iso()
+                # Checkpoint: at most one in-flight candidate is lost to a recycle.
+                self.store.save_run(run)
+        except Exception as exc:  # noqa: BLE001 - persist the partial run so it can be resumed
+            job["error"] = str(exc)
+            job["updated_at"] = now_iso()
+            job["lease"] = None  # release so a later resume can claim it
+            run["status"] = "failed"
+            self.store.save_run(run)
+            raise
+
+        run["leads"].sort(key=lambda item: item["score"]["total_score"], reverse=True)
+        job["stage"] = "done"
+        job["updated_at"] = now_iso()
+        job["lease"] = None
+        run["status"] = "completed"
+
+        qualified_count = int(job.get("qualified_count") or 0)
+        outreach_count = int(job.get("outreach_count") or 0)
         if qualified_count:
             self.store.record_provider_usage(
                 "qualify",
                 status="allowed",
                 amount=qualified_count,
-                details={"qualifier": qualifier, "criteria_hash": criteria["hash"]},
-            )
-        if discovery_provider not in {"none", "selected"}:
-            self.store.record_provider_usage(
-                "discovery",
-                status="allowed",
-                amount=1,
-                details={"provider": discovery_provider, "query": query},
+                details={"qualifier": qualifier, "criteria_hash": criteria.get("hash", "")},
             )
         if outreach_count:
             self.store.record_provider_usage(
                 "outreach",
                 status="allowed",
                 amount=outreach_count,
-                details={"mode": outreach_mode, "criteria_hash": criteria["hash"]},
+                details={"mode": outreach_mode, "criteria_hash": criteria.get("hash", "")},
             )
         run["k2"] = self.k2.sync_run(run)
         self.store.save_run(run)
         return run
+
+    def _process_candidate(
+        self,
+        run_id: str,
+        candidate: DiscoveryCandidate,
+        *,
+        criteria_markdown: str,
+        criteria_profile: Any,
+        qualifier: str,
+        outreach_mode: str,
+        cache_dir: Path,
+        fetch: bool,
+        max_pages: int,
+        include_github: bool,
+        use_apollo: bool,
+    ) -> tuple[dict[str, Any], int, int, list[str]]:
+        """Score, enrich and (optionally) draft outreach for one candidate.
+
+        Returns the lead record plus the qualify/outreach usage increments and any
+        warnings this candidate produced, so the caller can checkpoint and meter.
+        """
+        warnings: list[str] = []
+        qualified_inc = 0
+        outreach_inc = 0
+        company = CompanyInput(
+            company=candidate.company,
+            domain=candidate.domain,
+            notes=_candidate_notes(candidate),
+        )
+        evidence, fetch_warnings = self._collect_evidence(company, candidate, cache_dir, fetch=fetch, max_pages=max_pages)
+        metadata = self._collect_metadata(company, candidate, include_github=include_github, use_apollo=use_apollo)
+        metadata.update(lead_metadata_summary(company, evidence, refs_from_candidate(candidate)))
+        metadata["criteria_profile"] = criteria_profile.to_dict()
+        model_classification, qualify_warning = self._qualify(company, evidence, criteria_markdown, qualifier)
+        if model_classification is not None:
+            qualified_inc = 1
+        if qualify_warning:
+            warnings.append(qualify_warning)
+        score = score_company(
+            company,
+            evidence,
+            model_classification=model_classification,
+            fetch_warnings=fetch_warnings,
+            criteria_profile=criteria_profile,
+        )
+        metadata["qualification"] = _qualification_metadata(qualifier, score)
+        strategy = build_strategy(score, evidence, metadata)
+        if use_apollo and self.apollo.configured:
+            metadata["apollo_people"] = self.apollo.search_people(
+                domain=company.domain,
+                titles=strategy.get("apollo_titles", []),
+            )
+        if outreach_mode == "claude":
+            messages, outreach_warning = self._generate_outreach(
+                run_id, company, evidence, strategy, criteria_markdown, metadata
+            )
+            if messages:
+                metadata["outreach_messages"] = messages
+                outreach_inc = len(messages)
+            if outreach_warning:
+                warnings.append(outreach_warning)
+
+        lead = {
+            "id": f"{run_id}:{company.domain}",
+            "candidate": {
+                "source_url": candidate.source_url,
+                "source_title": candidate.source_title,
+                "github_urls": candidate.github_urls,
+                "linkedin_urls": candidate.linkedin_urls,
+                "other_urls": candidate.other_urls,
+            },
+            "score": score_to_dict(score),
+            "strategy": strategy,
+            "evidence": [evidence_to_dict(item) for item in evidence],
+            "metadata": metadata,
+        }
+        return lead, qualified_inc, outreach_inc, warnings
 
     def _qualify(
         self,
@@ -480,6 +687,36 @@ def _search_warnings_for_candidates(warnings: list[str], has_candidates: bool) -
         else warning
         for warning in warnings
     ]
+
+
+def _lease_is_fresh(lease: dict[str, Any], lease_seconds: int) -> bool:
+    """True when ``lease['at']`` is within ``lease_seconds`` of now (clock-skew tolerant)."""
+    at = str(lease.get("at") or "")
+    if not at:
+        return False
+    try:
+        stamp = datetime.fromisoformat(at)
+    except ValueError:
+        return False
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - stamp).total_seconds()
+    return -lease_seconds < age < lease_seconds
+
+
+def _candidate_to_payload(candidate: DiscoveryCandidate) -> dict[str, Any]:
+    """Serialize a candidate onto the run so a resume can rebuild it (round-trips
+    through ``_candidates_from_payload``) without re-running discovery."""
+    return {
+        "company": candidate.company,
+        "domain": candidate.domain,
+        "source_url": candidate.source_url,
+        "source_title": candidate.source_title,
+        "notes": candidate.notes,
+        "github_urls": candidate.github_urls,
+        "linkedin_urls": candidate.linkedin_urls,
+        "other_urls": candidate.other_urls,
+    }
 
 
 def _candidates_from_payload(items: list[object]) -> list[DiscoveryCandidate]:

@@ -956,6 +956,33 @@ def _text_get(url: str, headers: dict[str, str] | None = None) -> str:
         return response.read().decode("utf-8")
 
 
+class WebResumeTest(unittest.TestCase):
+    def test_resume_endpoint_noops_completed_run_and_404s_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            pipeline = ResearchPipeline(store, evidence_fetcher=fake_evidence)
+            app = GTMApp(store=store, pipeline=pipeline)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_port}"
+            try:
+                run = pipeline.create_run(query="", seed_text="Acme, acme.example", include_github=False, use_apollo=False)
+                self.assertEqual(run["status"], "completed")
+
+                resumed = _json_post(f"{base_url}/api/runs/{run['id']}/resume", {})
+                self.assertEqual(resumed["status"], "completed")
+                self.assertEqual(len(resumed["leads"]), 1)
+
+                with self.assertRaises(HTTPError) as missing:
+                    _json_post(f"{base_url}/api/runs/run-does-not-exist/resume", {})
+                self.assertEqual(missing.exception.code, 404)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+
 def _json_post(url: str, payload: dict[str, object], headers: dict[str, str] | None = None) -> dict[str, object]:
     request_headers = {"Content-Type": "application/json", **(headers or {})}
     request = Request(
