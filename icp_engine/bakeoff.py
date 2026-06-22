@@ -166,12 +166,18 @@ def grounding_cases(run: dict[str, Any]) -> list[dict[str, Any]]:
             score = lead.get("score", {})
             company = score.get("company", {})
             metadata = lead.get("metadata", {}) if isinstance(lead.get("metadata"), dict) else {}
+            classification = score.get("classification", {}) if isinstance(score.get("classification"), dict) else {}
             cases.append(
                 {
                     "id": f"ground:{normalize_domain(str(company.get('domain') or ''))}",
                     "company": str(company.get("company") or ""),
                     "domain": normalize_domain(str(company.get("domain") or "")),
                     "tier": tier,
+                    # The vertical is a real classification label the dossier surfaces
+                    # in prose ("Vertical: …") but the account-summary text omits — so
+                    # it discriminates dossier-grounded answers from label-dump ones,
+                    # which the 4 saturating facts (company/domain/tier/signal) cannot.
+                    "vertical": str(metadata.get("vertical") or classification.get("vertical") or ""),
                     "signal_tags": [str(tag) for tag in metadata.get("signal_tags", []) if str(tag).strip()],
                 }
             )
@@ -267,6 +273,8 @@ def score_grounding(answer: str, case: dict[str, Any]) -> dict[str, Any]:
         facts.append(("domain", str(case["domain"]).lower() in text))
     if case.get("tier"):
         facts.append(("tier", f"tier {str(case['tier']).lower()}" in text))
+    if case.get("vertical"):
+        facts.append(("vertical", str(case["vertical"]).lower() in text))
     for tag in case.get("signal_tags", [])[:3]:
         facts.append((f"signal:{tag}", str(tag).lower() in text))
     surfaced = sum(1 for _, present in facts if present)
