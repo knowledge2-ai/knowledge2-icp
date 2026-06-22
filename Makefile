@@ -1,4 +1,4 @@
-.PHONY: setup test web smoke smoke-gemini e2e-smoke e2e-live-auth k2-sync-dry-run cloudflare-preflight cloudflare-config cloudflare-dry-run clean
+.PHONY: setup test web smoke smoke-gemini e2e-smoke e2e-live-auth k2-sync-dry-run cloudflare-proxy-dry-run clean
 
 setup:
 	python3 -m venv .venv
@@ -25,14 +25,10 @@ e2e-live-auth:
 k2-sync-dry-run:
 	python3 -m icp_engine.k2_sync --run-id $${RUN_ID:?set RUN_ID} --state-dir out/app_state
 
-cloudflare-preflight:
-	python3 deployment/cloudflare/preflight.py
-
-cloudflare-config:
-	python3 deployment/cloudflare/render_wrangler_config.py
-
-cloudflare-dry-run: cloudflare-config
-	wrangler deploy --dry-run --config deployment/cloudflare/wrangler.generated.toml
+# gtm-dev.knowledge2.ai is fronted by the Cloudflare proxy in
+# deployment/cloudflare-proxy/, which forwards to the private Cloud Run engine.
+cloudflare-proxy-dry-run:
+	cd deployment/cloudflare-proxy && wrangler deploy --dry-run
 
 clean:
 	rm -rf out .pytest_cache icp_engine/__pycache__ tests/__pycache__

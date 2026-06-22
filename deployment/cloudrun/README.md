@@ -23,7 +23,8 @@ here.
 ## Route parity (worker vs engine)
 
 The engine is a **strict superset** of the worker — nothing drops at cutover.
-Audited `deployment/cloudflare/worker.js` against `icp_engine/web.py`:
+Audited the legacy worker (`deployment/cloudflare/worker.js`, retired in #46)
+against `icp_engine/web.py`:
 
 - Every worker `/api/*` route exists in the engine.
 - Engine-only extras the worker never had: `/api/audit-log`,
@@ -90,9 +91,12 @@ is reachable.
    same checks. **Rollback:** the worker still exists and still serves the same
    hostname config — repoint DNS back to the worker. Nothing is deleted in this
    step, so rollback is a DNS change only.
-3. **#46 retire worker** — only after #45 is verified stable. Remove the
-   Cloudflare route/worker (and drop `deployment/cloudflare/` from the repo in a
-   separate PR). This is the irreversible step; do it last, with #45 proven.
+3. **#46 retire worker** — repo side done (`deployment/cloudflare/` dropped).
+   The live worker (`knowledge2-icp-gtm-dashboard`) is deleted only *after*
+   `gtm-dev-proxy` claims `gtm-dev.knowledge2.ai` as its own custom domain — the
+   old worker owned the host's DNS record, so deleting it before the proxy owns
+   the domain would take gtm-dev offline. See `deployment/cloudflare-proxy/README.md`
+   for the safe deploy-then-delete sequence. This is the irreversible step, done last.
 
 ## Not done here
 

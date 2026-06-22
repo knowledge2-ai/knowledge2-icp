@@ -13,63 +13,59 @@ be reused without duplicating the rubric in another runtime.
 
 ## Cloudflare Production Shape
 
-This repo now includes a self-contained Worker at `deployment/cloudflare/`:
+`gtm-dev.knowledge2.ai` runs the same Python engine as local, deployed to a
+private **Cloud Run** service and fronted by a thin **Cloudflare Worker proxy**:
 
-- `wrangler.toml` uploads `../../icp_engine/web_assets` as Workers static assets.
-- `worker.js` serves those assets and implements seeded `/api/*` routes directly.
-- `worker.js` fails closed unless `ICP_ADMIN_TOKEN` is configured, then rejects
-  `/api/*` requests without `Authorization: Bearer <token>`.
-- Seeded prompts, settings, ICP criteria, account lists, lead scores, prospects,
-  research answers, and K2 manifests are available without a local origin.
-- With `K2_API_KEY` configured, the K2 tab can upload the generated manifest to
-  K2 from the Worker.
-- `routes` uses a hostname-only custom domain pattern, because Cloudflare Custom
-  Domains do not allow path wildcards.
+- `deployment/cloudrun/` builds and deploys the engine (`Dockerfile`,
+  `cloudbuild.yaml`, `deploy.sh`). The service is private — the org policy
+  blocks `allUsers` — so it is never reachable directly from the internet.
+- `deployment/cloudflare-proxy/worker.js` mints a Google ID token (RS256 JWT,
+  audience = the Cloud Run URL) from a service-account key held in Worker
+  secrets, and forwards every request to Cloud Run with that token.
+- The route is bound hostname-only (`gtm-dev.knowledge2.ai/*`), because
+  Cloudflare Custom Domains do not allow path wildcards.
+- The engine runs with `ICP_PUBLIC_READ_ONLY=true` on Cloud Run: the read-only
+  demo endpoints (`/api/health`, `/api/runs/{id}/prospects[.csv]`) are public
+  and every write returns 401.
 
-Validate the shell without deploying:
+Validate the proxy shell without deploying:
 
 ```bash
-wrangler deploy --dry-run --config deployment/cloudflare/wrangler.toml
+cd deployment/cloudflare-proxy && wrangler deploy --dry-run
 ```
 
-For environment-specific dry-runs or deploys, render an ignored config rather
-than editing committed placeholders:
+Deploy / cutover (one-time; see `deployment/cloudflare-proxy/README.md`):
 
 ```bash
-export CLOUDFLARE_ACCOUNT_ID=<account-id>
-export ICP_CLOUDFLARE_ROUTE=gtm-dev.knowledge2.ai
-python3 deployment/cloudflare/preflight.py
-python3 deployment/cloudflare/render_wrangler_config.py
-wrangler deploy --dry-run --config deployment/cloudflare/wrangler.generated.toml
+deployment/cloudrun/deploy.sh        # PROJECT=... SERVICE=gtm-demo AUTH=readonly
+bash deployment/cloudflare-proxy/cutover.sh
 ```
 
 Readiness probes:
 
 ```bash
-curl -sS https://gtm-dev.knowledge2.ai/healthz
-curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
-  https://gtm-dev.knowledge2.ai/api/health
+curl -sS https://gtm-dev.knowledge2.ai/api/health
+curl -sS https://gtm-dev.knowledge2.ai/api/runs/run-seeded-icp/prospects
 ```
 
-Before using a public K2 subdomain, configure `ICP_ADMIN_TOKEN` on the Worker.
-Static assets can remain public, but run creation, criteria edits, K2 sync,
-prospects, and research APIs should be protected because they expose GTM data
-and can trigger external provider usage.
+The proxy holds the Cloud Run invoker credential, so public callers never need a
+token for the read-only endpoints. Writes are refused by the engine itself
+(`ICP_PUBLIC_READ_ONLY`), not by an edge token.
 
 ## Live Deployment Checklist
 
 - [ ] Confirm the public hostname, for example `gtm-dev.knowledge2.ai`.
-- [ ] Render `deployment/cloudflare/wrangler.generated.toml` from
-  `CLOUDFLARE_ACCOUNT_ID` and `ICP_CLOUDFLARE_ROUTE`.
-- [ ] Configure Cloudflare secrets: `ICP_ADMIN_TOKEN`, `K2_API_KEY`,
-  `APOLLO_API_KEY`.
+- [ ] Deploy the engine to Cloud Run: `deployment/cloudrun/deploy.sh`
+  (`AUTH=readonly` for the public demo).
+- [ ] Set the proxy's `CLOUD_RUN_URL` in
+  `deployment/cloudflare-proxy/wrangler.toml`.
 - [ ] Run `python3 -m unittest discover -s tests`.
 - [ ] Run `make e2e-smoke`.
-- [ ] Run `make cloudflare-preflight`.
-- [ ] Run `wrangler deploy --dry-run --config deployment/cloudflare/wrangler.generated.toml`.
-- [ ] Check Worker `/healthz` and authenticated `/api/state`.
-- [ ] Run `make e2e-live-auth` with `ICP_ADMIN_TOKEN` and
-  `ICP_E2E_LIVE_BASE_URL` exported.
+- [ ] Run `cd deployment/cloudflare-proxy && wrangler deploy --dry-run`.
+- [ ] Run `bash deployment/cloudflare-proxy/cutover.sh` (deploys the proxy and
+  sets the `GCP_SA_*` secrets).
+- [ ] Check `https://gtm-dev.knowledge2.ai/api/health` (`version`,
+  `public_read_only: true`) and that a write returns 401.
 - [ ] Run K2 sync dry-run from the K2 tab before any apply upload.
 
 ## Knowledge2 Backend Contract
@@ -100,7 +96,7 @@ Local API endpoints:
 - `POST /api/research`: uses local stored evidence by default, or K2 generation
   when the run has an uploaded `corpus_id` or `K2_RESEARCH_CORPUS_ID` is set.
 
-Cloudflare Worker endpoints mirror the dashboard-critical subset:
+The engine (local and on Cloud Run behind the proxy) serves the dashboard-critical subset:
 
 - `GET /api/state`: returns seeded criteria, prompts, settings, lists, runs,
   provider status, and latest run.
