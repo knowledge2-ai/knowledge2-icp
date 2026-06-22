@@ -112,6 +112,24 @@ class GroundingScorerTest(unittest.TestCase):
         # company + domain surfaced (2/3 coverage) but tier claim contradicts → penalized to 0.
         self.assertEqual(scored["grounding_score"], 0.0)
 
+    def test_vertical_is_a_checked_fact_when_present(self) -> None:
+        case = {"company": "Acme", "domain": "acme.com", "tier": "A", "vertical": "field service", "signal_tags": []}
+        # vertical adds a fourth checked fact only when the case carries it.
+        self.assertEqual(bakeoff.score_grounding("", case)["facts_checked"], 4)
+        self.assertEqual(bakeoff.score_grounding("", {"company": "Acme"})["facts_checked"], 1)
+
+    def test_vertical_discriminates_dossier_from_label_dump(self) -> None:
+        # The dossier surfaces the vertical in prose; the account-summary text omits
+        # it. An answer grounded on each should score differently — the whole point
+        # of adding the fact (the 4 saturating facts can't tell them apart).
+        case = {"company": "Mojio", "domain": "moj.io", "tier": "A", "vertical": "field service", "signal_tags": ["telematics"]}
+        dossier_answer = "Mojio (moj.io) is Tier A in field service, strong on telematics."
+        summary_answer = "Mojio (moj.io) is Tier A, strong on telematics."  # no vertical
+        dossier = bakeoff.score_grounding(dossier_answer, case)
+        summary = bakeoff.score_grounding(summary_answer, case)
+        self.assertEqual(dossier["coverage"], 1.0)
+        self.assertGreater(dossier["grounding_score"], summary["grounding_score"])
+
 
 class AveragePrecisionTest(unittest.TestCase):
     def test_all_relevant_first(self) -> None:
@@ -161,6 +179,13 @@ class OfflineRunBakeoffTest(unittest.TestCase):
         labels = bakeoff.category_by_domain(seeded_run())
         self.assertGreater(len(labels), 400)
         self.assertTrue(any(category for category in labels.values()))
+
+    def test_grounding_cases_carry_vertical_from_seed(self) -> None:
+        # The seed populates metadata.vertical on every lead, so the grounding
+        # fact set actually exercises the new dossier-discriminating fact.
+        cases = bakeoff.grounding_cases(seeded_run())
+        self.assertTrue(cases)
+        self.assertTrue(all(case.get("vertical") for case in cases))
 
 
 if __name__ == "__main__":
