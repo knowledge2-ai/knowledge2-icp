@@ -12,6 +12,7 @@ from icp_engine.enrichment import normalize_domain
 from icp_engine.k2_backend import K2Backend
 from icp_engine.models import Classification, CompanyInput, Evidence
 from icp_engine.research import ResearchPipeline
+from icp_engine.seed_defaults import SEED_RUN_ID
 
 
 def fake_evidence(company: CompanyInput, cache_dir: Path) -> tuple[list[Evidence], list[str]]:
@@ -406,6 +407,104 @@ class ResearchPipelineTest(unittest.TestCase):
             self.assertEqual(answer["provider"], "k2")
             self.assertEqual(answer["corpus_id"], "corpus-1")
             self.assertEqual(answer["k2"]["raw_result_count"], 1)
+
+
+def flaky_evidence(fail_once: set[str]):
+    """Evidence fetcher that raises the first time it sees a domain in ``fail_once``.
+
+    Simulates a mid-run crash (a transient fetch failure / Cloud Run recycle): the
+    domain fails on its first attempt, then succeeds on the resume pass.
+    """
+
+    def fetch(company: CompanyInput, cache_dir: Path) -> tuple[list[Evidence], list[str]]:
+        if company.domain in fail_once:
+            fail_once.discard(company.domain)
+            raise RuntimeError(f"boom on {company.domain}")
+        return fake_evidence(company, cache_dir)
+
+    return fetch
+
+
+class DurableRunTest(unittest.TestCase):
+    def test_crash_mid_loop_persists_partial_run_then_resume_completes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            store.save_settings({"discovery_provider": "perplexity"})
+            client = _StubResearchClient(
+                [{"company": "A", "domain": "a.com"}, {"company": "B", "domain": "b.com"}]
+            )
+            pipeline = ResearchPipeline(
+                store,
+                evidence_fetcher=flaky_evidence({"b.com"}),
+                research_client=client,
+            )
+
+            with self.assertRaises(RuntimeError):
+                pipeline.create_run(query="fleet AI companies", include_github=False, use_apollo=False)
+
+            # The run is persisted as a resumable failure, not lost — first lead saved,
+            # cursor recorded, candidate list captured, discovery already charged once.
+            # (list_runs also surfaces the code-resident seed run; ignore it.)
+            user_runs = [r for r in store.list_runs() if r["id"] != SEED_RUN_ID]
+            self.assertEqual(len(user_runs), 1)
+            run_id = user_runs[0]["id"]
+            partial = store.load_run(run_id)
+            self.assertEqual(partial["status"], "failed")
+            self.assertEqual([lead["score"]["company"]["domain"] for lead in partial["leads"]], ["a.com"])
+            self.assertEqual(partial["job"]["processed_domains"], ["a.com"])
+            self.assertEqual(partial["job"]["total"], 2)
+            self.assertEqual(len(partial["job"]["candidates"]), 2)
+            self.assertIn("boom on b.com", partial["job"]["error"])
+            self.assertEqual(client.calls, 1)
+
+            resumed = pipeline.resume_run(run_id)
+
+            self.assertEqual(resumed["status"], "completed")
+            self.assertEqual(
+                sorted(lead["score"]["company"]["domain"] for lead in resumed["leads"]),
+                ["a.com", "b.com"],
+            )
+            self.assertEqual(resumed["job"]["processed_domains"], ["a.com", "b.com"])
+            self.assertEqual(resumed["job"]["attempts"], 2)
+            self.assertIsNone(resumed["job"]["error"])
+            # Discovery is NOT re-run on resume — candidates were captured on the run.
+            self.assertEqual(client.calls, 1)
+
+    def test_resume_of_completed_run_is_a_noop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            pipeline = ResearchPipeline(store, evidence_fetcher=fake_evidence)
+            run = pipeline.create_run(query="", seed_text="Mojio, moj.io", include_github=False, use_apollo=False)
+            self.assertEqual(run["status"], "completed")
+
+            resumed = pipeline.resume_run(run["id"])
+
+            self.assertEqual(resumed["status"], "completed")
+            self.assertEqual(len(resumed["leads"]), 1)
+            self.assertEqual(resumed["job"]["attempts"], 1)
+
+    def test_happy_path_run_carries_workflow_block_and_checkpoints(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            pipeline = ResearchPipeline(store, evidence_fetcher=fake_evidence)
+            run = pipeline.create_run(query="", seed_text="Mojio, moj.io", include_github=False, use_apollo=False)
+
+            self.assertEqual(run["status"], "completed")
+            workflow = run["job"]
+            self.assertEqual(workflow["stage"], "done")
+            self.assertEqual(workflow["total"], 1)
+            self.assertEqual(workflow["processed_domains"], ["moj.io"])
+            self.assertEqual(workflow["attempts"], 1)
+            # The persisted run matches the returned run (final checkpoint written).
+            reloaded = store.load_run(run["id"])
+            self.assertEqual(reloaded["status"], "completed")
+            self.assertEqual(reloaded["job"]["processed_domains"], ["moj.io"])
+
+    def test_resume_missing_run_returns_none(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            pipeline = ResearchPipeline(store, evidence_fetcher=fake_evidence)
+            self.assertIsNone(pipeline.resume_run("run-does-not-exist"))
 
 
 class _GroundingK2Backend(K2Backend):

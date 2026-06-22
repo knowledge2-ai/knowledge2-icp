@@ -819,6 +819,27 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                     return
                 self._send_json(result)
                 return
+            if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/resume"):
+                run_id = parsed.path.split("/")[3]
+                run = app.store.load_run(run_id)
+                if not run:
+                    self._send_json({"error": "Run not found."}, status=HTTPStatus.NOT_FOUND)
+                    return
+                # No new budget guard: discovery + per-candidate metering were already
+                # authorized/recorded by create_run. Resume only finishes captured work.
+                try:
+                    resumed = app.pipeline.resume_run(run_id)
+                except Exception as exc:
+                    self._send_json(
+                        {"error": f"Resume failed: {exc}", "run": app.store.load_run(run_id)},
+                        status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                    )
+                    return
+                if resumed is None:
+                    self._send_json({"error": "Run not found."}, status=HTTPStatus.NOT_FOUND)
+                    return
+                self._send_json(resumed)
+                return
             if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/k2-export"):
                 run_id = parsed.path.split("/")[3]
                 run = app.store.load_run(run_id)
