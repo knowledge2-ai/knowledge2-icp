@@ -99,3 +99,16 @@ The auth wall is independent and solid. **Real names/emails actually appearing**
 still depends on Apollo returning PII on your plan via People-Match
 (`reveal_personal_emails=true` in `apollo.py`) — which is unverified. Validate
 that separately before promising filled contacts behind the wall.
+
+### Reveal-on-demand endpoint
+
+`POST /api/runs/{run_id}/prospects/reveal` with `{"domain": "<lead domain>"}`
+runs Apollo People-Match for that one account, writes the result into the lead's
+`metadata.apollo_people`, and returns the rebuilt prospects (now `source:
+"apollo"` with real names/titles/LinkedIn, and emails when the plan unlocks
+them). It spends one People-Match credit per contact, so it's behind the
+`apollo_enrichment` provider budget, and it stamps the Access-verified caller
+(`Cf-Access-Authenticated-User-Email`) into the audit log as `revealer`. Returns
+`503` if `APOLLO_API_KEY` is unset, `404` for an unknown run/domain. Reveals
+persist for the session but not across a Cloud Run restart for ephemeral
+user-created runs (the seeded showcase run is code-resident).

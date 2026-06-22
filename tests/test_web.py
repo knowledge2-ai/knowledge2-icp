@@ -817,6 +817,116 @@ class WebApiTest(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=2)
 
+    def test_prospect_reveal_writes_apollo_people_and_rebuilds_prospects(self) -> None:
+        class StubApollo:
+            configured = True
+
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def search_people(self, *, domain, titles=None, per_page=8):
+                self.calls.append({"domain": domain, "titles": titles})
+                return {
+                    "status": "ok",
+                    "people": [
+                        {
+                            "id": "p1",
+                            "name": "Dana Lopez",
+                            "title": "Chief Product Officer",
+                            "email": "dana@acme.example",
+                            "email_status": "verified",
+                            "linkedin_url": "https://linkedin.com/in/danalopez",
+                            "organization": {"name": "Acme"},
+                        }
+                    ],
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            stub = StubApollo()
+            pipeline = ResearchPipeline(store, evidence_fetcher=fake_evidence, apollo_client=stub)
+            app = GTMApp(store=store, pipeline=pipeline)
+            run = store.save_run(
+                {
+                    "id": "run-reveal",
+                    "leads": [
+                        {
+                            "id": "run-reveal:acme.example",
+                            "score": {"company": {"company": "Acme", "domain": "acme.example"}},
+                            "strategy": {
+                                "apollo_titles": ["chief product officer"],
+                                "personas": [{"title": "Chief Product Officer", "priority": "high"}],
+                            },
+                            "metadata": {},
+                        }
+                    ],
+                }
+            )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_port}"
+            try:
+                # Unknown domain -> 404, no Apollo call.
+                with self.assertRaises(HTTPError) as missing:
+                    _json_post(f"{base_url}/api/runs/{run['id']}/prospects/reveal", {"domain": "nope.example"})
+                self.assertEqual(missing.exception.code, 404)
+
+                revealed = _json_post(
+                    f"{base_url}/api/runs/{run['id']}/prospects/reveal",
+                    {"domain": "acme.example"},
+                )
+                self.assertEqual(revealed["revealed_count"], 1)
+                self.assertEqual(revealed["prospects"][0]["source"], "apollo")
+                self.assertEqual(revealed["prospects"][0]["email"], "dana@acme.example")
+                self.assertTrue(revealed["prospects"][0]["revealed"])
+                self.assertEqual(stub.calls, [{"domain": "acme.example", "titles": ["chief product officer"]}])
+
+                # Reveal persisted: a fresh prospects read now shows the real person.
+                prospects = _json_get(f"{base_url}/api/runs/{run['id']}/prospects")
+                self.assertEqual(prospects["prospects"][0]["name"], "Dana Lopez")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+    def test_prospect_reveal_returns_503_when_apollo_unconfigured(self) -> None:
+        class UnconfiguredApollo:
+            configured = False
+
+            def search_people(self, *, domain, titles=None, per_page=8):  # pragma: no cover - never called
+                raise AssertionError("search_people must not run when Apollo is unconfigured")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AppStore(Path(tmp))
+            pipeline = ResearchPipeline(store, evidence_fetcher=fake_evidence, apollo_client=UnconfiguredApollo())
+            app = GTMApp(store=store, pipeline=pipeline)
+            run = store.save_run(
+                {
+                    "id": "run-noapollo",
+                    "leads": [
+                        {
+                            "id": "run-noapollo:acme.example",
+                            "score": {"company": {"company": "Acme", "domain": "acme.example"}},
+                            "strategy": {"personas": [{"title": "CPO", "priority": "high"}]},
+                            "metadata": {},
+                        }
+                    ],
+                }
+            )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_port}"
+            try:
+                with self.assertRaises(HTTPError) as unavailable:
+                    _json_post(f"{base_url}/api/runs/{run['id']}/prospects/reveal", {"domain": "acme.example"})
+                self.assertEqual(unavailable.exception.code, 503)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
     def test_access_mode_allows_non_loopback_bind(self) -> None:
         # Access mode is a deliberate public bind (the edge gates it), so the
         # non-loopback guard must let a tokenless bind through.

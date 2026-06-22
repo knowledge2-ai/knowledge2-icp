@@ -23,7 +23,7 @@ from .k2_client import K2ApiError, SEARCH_BATCH_MAX_TOP_K
 from .k2_workspace_status import build_k2_workspace_status, run_k2_pipeline_action
 from .mining import mining_to_csv
 from .outreach import summarize_outreach_drafts
-from .prospects import build_run_prospects, prospects_to_csv
+from .prospects import build_lead_prospects, build_run_prospects, prospects_to_csv
 from .research import ResearchPipeline
 from .tenant import TenantConfig
 
@@ -35,6 +35,19 @@ API_SESSION_TTL_SECONDS = 8 * 60 * 60
 
 def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes"}
+
+
+def _find_lead_by_domain(run: dict[str, Any], domain: str) -> dict[str, Any] | None:
+    if not domain:
+        return None
+    for lead in run.get("leads", []):
+        if not isinstance(lead, dict):
+            continue
+        score = lead.get("score", {}) if isinstance(lead.get("score"), dict) else {}
+        company = score.get("company", {}) if isinstance(score.get("company"), dict) else {}
+        if str(company.get("domain") or "").strip().lower() == domain:
+            return lead
+    return None
 
 
 # Public read-only demo allowlist — ported verbatim from the Cloudflare worker's
@@ -747,6 +760,68 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
                     {
                         "lead_state": record,
                         "status_counts": app.store.lead_status_counts(run_id, run),
+                    }
+                )
+                return
+            if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/prospects/reveal"):
+                run_id = parsed.path.split("/")[3]
+                run = app.store.load_run(run_id)
+                if not run:
+                    self._send_json({"error": "Run not found."}, status=HTTPStatus.NOT_FOUND)
+                    return
+                payload = self._read_json()
+                domain = str(payload.get("domain") or "").strip().lower()
+                lead = _find_lead_by_domain(run, domain)
+                if not lead:
+                    self._send_json({"error": "Lead not found for domain."}, status=HTTPStatus.NOT_FOUND)
+                    return
+                apollo = app.pipeline.apollo
+                if not apollo.configured:
+                    self._send_json(
+                        {"error": "Apollo is not configured (APOLLO_API_KEY missing)."},
+                        status=HTTPStatus.SERVICE_UNAVAILABLE,
+                    )
+                    return
+                score = lead.get("score", {}) if isinstance(lead.get("score"), dict) else {}
+                company = score.get("company", {}) if isinstance(score.get("company"), dict) else {}
+                lead_domain = str(company.get("domain") or domain)
+                strategy = lead.get("strategy", {}) if isinstance(lead.get("strategy"), dict) else {}
+                titles = strategy.get("apollo_titles", []) if isinstance(strategy.get("apollo_titles"), list) else []
+                # One People-Match credit per contact is spent here — gate on the same
+                # provider budget as run-time enrichment, and stamp the Access-verified
+                # caller into the audit trail so reveals are attributable.
+                guard = app.store.authorize_provider_action(
+                    "apollo_enrichment",
+                    amount=1,
+                    details={
+                        "domain": lead_domain,
+                        "run_id": run_id,
+                        "trigger": "reveal",
+                        "revealer": self._access_email() or "",
+                    },
+                )
+                if not guard["allowed"]:
+                    self._send_provider_denied(guard)
+                    return
+                try:
+                    result = apollo.search_people(domain=lead_domain, titles=titles)
+                except Exception as exc:
+                    self._send_json({"error": f"Apollo reveal failed: {exc}"}, status=HTTPStatus.BAD_GATEWAY)
+                    return
+                metadata = lead.get("metadata")
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                    lead["metadata"] = metadata
+                metadata["apollo_people"] = result
+                app.store.save_run(run)
+                prospects = build_lead_prospects(run, lead)
+                self._send_json(
+                    {
+                        "domain": lead_domain,
+                        "status": result.get("status"),
+                        "prospect_count": len(prospects),
+                        "revealed_count": sum(1 for item in prospects if item.get("revealed")),
+                        "prospects": prospects,
                     }
                 )
                 return
