@@ -11,12 +11,15 @@
 #   REGION    Cloud Run region         (default: us-central1)
 #   SERVICE   Cloud Run service name   (default: gtm-engine-dev)
 #   REPO      Artifact Registry repo   (default: gtm)
-#   AUTH      one of: readonly | open | token                    — REQUIRED
+#   AUTH      one of: readonly | open | token | access            — REQUIRED
 #               readonly : public reads, writes blocked  (needs the read-only
 #                          mode in web.py — the parity gap vs the worker)
 #               open     : ICP_ALLOW_OPEN_API=true, reads AND writes public
 #               token    : ICP_ADMIN_TOKEN gates everything (not a public demo)
+#               access   : behind Cloudflare Access SSO; full read-write to any
+#                          verified email in ACCESS_DOMAIN (default posterity.ventures)
 #   ADMIN_TOKEN   required only when AUTH=token (read from env, never echoed)
+#   ACCESS_DOMAIN required only when AUTH=access (default: posterity.ventures)
 #
 # Example (after you confirm the target):
 #   PROJECT=ams-gtm-dev AUTH=readonly ./deployment/cloudrun/deploy.sh
@@ -29,7 +32,7 @@ REGION="${REGION:-us-central1}"
 SERVICE="${SERVICE:-gtm-demo}"
 # Reuse the project's existing Artifact Registry repo (created by prior deploys).
 REPO="${REPO:-cloud-run-source-deploy}"
-AUTH="${AUTH:?set AUTH=readonly|open|token}"
+AUTH="${AUTH:?set AUTH=readonly|open|token|access}"
 TAG="$(git rev-parse --short HEAD 2>/dev/null || echo manual)"
 
 if [[ "$PROJECT" == "ams-prod-488315" ]]; then
@@ -55,7 +58,9 @@ case "$AUTH" in
   token)
     : "${ADMIN_TOKEN:?AUTH=token requires ADMIN_TOKEN in env}"
     ENV_VARS="${ENV_VARS},ICP_ADMIN_TOKEN=${ADMIN_TOKEN}" ;;
-  *) echo "AUTH must be readonly|open|token" >&2; exit 1 ;;
+  access)
+    ENV_VARS="${ENV_VARS},ICP_ACCESS_TRUSTED_DOMAIN=${ACCESS_DOMAIN:-posterity.ventures}" ;;
+  *) echo "AUTH must be readonly|open|token|access" >&2; exit 1 ;;
 esac
 
 echo "Building ${IMAGE} ..."
