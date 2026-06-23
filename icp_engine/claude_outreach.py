@@ -91,6 +91,8 @@ ICP CRITERIA (authoritative, versioned):
 
 Rules:
 - Ground every claim in the provided Evidence and Account context. Do NOT invent facts, metrics, headcount, funding, customer names, or product details.
+- Do NOT fabricate sender-side social proof. No "we've helped similar companies", "companies like yours", named customers, case studies, ROI figures, or percentage gains unless that exact claim appears in the ICP CRITERIA or Evidence. When you have no concrete proof point, lead with an observation about THEM, not a claim about us.
+- Do NOT assert the contact's title, seniority, or responsibilities as established fact — the role is an inference. Speak to what someone in that role typically owns ("if you own ...", "the team running ..."), not "as VP of Operations, you ...".
 - Personalize on the MOST RECENT relevant signal. Do not anchor on stale or years-old news — fresh evidence is ranked first and carries a published_at date; lead with it.
 - Follow the supplied message template structure (one beat per sentence, in order).
 - Speak to this specific contact's role and what they own. Keep it to 3-5 short sentences.

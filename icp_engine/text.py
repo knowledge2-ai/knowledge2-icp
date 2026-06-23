@@ -154,3 +154,19 @@ def keyword_hits_boundary(text: str, keywords: list[str]) -> list[str]:
         for keyword in keywords
         if re.search(rf"\b{re.escape(keyword.lower())}\b", lower)
     ]
+
+
+def keyword_counts_boundary(text: str, keywords: list[str]) -> dict[str, int]:
+    """Word-boundary occurrence counts for each keyword present in the text.
+
+    Lets a caller tell genuine focus (one vertical term repeated throughout the
+    copy) from incidental name-drops (many verticals each mentioned once) — the
+    discriminator between a vertical incumbent and a horizontal platform that
+    merely lists the industries it serves."""
+    lower = text.lower()
+    counts: dict[str, int] = {}
+    for keyword in keywords:
+        matches = re.findall(rf"\b{re.escape(keyword.lower())}\b", lower)
+        if matches:
+            counts[keyword] = len(matches)
+    return counts

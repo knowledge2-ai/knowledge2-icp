@@ -34,8 +34,19 @@ workflow.
 
 Priority verticals: automotive, dealer, dealership, fleet, telematics,
 field service, maintenance, logistics, warehouse, construction, property,
-facilities, insurance, claims, healthcare admin, manufacturing, ERP,
-compliance, govtech, permitting, legal, accounting, TMS, WMS, CMMS, RCM.
+real estate, facilities, insurance, claims, healthcare, healthcare admin,
+life sciences, pharma, dental, veterinary, manufacturing, ERP, compliance,
+govtech, government, public sector, permitting, legal, accounting, banking,
+credit union, lending, mortgage, nonprofit, restaurant, hospitality,
+education, retail, grocery, agriculture, energy, utilities, transportation,
+trucking, vertical market, TMS, WMS, CMMS, RCM.
+
+A company anchors to this list when its own product CATEGORY names a vertical
+(e.g. "field service software", "banking software") or one vertical dominates
+its copy — not when it merely name-drops the many industries it sells into.
+Broad/horizontal SaaS that lists several unrelated verticals with no anchor is
+deprioritized to Tier C (or rejected when it positions on unbounded scale), so
+only true vertical incumbents reach Tier A/B.
 
 ## Limited AI traction checks
 
