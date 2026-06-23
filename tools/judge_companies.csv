@@ -1,0 +1,41 @@
+company,domain,category,expected
+ServiceTitan,servicetitan.com,field service management software,fit
+Procore,procore.com,construction management software,fit
+Clio,clio.com,legal practice management software,fit
+Blackbaud,blackbaud.com,nonprofit management software,fit
+Jonas Software,jonassoftware.com,vertical market software,fit
+Toast,toasttab.com,restaurant point of sale software,fit
+Veeva Systems,veeva.com,life sciences CRM software,fit
+Guidewire,guidewire.com,insurance core systems software,fit
+nCino,ncino.com,banking software,fit
+Tyler Technologies,tylertech.com,government software,fit
+CDK Global,cdkglobal.com,automotive dealership software,fit
+Vertafore,vertafore.com,insurance agency software,fit
+AppFolio,appfolio.com,property management software,fit
+RealPage,realpage.com,property management software,fit
+Buildertrend,buildertrend.com,construction management software,fit
+Jobber,getjobber.com,field service software,fit
+Housecall Pro,housecallpro.com,field service software,fit
+Olo,olo.com,restaurant ordering software,fit
+Duck Creek,duckcreek.com,insurance software,fit
+athenahealth,athenahealth.com,healthcare administration software,fit
+OpenAI,openai.com,AI research and products,nonfit
+Anthropic,anthropic.com,AI research and products,nonfit
+Cohere,cohere.com,enterprise AI platform,nonfit
+Mistral AI,mistral.ai,AI foundation models,nonfit
+Hugging Face,huggingface.co,AI platform,nonfit
+Perplexity,perplexity.ai,AI search,nonfit
+Stripe,stripe.com,payments infrastructure,nonfit
+Plaid,plaid.com,financial data infrastructure,nonfit
+Twilio,twilio.com,communications infrastructure,nonfit
+Snowflake,snowflake.com,data cloud platform,nonfit
+Databricks,databricks.com,data and AI platform,nonfit
+Notion,notion.so,productivity software,nonfit
+Slack,slack.com,team collaboration software,nonfit
+Asana,asana.com,work management software,nonfit
+Airtable,airtable.com,no-code database software,nonfit
+Zapier,zapier.com,workflow automation software,nonfit
+HubSpot,hubspot.com,CRM and marketing software,nonfit
+Datadog,datadoghq.com,observability platform,nonfit
+Figma,figma.com,design software,nonfit
+Vercel,vercel.com,developer platform,nonfit

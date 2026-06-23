@@ -3,9 +3,22 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import asdict
+from typing import Any
 
 from .evidence import select_prompt_evidence
 from .models import Classification, CompanyInput, Evidence
+
+
+OUTREACH_SCHEMA = {
+    "type": "OBJECT",
+    "required": ["subject", "body", "cta", "angle"],
+    "properties": {
+        "subject": {"type": "STRING"},
+        "body": {"type": "STRING"},
+        "cta": {"type": "STRING"},
+        "angle": {"type": "STRING"},
+    },
+}
 
 
 RESPONSE_SCHEMA = {
@@ -19,6 +32,7 @@ RESPONSE_SCHEMA = {
         "confidence",
         "reasons",
         "evidence_ids",
+        "ai_narrative",
     ],
     "properties": {
         "ai_posture": {"type": "INTEGER"},
@@ -29,6 +43,7 @@ RESPONSE_SCHEMA = {
         "confidence": {"type": "NUMBER"},
         "reasons": {"type": "OBJECT"},
         "evidence_ids": {"type": "OBJECT"},
+        "ai_narrative": {"type": "STRING"},
     },
 }
 
@@ -91,7 +106,79 @@ def classify_with_gemini(company: CompanyInput, evidence: list[Evidence]) -> Cla
         },
         confidence=float(payload["confidence"]),
         source=f"gemini:{model}",
+        ai_narrative=str(payload.get("ai_narrative", "")),
     )
+
+
+def generate_outreach(
+    company: CompanyInput,
+    persona: dict[str, Any],
+    evidence: list[Evidence],
+    *,
+    role: str = "",
+    account_context: str = "",
+    criteria_markdown: str = "",
+    signal_tags: list[str] | None = None,
+) -> dict[str, str]:
+    """Draft a personalized first-touch email with Gemini-on-Vertex.
+
+    Mirrors ``claude_outreach.generate_outreach`` and deliberately reuses its
+    prompt builders (same seller voice, template scaffold, grounding rules) so the
+    only difference is the model/transport — a keyless Vertex call vs the Anthropic
+    SDK. This lets the demo produce outreach (and have it faithfulness-judged) with
+    only GCP access. Raises ``GeminiUnavailable`` when the SDK or ADC env is missing
+    so callers can fall back to the deterministic template.
+    """
+    # Imported lazily and locally to avoid a hard import cycle and to keep the
+    # Claude path the single source of truth for the prompt text.
+    from .claude_outreach import _outreach_prompt, _system_prompt
+    from .outreach_templates import select_template
+
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError as exc:
+        raise GeminiUnavailable("Install optional dependency with `pip install .[gemini]`.") from exc
+
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT")
+    location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
+    credentials = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if not project or not credentials:
+        raise GeminiUnavailable(
+            "Set GOOGLE_APPLICATION_CREDENTIALS and GOOGLE_CLOUD_PROJECT to enable Gemini."
+        )
+
+    model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+    template = select_template(persona, signal_tags)
+    system_prompt = _system_prompt(criteria_markdown)
+    user_prompt = _outreach_prompt(company, persona, evidence, role, account_context, template)
+    _write_prompt_debug(f"{company.company}-outreach", f"{system_prompt}\n\n{user_prompt}")
+
+    client = genai.Client(vertexai=True, project=project, location=location)
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=f"{system_prompt}\n\n{user_prompt}",
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_json_schema=OUTREACH_SCHEMA,
+                temperature=0.3,
+            ),
+        )
+    finally:
+        close = getattr(client, "close", None)
+        if callable(close):
+            close()
+
+    payload = json.loads(response.text)
+    return {
+        "subject": str(payload.get("subject", "")).strip(),
+        "body": str(payload.get("body", "")).strip(),
+        "cta": str(payload.get("cta", "")).strip(),
+        "angle": str(payload.get("angle", "")).strip(),
+        "template": template.name,
+        "model": f"gemini:{model}",
+    }
 
 
 def _prompt(company: CompanyInput, evidence: list[Evidence]) -> str:
@@ -124,6 +211,9 @@ Rules:
 - Do not count the word "intelligence" as AI unless the evidence explicitly says AI, artificial intelligence, machine learning, GPT, LLM, copilot, assistant, or agent.
 - Return evidence_ids that support each score.
 - Keep confidence low when evidence is sparse.
+- ai_narrative: 1-2 sentences on what the company is building in AI, grounded ONLY in the
+  evidence; if the evidence shows no visible AI, say so plainly. Do not invent product names,
+  customers, or metrics that are not in the evidence.
 
 Company:
 {json.dumps(asdict(company), indent=2)}

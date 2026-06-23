@@ -123,7 +123,7 @@ class ClaudeOutreachTest(unittest.TestCase):
         # ...and its numbered beats are injected into the user prompt for the LLM to fill.
         user_prompt = str(client.messages.calls[0]["messages"])
         self.assertIn("exec-ai-urgency", user_prompt)
-        self.assertIn("category positioning", user_prompt)
+        self.assertIn("hardest part of an AI strategy", user_prompt)
         self.assertIn("published_at", user_prompt)
 
     def test_missing_tool_call_raises_claude_unavailable(self) -> None:
