@@ -71,7 +71,7 @@ def research_companies(
         return [], ["Research brief is empty."]
     settings = config or {}
     model = str(settings.get("model") or os.environ.get("ICP_PERPLEXITY_MODEL", DEFAULT_MODEL))
-    max_tokens = int(settings.get("max_tokens") or _int_env("ICP_PERPLEXITY_MAX_TOKENS", 1024))
+    max_tokens = _token_budget(max_results, settings)
     system_prompt = _system_prompt(criteria_markdown)
     user_prompt = _research_prompt(brief, max_results)
     _write_prompt_debug(brief, f"{system_prompt}\n\n{user_prompt}")
@@ -163,13 +163,18 @@ def _candidates_from_response(
     content, citations = _extract_content_and_citations(response)
     if not content.strip():
         return [], ["Perplexity returned no research content."]
+    salvaged = False
     try:
         data = json.loads(content)
     except json.JSONDecodeError:
-        return [], ["Perplexity returned non-JSON research content."]
-    companies = data.get("companies") if isinstance(data, dict) else None
-    if not isinstance(companies, list):
-        return [], ["Perplexity research payload had no companies array."]
+        companies = _salvage_companies(content)
+        if companies is None:
+            return [], ["Perplexity returned non-JSON research content."]
+        salvaged = True
+    else:
+        companies = data.get("companies") if isinstance(data, dict) else None
+        if not isinstance(companies, list):
+            return [], ["Perplexity research payload had no companies array."]
 
     candidates: list[DiscoveryCandidate] = []
     seen: set[str] = set()
@@ -197,7 +202,75 @@ def _candidates_from_response(
             break
 
     warnings = [] if candidates else ["No company domains were discovered from Perplexity research."]
+    if salvaged:
+        warnings.append(
+            "Perplexity response was truncated; recovered the complete leading entries. "
+            "Raise ICP_PERPLEXITY_MAX_TOKENS or lower max_results for the full list."
+        )
     return candidates, warnings
+
+
+def _salvage_companies(content: str) -> list[dict[str, Any]] | None:
+    """Recover complete leading objects from a truncated ``companies`` array.
+
+    When Sonar overruns its token budget it cuts the JSON mid-object, so a strict
+    ``json.loads`` of the whole payload fails and every sourced company is lost.
+    Here we scan the array and keep each fully-closed ``{...}`` object, stopping at
+    the first incomplete one — turning the all-or-nothing cliff into a graceful
+    "got N of the list." Returns ``None`` when there is no recoverable array."""
+    marker = content.find('"companies"')
+    if marker == -1:
+        return None
+    start = content.find("[", marker)
+    if start == -1:
+        return None
+    objects: list[dict[str, Any]] = []
+    index = start + 1
+    length = len(content)
+    while index < length:
+        while index < length and content[index] in " \t\r\n,":
+            index += 1
+        if index >= length or content[index] != "{":
+            break
+        obj, end = _scan_balanced_object(content, index)
+        if obj is None:
+            break
+        objects.append(obj)
+        index = end
+    return objects or None
+
+
+def _scan_balanced_object(content: str, start: int) -> tuple[dict[str, Any] | None, int]:
+    """Parse one brace-balanced JSON object starting at ``start`` (a ``{``).
+
+    Tracks string state so braces inside ``"reason"`` strings don't confuse the
+    depth count. Returns ``(parsed, end_index)`` for a closed object, or
+    ``(None, start)`` if the object is truncated before its closing brace."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for cursor in range(start, len(content)):
+        char = content[cursor]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(content[start : cursor + 1]), cursor + 1
+                except json.JSONDecodeError:
+                    return None, start
+    return None, start
 
 
 def _extract_content_and_citations(response: Any) -> tuple[str, list[str]]:
@@ -263,11 +336,29 @@ def _research_prompt(brief: str, max_results: int) -> str:
     )
 
 
-def _int_env(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, str(default)))
-    except (TypeError, ValueError):
-        return default
+# Output-token sizing. Each company object (company + domain + reason sentence)
+# costs ~70-110 output tokens of structured JSON. A fixed 1024-token cap therefore
+# truncated the array past ~15 companies, so the budget must scale with the request.
+_MIN_OUTPUT_TOKENS = 1024
+_BASE_OUTPUT_TOKENS = 512
+_TOKENS_PER_COMPANY = 110
+_MAX_OUTPUT_TOKENS = 8192
+
+
+def _token_budget(max_results: int, settings: dict[str, Any]) -> int:
+    """Output-token budget for the completion, scaled to the requested count.
+
+    An explicit ``max_tokens`` (config or ``ICP_PERPLEXITY_MAX_TOKENS``) always
+    wins; otherwise the budget grows with ``max_results`` between a 1024 floor and
+    an 8192 ceiling so the structured array has room to close."""
+    for override in (settings.get("max_tokens"), os.environ.get("ICP_PERPLEXITY_MAX_TOKENS")):
+        if override:
+            try:
+                return int(override)
+            except (TypeError, ValueError):
+                pass
+    estimate = _BASE_OUTPUT_TOKENS + _TOKENS_PER_COMPANY * max(1, max_results)
+    return min(_MAX_OUTPUT_TOKENS, max(_MIN_OUTPUT_TOKENS, estimate))
 
 
 def _write_prompt_debug(brief: str, prompt: str) -> None:

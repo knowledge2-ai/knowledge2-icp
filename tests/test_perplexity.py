@@ -91,6 +91,41 @@ class ResearchCompaniesTests(unittest.TestCase):
         self.assertNotIn("TAIL-MARKER", system_message)
         self.assertIn("truncated for sourcing", system_message)
 
+    def test_max_tokens_scales_with_max_results(self) -> None:
+        # The output budget must grow with the requested company count. A fixed
+        # 1024-token cap truncated the structured JSON array past ~15 companies,
+        # making json.loads fail and discovery return zero (the "0 cliff").
+        client = _StubClient(_sonar_response([{"company": "X", "domain": "x.com"}]))
+        research_companies("brief", max_results=40, client=client)
+        self.assertGreater(int(client.calls[0]["max_tokens"]), 1024)
+
+    def test_small_request_keeps_a_sane_floor(self) -> None:
+        client = _StubClient(_sonar_response([{"company": "X", "domain": "x.com"}]))
+        research_companies("brief", max_results=3, client=client)
+        self.assertGreaterEqual(int(client.calls[0]["max_tokens"]), 1024)
+
+    def test_explicit_max_tokens_override_is_respected(self) -> None:
+        client = _StubClient(_sonar_response([{"company": "X", "domain": "x.com"}]))
+        research_companies("brief", max_results=40, client=client, config={"max_tokens": 777})
+        self.assertEqual(int(client.calls[0]["max_tokens"]), 777)
+
+    def test_truncated_json_array_is_salvaged(self) -> None:
+        # Sonar overran its token budget and cut the array mid-object. We should
+        # still recover the complete leading entries instead of returning zero.
+        companies = [
+            {"company": f"C{i}", "domain": f"c{i}.com", "reason": "fits the ICP"}
+            for i in range(20)
+        ]
+        full = json.dumps({"companies": companies})
+        truncated = full[: full.index("c12.com")]  # cut inside object 12's domain value
+        client = _StubClient({"choices": [{"message": {"content": truncated}}]})
+
+        candidates, warnings = research_companies("brief", max_results=20, client=client)
+
+        self.assertGreaterEqual(len(candidates), 10)
+        self.assertEqual(candidates[0].domain, "c0.com")
+        self.assertTrue(any("truncat" in w.lower() for w in warnings))
+
     def test_empty_brief_returns_warning(self) -> None:
         candidates, warnings = research_companies("   ", client=_StubClient(_sonar_response([])))
         self.assertEqual(candidates, [])
