@@ -228,6 +228,65 @@ VERTICAL_DOMINANT_MIN = 4          # one term repeated >= this often = genuine f
 VERTICAL_DOMINANT_MAX_DISTINCT = 2  # ...but only if <= this many distinct verticals appear
 VERTICAL_SCATTER_MIN = 4           # naming >= this many distinct verticals with no anchor = horizontal tell
 
+# Some priority terms name a horizontal CAPABILITY (a module every vertical-market
+# product ships), not a target market. A single-vertical incumbent that lists its
+# modules — a construction ERP describing "accounting, erp, maintenance" — was
+# tripping the scatter tell, which counts distinct priority terms. These terms
+# describe HOW the software works, not WHICH market it serves, so they do not add
+# to the distinct-market count. (They can still appear in copy and contribute to
+# scoring; they just cannot, by themselves, make a focused incumbent look broad.)
+FUNCTIONAL_TERMS = frozenset({
+    "erp",
+    "accounting",
+    "compliance",
+    "maintenance",
+    "facilities",
+})
+
+# Synonyms / near-duplicates that name the SAME market. Counting "dealer",
+# "dealership", and "automotive" as three distinct verticals overstates breadth
+# for one auto-retail incumbent. Each term maps to a canonical market cluster so
+# the scatter count reflects distinct MARKETS, not distinct vocabulary.
+VERTICAL_SYNONYMS = {
+    "dealer": "automotive-retail",
+    "dealership": "automotive-retail",
+    "automotive": "automotive-retail",
+    "property": "real-estate",
+    "real estate": "real-estate",
+    "banking": "financial-services",
+    "credit union": "financial-services",
+    "lending": "financial-services",
+    "mortgage": "financial-services",
+    "life sciences": "health",
+    "pharma": "health",
+    "healthcare": "health",
+    "dental": "health",
+    "veterinary": "health",
+    "logistics": "supply-chain",
+    "warehouse": "supply-chain",
+    "transportation": "supply-chain",
+    "trucking": "supply-chain",
+    "government": "public-sector",
+    "public sector": "public-sector",
+}
+
+
+def _market_clusters(counts: dict[str, int]) -> dict[str, int]:
+    """Collapse raw priority-term hit counts into distinct MARKET clusters.
+
+    Drops horizontal-capability terms (``FUNCTIONAL_TERMS``) and folds synonyms
+    (``VERTICAL_SYNONYMS``) into one canonical market, summing their counts. This
+    is what the anchor/scatter logic reasons over so that "names many modules" and
+    "names one market several ways" no longer read as "serves many verticals."
+    """
+    clusters: dict[str, int] = {}
+    for term, count in counts.items():
+        if term in FUNCTIONAL_TERMS:
+            continue
+        cluster = VERTICAL_SYNONYMS.get(term, term)
+        clusters[cluster] = clusters.get(cluster, 0) + count
+    return clusters
+
 
 def score_company(
     company: CompanyInput,
@@ -400,9 +459,12 @@ def _vertical_anchor(company: CompanyInput, text: str, profile: CriteriaProfile)
     into."""
     terms = profile.priority_terms or HIGH_PRIORITY_VERTICALS
     category_hits = keyword_hits_boundary(company.category, terms)
-    counts = keyword_counts_boundary(text, terms)
-    distinct = sorted(counts)
-    top_n = max(counts.values(), default=0)
+    # Reason over distinct MARKET clusters, not raw term hits: horizontal-capability
+    # terms (modules) are dropped and synonyms folded, so a focused incumbent that
+    # names its modules or its one market several ways is not mistaken for broad SaaS.
+    clusters = _market_clusters(keyword_counts_boundary(text, terms))
+    distinct = sorted(clusters)
+    top_n = max(clusters.values(), default=0)
     anchored = bool(category_hits) or (
         top_n >= VERTICAL_DOMINANT_MIN and len(distinct) <= VERTICAL_DOMINANT_MAX_DISTINCT
     )
