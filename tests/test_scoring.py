@@ -263,6 +263,62 @@ class ScoringTests(unittest.TestCase):
         self.assertNotEqual(result.tier, "Reject")
         self.assertFalse(result.hard_gate_failed)
 
+    def test_single_vertical_incumbent_naming_functional_modules_not_rejected(self):
+        # Regression: a single-vertical incumbent (construction software) that
+        # describes its functional MODULES — accounting, ERP, maintenance — must
+        # not read as horizontal. Those are capabilities every VMS ships, not
+        # separate markets. Before the fix the scatter gate counted each module
+        # term as a distinct "vertical" and false-rejected deep vertical fits like
+        # Jonas Construction / Ibcos (scored 70+ yet Rejected).
+        company = CompanyInput(
+            company="BuildOps Core",
+            domain="example.com",
+            category="business management software",
+            founded_year=1990,
+            employee_count=300,
+        )
+        evidence = [
+            Evidence(
+                "e1",
+                "https://example.com",
+                "Construction",
+                "Construction management software for contractors: job costing, accounting, erp, "
+                "field service, maintenance, scheduling, proprietary data, recurring workflow, "
+                "API integrations, analytics.",
+            )
+        ]
+
+        result = score_company(company, evidence)
+
+        self.assertNotEqual(result.tier, "Reject")
+        self.assertFalse(result.hard_gate_failed)
+
+    def test_synonym_vertical_terms_do_not_count_as_scatter(self):
+        # Regression: synonym terms for ONE vertical (dealer / dealership /
+        # automotive for an auto-dealer VMS) must collapse to a single market, not
+        # count as three distinct verticals toward the horizontal-scatter tell.
+        company = CompanyInput(
+            company="DealerCore",
+            domain="example.com",
+            category="business management software",
+            founded_year=1985,
+            employee_count=250,
+        )
+        evidence = [
+            Evidence(
+                "e1",
+                "https://example.com",
+                "Dealer",
+                "Dealer management software for automotive dealers and dealerships: parts, service, "
+                "accounting, compliance, proprietary data, recurring workflow, API integrations.",
+            )
+        ]
+
+        result = score_company(company, evidence)
+
+        self.assertNotEqual(result.tier, "Reject")
+        self.assertFalse(result.hard_gate_failed)
+
     def test_unknown_founding_year_creates_review_flag_not_pass(self):
         company = CompanyInput(
             company="Unknown Co",

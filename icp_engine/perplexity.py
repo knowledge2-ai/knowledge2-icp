@@ -220,8 +220,31 @@ def _extract_content_and_citations(response: Any) -> tuple[str, list[str]]:
     return content, urls
 
 
+# A full analyst ICP rubric runs ~17KB and embeds internal methodology — hard
+# gates, scoring math, TAM models, exclusion definitions. Handed wholesale to
+# Sonar as "authoritative criteria," the model applies the gating itself and
+# returns an empty companies array (observed: >=8KB rubric -> 0 results, while
+# the same brief with <=4KB returns a full list). Discovery only needs the
+# decision-relevant head of the doc (the "bottom line" + hard gates), so we cap
+# the injected rubric. The downstream qualifier still scores against the full
+# criteria; this bound only governs what we ask the web-research model to source.
+_DISCOVERY_CRITERIA_CHAR_BUDGET = 4000
+
+
+def _bounded_rubric(criteria_markdown: str) -> str:
+    rubric = criteria_markdown.strip()
+    if len(rubric) <= _DISCOVERY_CRITERIA_CHAR_BUDGET:
+        return rubric
+    head = rubric[:_DISCOVERY_CRITERIA_CHAR_BUDGET]
+    # Cut back to the last paragraph break so we don't truncate mid-sentence.
+    cut = head.rfind("\n\n")
+    if cut > _DISCOVERY_CRITERIA_CHAR_BUDGET // 2:
+        head = head[:cut]
+    return f"{head.rstrip()}\n\n(Criteria truncated for sourcing; full rubric applied downstream.)"
+
+
 def _system_prompt(criteria_markdown: str) -> str:
-    rubric = criteria_markdown.strip() or "(no criteria provided)"
+    rubric = _bounded_rubric(criteria_markdown) or "(no criteria provided)"
     return f"""You are a B2B GTM research analyst sourcing companies for a lead-generation funnel.
 Find real, currently-operating companies that fit the ICP criteria below using live web research.
 

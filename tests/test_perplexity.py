@@ -75,6 +75,22 @@ class ResearchCompaniesTests(unittest.TestCase):
         system_message = client.calls[0]["messages"][0]["content"]
         self.assertIn("UNIQUE-RUBRIC-MARKER-XYZ", system_message)
 
+    def test_oversized_criteria_is_bounded_in_system_prompt(self) -> None:
+        # A full analyst rubric (~17KB) over-constrains Sonar into returning an
+        # empty list; discovery only injects the decision-relevant head.
+        client = _StubClient(_sonar_response([{"company": "X", "domain": "x.com"}]))
+        # Realistic rubric shape: paragraph-broken sections, the gating tail far
+        # past the budget.
+        head = "HEAD-MARKER bottom line and hard gates.\n\n"
+        filler = "".join(f"Section {i} of the rubric methodology.\n\n" for i in range(200))  # ~7KB
+        tail = "\n\nTAIL-MARKER exclusion methodology that silences Sonar."
+        research_companies("brief", criteria_markdown=head + filler + tail, client=client)
+
+        system_message = client.calls[0]["messages"][0]["content"]
+        self.assertIn("HEAD-MARKER", system_message)
+        self.assertNotIn("TAIL-MARKER", system_message)
+        self.assertIn("truncated for sourcing", system_message)
+
     def test_empty_brief_returns_warning(self) -> None:
         candidates, warnings = research_companies("   ", client=_StubClient(_sonar_response([])))
         self.assertEqual(candidates, [])
