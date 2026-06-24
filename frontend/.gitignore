@@ -1,0 +1,8 @@
+# Dependencies — restored via `npm install`, never committed.
+node_modules/
+
+# Local Vite/dev artifacts. The production build output is committed
+# separately under ../icp_engine/web_console (shipped in the Cloud Run image).
+dist/
+*.local
+.DS_Store
