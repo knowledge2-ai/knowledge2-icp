@@ -2,7 +2,80 @@ from __future__ import annotations
 
 import unittest
 
-from icp_engine.text import extract_published_date
+from icp_engine.text import extract_published_date, html_to_text, html_to_text_and_links
+
+
+class ChromeStrippingTest(unittest.TestCase):
+    """Page chrome (nav / header / footer / cookie banners) routinely lists every
+    industry a parent group or platform serves. Folded into the body text it makes a
+    single-vertical incumbent look like a horizontal that names 5 markets, tripping
+    the vertical-scatter gate. The extractor must drop chrome text while keeping the
+    real body — and must still surface chrome links so crawl discovery survives."""
+
+    def test_nav_mega_menu_industries_excluded_from_text(self) -> None:
+        html = (
+            "<header><nav>Industries Automotive Construction Education Healthcare "
+            "Manufacturing Public Sector</nav></header>"
+            "<main><h1>Ibcos Gold</h1><p>Dealer management software for agricultural "
+            "and groundcare equipment dealers.</p></main>"
+        )
+        _, text = html_to_text(html)
+        self.assertIn("agricultural", text)
+        self.assertIn("Dealer management", text)
+        for chrome_term in ("Automotive", "Construction", "Education", "Healthcare", "Public Sector"):
+            self.assertNotIn(chrome_term, text)
+
+    def test_footer_industries_list_excluded(self) -> None:
+        html = (
+            "<main><p>Property management for residential landlords.</p></main>"
+            "<footer>Industries we serve: automotive banking healthcare logistics legal "
+            "retail manufacturing</footer>"
+        )
+        _, text = html_to_text(html)
+        self.assertIn("Property management", text)
+        for chrome_term in ("automotive", "banking", "healthcare", "logistics", "legal"):
+            self.assertNotIn(chrome_term, text)
+
+    def test_div_role_and_class_chrome_excluded(self) -> None:
+        html = (
+            '<div class="site-footer">Solutions for automotive construction education '
+            'manufacturing</div>'
+            '<div role="navigation">Banking Insurance Mortgage Lending</div>'
+            "<main><p>Veterinary practice management.</p></main>"
+        )
+        _, text = html_to_text(html)
+        self.assertIn("Veterinary", text)
+        for chrome_term in ("automotive", "construction", "Banking", "Insurance", "Mortgage"):
+            self.assertNotIn(chrome_term, text)
+
+    def test_chrome_links_still_collected_for_crawl_discovery(self) -> None:
+        html = (
+            '<nav><a href="/product">Product</a><a href="/pricing">Pricing</a></nav>'
+            '<main><p>Body</p><a href="/case-studies">Stories</a></main>'
+        )
+        _, _, links = html_to_text_and_links(html, "https://example.com/")
+        self.assertIn("https://example.com/product", links)
+        self.assertIn("https://example.com/pricing", links)
+        self.assertIn("https://example.com/case-studies", links)
+
+    def test_real_body_content_preserved(self) -> None:
+        html = (
+            "<main><article><section>"
+            "<p>Our construction ERP unifies accounting, field service and maintenance "
+            "for specialty contractors.</p>"
+            "</section></article></main>"
+        )
+        _, text = html_to_text(html)
+        self.assertIn("construction ERP", text)
+        self.assertIn("specialty contractors", text)
+
+    def test_content_div_not_falsely_treated_as_chrome(self) -> None:
+        # A class containing a chrome-ish substring (e.g. "header-hero") is real
+        # content, not chrome — only exact chrome tokens should be stripped.
+        html = '<div class="header-hero"><p>Logistics and freight visibility platform.</p></div>'
+        _, text = html_to_text(html)
+        self.assertIn("Logistics", text)
+        self.assertIn("freight visibility", text)
 
 
 class ExtractPublishedDateTest(unittest.TestCase):
