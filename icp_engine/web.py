@@ -30,8 +30,20 @@ from .tenant import TenantConfig
 
 
 ASSET_DIR = Path(__file__).with_name("web_assets")
+# The rebuilt React/Tailwind console (Vite build output). When present it is
+# served in place of the legacy vanilla SPA in web_assets/. Set ICP_USE_LEGACY_SPA=1
+# to force the legacy SPA even when a console build exists (instant rollback).
+CONSOLE_DIR = Path(__file__).with_name("web_console")
 APP_VERSION = "0.1.0"
 API_SESSION_TTL_SECONDS = 8 * 60 * 60
+
+
+def _active_asset_dir() -> Path:
+    """The directory the SPA is served from: the new console build when it exists
+    and isn't explicitly disabled, otherwise the legacy web_assets/ SPA."""
+    if not _env_flag("ICP_USE_LEGACY_SPA") and (CONSOLE_DIR / "index.html").is_file():
+        return CONSOLE_DIR
+    return ASSET_DIR
 
 
 def _env_flag(name: str) -> bool:
@@ -1001,7 +1013,15 @@ def make_handler(app: GTMApp) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
 
         def _asset_path(self, name: str) -> Path:
-            return ASSET_DIR / Path(name).name
+            base = _active_asset_dir()
+            safe = Path(name).name  # basename only — guards against path traversal
+            # Vite emits hashed bundles under assets/; the /assets/<f> route arrives
+            # here as <f>, so probe the assets/ subdir first for the console build.
+            if base is CONSOLE_DIR:
+                candidate = base / "assets" / safe
+                if candidate.is_file():
+                    return candidate
+            return base / safe
 
         def _send_json(self, payload: dict[str, Any], *, status: HTTPStatus = HTTPStatus.OK) -> None:
             body = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")

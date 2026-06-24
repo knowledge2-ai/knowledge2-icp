@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -13,6 +14,7 @@ from urllib.request import Request, urlopen
 from icp_engine.app_store import AppStore
 from icp_engine.models import CompanyInput, Evidence
 from icp_engine.research import ResearchPipeline
+from icp_engine import web as web_module
 from icp_engine.web import (
     GTMApp,
     _is_loopback_bind_host,
@@ -1000,6 +1002,90 @@ def _text_post(url: str, payload: dict[str, object], headers: dict[str, str] | N
     request = Request(url, data=json.dumps(payload).encode("utf-8"), method="POST", headers=request_headers)
     with urlopen(request, timeout=5) as response:
         return response.read().decode("utf-8"), response.headers.get("Content-Type", "")
+
+
+class ConsoleServingTest(unittest.TestCase):
+    """The Vite console build (icp_engine/web_console) is served in place of the
+    legacy vanilla SPA when present, unless ICP_USE_LEGACY_SPA forces a rollback.
+    These constants are patched to temp dirs so the test is hermetic and does not
+    depend on whether a real build is checked in."""
+
+    def _serve(self, console_dir: Path, legacy_dir: Path):
+        app = GTMApp(store=AppStore(legacy_dir.parent / "store"))
+        server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        return server, thread, base_url
+
+    def test_console_build_served_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            console = root / "web_console"
+            (console / "assets").mkdir(parents=True)
+            (console / "index.html").write_text(
+                '<!doctype html><script type="module" src="/assets/index-abc123.js"></script>',
+                encoding="utf-8",
+            )
+            (console / "assets" / "index-abc123.js").write_text("console.log('built')", encoding="utf-8")
+            legacy = root / "web_assets"
+            legacy.mkdir()
+            (legacy / "index.html").write_text('<html><script src="/assets/app.js"></script></html>', encoding="utf-8")
+
+            with patch.object(web_module, "CONSOLE_DIR", console), patch.object(web_module, "ASSET_DIR", legacy):
+                server, thread, base_url = self._serve(console, legacy)
+                try:
+                    index = _text_get(f"{base_url}/")
+                    self.assertIn("/assets/index-abc123.js", index)
+                    self.assertNotIn("/assets/app.js", index)
+
+                    # The /assets/<hashed> route resolves into web_console/assets/.
+                    bundle = _text_get(f"{base_url}/assets/index-abc123.js")
+                    self.assertEqual(bundle, "console.log('built')")
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=2)
+
+    def test_legacy_spa_served_when_no_console_build(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            console = root / "web_console"  # intentionally not created
+            legacy = root / "web_assets"
+            legacy.mkdir()
+            (legacy / "index.html").write_text('<html><script src="/assets/app.js"></script></html>', encoding="utf-8")
+
+            with patch.object(web_module, "CONSOLE_DIR", console), patch.object(web_module, "ASSET_DIR", legacy):
+                server, thread, base_url = self._serve(console, legacy)
+                try:
+                    self.assertIn("/assets/app.js", _text_get(f"{base_url}/"))
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=2)
+
+    def test_legacy_flag_forces_rollback_even_with_console_build(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            console = root / "web_console"
+            console.mkdir()
+            (console / "index.html").write_text('<script src="/assets/index-abc123.js"></script>', encoding="utf-8")
+            legacy = root / "web_assets"
+            legacy.mkdir()
+            (legacy / "index.html").write_text('<html><script src="/assets/app.js"></script></html>', encoding="utf-8")
+
+            with patch.object(web_module, "CONSOLE_DIR", console), patch.object(web_module, "ASSET_DIR", legacy), patch.dict(
+                os.environ, {"ICP_USE_LEGACY_SPA": "1"}
+            ):
+                server, thread, base_url = self._serve(console, legacy)
+                try:
+                    index = _text_get(f"{base_url}/")
+                    self.assertIn("/assets/app.js", index)
+                    self.assertNotIn("index-abc123.js", index)
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=2)
 
 
 if __name__ == "__main__":
