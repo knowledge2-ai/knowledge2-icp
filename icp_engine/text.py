@@ -7,6 +7,44 @@ from html.parser import HTMLParser
 from urllib.parse import urljoin
 
 
+# Tags whose text is never page content.
+_SKIP_TAGS = {"script", "style", "noscript", "svg"}
+# Semantic chrome: site nav, banners, footers, and sidebars. Their text routinely
+# lists every industry a parent group or platform serves, which contaminates the
+# vertical signal of a single-vertical incumbent. Stripped from text — but their
+# links are still collected so crawl discovery (product/pricing/docs pages) survives.
+_CHROME_TAGS = {"nav", "header", "footer", "aside"}
+_CHROME_ROLES = {"navigation", "banner", "contentinfo", "menu", "menubar", "search"}
+_CHROME_CLASS_TOKENS = {
+    "nav", "navbar", "navigation", "menu", "megamenu", "mega-menu", "header",
+    "site-header", "masthead", "footer", "site-footer", "breadcrumb", "breadcrumbs",
+    "cookie", "cookies", "cookie-banner", "sidebar",
+}
+_CHROME_CLASS_SUFFIXES = ("-nav", "-navbar", "-navigation", "-menu", "-footer", "-header")
+_CHROME_CLASS_PREFIXES = ("nav-", "navbar-", "menu-", "megamenu-", "footer-")
+# Void elements never get a matching end tag, so they must not be pushed onto the
+# open-tag stack or it would never balance.
+_VOID_TAGS = {
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
+    "param", "source", "track", "wbr",
+}
+
+
+def _is_chrome_element(tag: str, attrs_dict: dict[str, str | None]) -> bool:
+    if tag in _CHROME_TAGS:
+        return True
+    role = (attrs_dict.get("role") or "").strip().lower()
+    if role in _CHROME_ROLES:
+        return True
+    identifiers = f"{attrs_dict.get('class') or ''} {attrs_dict.get('id') or ''}".lower()
+    for token in identifiers.split():
+        if token in _CHROME_CLASS_TOKENS:
+            return True
+        if token.endswith(_CHROME_CLASS_SUFFIXES) or token.startswith(_CHROME_CLASS_PREFIXES):
+            return True
+    return False
+
+
 class _HTMLTextExtractor(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -15,26 +53,48 @@ class _HTMLTextExtractor(HTMLParser):
         self._in_title = False
         self.parts: list[str] = []
         self.links: list[str] = []
+        # Stack of currently-open non-void tags, and the stack depth at which the
+        # outermost enclosing chrome element began (None when not inside chrome).
+        self._open_tags: list[str] = []
+        self._chrome_floor: int | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag = tag.lower()
         attrs_dict = dict(attrs)
-        if tag in {"script", "style", "noscript", "svg"}:
+        if tag in _SKIP_TAGS:
             self._skip_depth += 1
         if tag == "title":
             self._in_title = True
+        # Links are collected even inside chrome so nav/footer links still feed
+        # crawl discovery; only the chrome *text* is dropped.
         if tag == "a" and attrs_dict.get("href"):
             self.links.append(attrs_dict["href"] or "")
+        if tag in _VOID_TAGS:
+            return
+        if self._chrome_floor is None and _is_chrome_element(tag, attrs_dict):
+            self._chrome_floor = len(self._open_tags)
+        self._open_tags.append(tag)
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
-        if tag in {"script", "style", "noscript", "svg"} and self._skip_depth:
+        if tag in _SKIP_TAGS and self._skip_depth:
             self._skip_depth -= 1
         if tag == "title":
             self._in_title = False
+        if tag in _VOID_TAGS:
+            return
+        # Pop back to (and including) the most recent matching open tag, tolerating
+        # unclosed children, so malformed markup can't strand the stack.
+        if tag in self._open_tags:
+            while self._open_tags:
+                popped = self._open_tags.pop()
+                if popped == tag:
+                    break
+        if self._chrome_floor is not None and len(self._open_tags) <= self._chrome_floor:
+            self._chrome_floor = None
 
     def handle_data(self, data: str) -> None:
-        if self._skip_depth:
+        if self._skip_depth or self._chrome_floor is not None:
             return
         cleaned = normalize_whitespace(data)
         if not cleaned:
