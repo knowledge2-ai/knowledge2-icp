@@ -368,6 +368,37 @@ curl -sS -X POST localhost:8787/api/settings \
 > The Cloudflare Worker is frozen. Research discovery is Python-only; the Worker
 > mirror is out of scope.
 
+## Keyless company discovery (Parallel)
+
+Select `parallel` to discover company websites with free
+[Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp), powered
+by Fast mode. No account, API key, or model is needed. Install the optional MCP
+client with `pip install -e ".[parallel]"`. Search results flow into the existing
+candidate preview, source scans,
+and qualification pipeline with their source URLs.
+
+Save the provider through the settings API (include your admin token when enabled):
+
+```bash
+curl -sS -H "Authorization: Bearer $ICP_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"discovery_provider":"parallel"}' \
+  http://127.0.0.1:8765/api/settings
+```
+
+Then use the dashboard's company search or create a run with a search query.
+The saved choice survives restarts. `auto` remains the default, with its existing
+Perplexity → Serper → DuckDuckGo behavior; select `auto` again to restore it.
+Parallel selection takes precedence over configured Perplexity/Serper keys and
+does not fall back to another provider on an error. Failures, including service
+quotas, appear as warnings. Anonymous access is rate limited.
+
+Requests go to `https://search.parallel.ai/mcp` with a ten-second timeout budget
+for initialization, tool discovery, and search. Existing API authorization and
+search budgets apply. Set `use_serp_discovery` to `false` to disable Parallel
+requests; manual seeds and selected candidates remain usable. Website evidence
+fetching continues through the existing fetcher. This integration is Python-only.
+
 ## Personalized outreach (Claude + K2)
 
 Each qualified lead carries a **structured buying committee** — the flat persona

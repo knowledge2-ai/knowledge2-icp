@@ -55,8 +55,8 @@ class ConfigMixin:
             next_settings["qualifier"] = qualifier
         if "discovery_provider" in payload:
             provider = str(payload.get("discovery_provider") or "").strip().lower()
-            if provider not in {"auto", "perplexity", "serper", "duckduckgo"}:
-                raise ValueError("discovery_provider must be 'auto', 'perplexity', 'serper', or 'duckduckgo'.")
+            if provider not in {"auto", "perplexity", "serper", "duckduckgo", "parallel"}:
+                raise ValueError("discovery_provider must be 'auto', 'perplexity', 'serper', 'duckduckgo', or 'parallel'.")
             next_settings["discovery_provider"] = provider
         if "outreach_mode" in payload:
             outreach_mode = str(payload.get("outreach_mode") or "").strip().lower()

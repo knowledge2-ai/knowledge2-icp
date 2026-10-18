@@ -124,8 +124,8 @@ def research_discovery(
 ) -> tuple[list[DiscoveryCandidate], list[str], str]:
     """Provider-aware company discovery with a graceful fallback cascade.
 
-    Dispatches to the Perplexity research engine, the Serper SERP API, or the
-    DuckDuckGo HTML path. ``auto`` mirrors today's cascade (Perplexity if a key
+    Dispatches to opt-in Parallel Search MCP, the Perplexity research engine,
+    the Serper SERP API, or the DuckDuckGo HTML path. ``auto`` mirrors today's cascade (Perplexity if a key
     or injected client is present, then Serper if keyed, then DuckDuckGo) so a
     set key "just works"; an explicit ``provider`` forces that engine first but
     still falls through to search on failure. Returns the candidates, accumulated
@@ -134,9 +134,13 @@ def research_discovery(
     if not query.strip():
         return [], ["Search query is empty."], "none"
     provider = (provider or "auto").strip().lower()
-    if provider not in {"auto", "perplexity", "serper", "duckduckgo"}:
+    if provider not in {"auto", "perplexity", "serper", "duckduckgo", "parallel"}:
         provider = "auto"
     warnings: list[str] = []
+
+    if provider == "parallel":
+        candidates, warnings = _parallel_discovery(query, max_results=max_results)
+        return candidates, warnings, ("parallel" if candidates else "none")
 
     perplexity_enabled = provider == "perplexity" or (
         provider == "auto"
@@ -169,6 +173,30 @@ def research_discovery(
     candidates, ddg_warnings = _duckduckgo_discovery(query, max_results=max_results, fetcher=search_fetcher)
     warnings.extend(ddg_warnings)
     return candidates, warnings, ("duckduckgo" if candidates else "none")
+
+
+def _parallel_discovery(query: str, *, max_results: int) -> tuple[list[DiscoveryCandidate], list[str]]:
+    from .parallel_search import ParallelSearchError, search_web
+
+    try:
+        results = search_web(query, timeout_seconds=SEARCH_TIMEOUT_SECONDS)
+    except ParallelSearchError as exc:
+        return [], [str(exc)]
+    links = []
+    for item in results:
+        url = item.get("url")
+        if not isinstance(url, str):
+            continue
+        try:
+            parsed = urlparse(url)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+                continue
+        except ValueError:
+            continue
+        title = item.get("title")
+        links.append((url, title if isinstance(title, str) else ""))
+    candidates = candidates_from_links(links, max_results=max_results)
+    return candidates, ([] if candidates else ["No company domains were discovered from Parallel results."])
 
 
 def _perplexity_discovery(

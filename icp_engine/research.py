@@ -67,10 +67,14 @@ class ResearchPipeline:
         candidates = parse_seed_companies(seed_text)
         warnings: list[str] = []
         provider_used = "none"
-        if query.strip():
+        settings = self.store.load_settings()
+        provider = _resolve_discovery_provider(settings)
+        if query.strip() and provider == "parallel" and not settings.get("use_serp_discovery", True):
+            warnings.append("Parallel search is disabled by use_serp_discovery.")
+        elif query.strip():
             discovered, search_warnings, provider_used = research_discovery(
                 query,
-                provider=_resolve_discovery_provider(self.store.load_settings()),
+                provider=provider,
                 max_results=max_companies,
                 research_client=self.research_client,
                 search_fetcher=self.search_fetcher,
@@ -646,7 +650,7 @@ def _resolve_qualifier(settings: dict[str, object]) -> str:
 
 def _resolve_discovery_provider(settings: dict[str, object]) -> str:
     value = str(settings.get("discovery_provider") or "auto").strip().lower()
-    return value if value in {"auto", "perplexity", "serper", "duckduckgo"} else "auto"
+    return value if value in {"auto", "perplexity", "serper", "duckduckgo", "parallel"} else "auto"
 
 
 def _resolve_outreach_mode(settings: dict[str, object]) -> str:
