@@ -372,8 +372,9 @@ curl -sS -X POST localhost:8787/api/settings \
 
 Select `parallel` to discover company websites with free
 [Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp), powered
-by Fast mode. No account, API key, model, or additional Python dependency is
-needed. Search results flow into the existing candidate preview, source scans,
+by Fast mode. No account, API key, or model is needed. Install the optional MCP
+client with `pip install -e ".[parallel]"`. Search results flow into the existing
+candidate preview, source scans,
 and qualification pipeline with their source URLs.
 
 Save the provider through the settings API (include your admin token when enabled):
