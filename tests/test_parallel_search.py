@@ -12,7 +12,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 from icp_engine.app_store import AppStore
 from icp_engine.discovery import research_discovery
@@ -218,12 +218,15 @@ class ParallelDiscoveryTest(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             url = f'http://127.0.0.1:{server.server_port}/api/search'
+            # Earlier tests may have initialized urllib's global proxy opener.
+            # Keep this loopback client independent of that cached process state.
+            local_client = build_opener(ProxyHandler({}))
             try:
                 def post(token):
                     headers = {'Content-Type': 'application/json'}
                     if token:
                         headers['Authorization'] = 'Bearer test-token'
-                    with urlopen(Request(url, data=b'{"query":"fleet software"}', headers=headers)) as response:
+                    with local_client.open(Request(url, data=b'{"query":"fleet software"}', headers=headers)) as response:
                         return json.load(response)
                 with self.assertRaises(HTTPError) as denied:
                     post(False)
